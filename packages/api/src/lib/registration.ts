@@ -225,14 +225,25 @@ export const assertRegistrationAllowed = async (
   const state = await registrationState(prisma);
   if (state.firstAccount) return;
 
-  const invited = await prisma.invitation.findFirst({
+  // `mode: "insensitive"` compiles to a Postgres `ILIKE`, which treats `_`
+  // (a legal email character) as a single-character wildcard — a caller
+  // could match `alice@corp.example`'s invitation with `al_ce@corp.example`
+  // or even `_____@corp.example`. It stays as a PRE-filter only (it still
+  // has to catch a genuinely differently-cased invitation, e.g. created by
+  // the Slack onboarding door, which does not normalize case), and the
+  // actual admit decision is a strict, literal comparison below.
+  const needle = email.trim().toLowerCase();
+  const candidates = await prisma.invitation.findMany({
     where: {
       email: { equals: email, mode: "insensitive" },
       status: "pending",
       expiresAt: { gt: new Date() },
     },
-    select: { id: true },
+    select: { email: true },
   });
+  const invited = candidates.some(
+    (i) => i.email.trim().toLowerCase() === needle,
+  );
   if (invited) return;
 
   throw signupRequiresInvitationError();
