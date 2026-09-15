@@ -285,7 +285,6 @@ const expectDropboxDenied = (
   });
 };
 
-
 describe("Dropbox folder guard (FolderPolicy amendment)", () => {
   scenario(
     "a non-empty folders array with no usable string entries denies everything, even a pathless-allowed endpoint",
