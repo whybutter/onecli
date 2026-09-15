@@ -11,7 +11,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
   process.env.NEXT_PUBLIC_EDITION = "onprem";
-  delete process.env.ENTERPRISE_ENABLED;
 });
 
 const store = vi.hoisted(() => ({
@@ -36,7 +35,6 @@ vi.mock("@onecli/db", () => ({
 }));
 
 const { createApiApp } = await import("../app");
-const { initEntitlementForTests } = await import("../lib/entitlements");
 const { resetRunnerAvailabilityCache } =
   await import("../services/runner-service");
 
@@ -78,20 +76,11 @@ describe("GET /v1/instance (the auto-hide fact)", () => {
     expect(body.runners).toEqual({ registered: true, online: true });
   });
 
-  it("entitled flips with the license flag — the ONE fact the browser gates on", async () => {
-    initEntitlementForTests(false);
-    const off = (await (await app.request("/v1/instance")).json()) as {
+  it("reports entitled — the ONE fact the browser gates on, always true here", async () => {
+    const body = (await (await app.request("/v1/instance")).json()) as {
       entitled: boolean;
     };
-    expect(off.entitled).toBe(false);
-
-    initEntitlementForTests(true);
-    const on = (await (await app.request("/v1/instance")).json()) as {
-      entitled: boolean;
-    };
-    expect(on.entitled).toBe(true);
-
-    initEntitlementForTests(null);
+    expect(body.entitled).toBe(true);
   });
 
   it("surfaces the online runner's home-durability class when it advertises one (§3.9)", async () => {

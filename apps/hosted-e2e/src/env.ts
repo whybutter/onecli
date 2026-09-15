@@ -25,10 +25,10 @@ export interface HostedE2EConfig {
    */
   readonly hostGatewayHost: string;
   /**
-   * Optional Redis for the spawned gateway (the licensed HA stores). Set in
-   * CI so the enterprise lane runs the canonical Redis-backed deployment;
-   * unset locally the entitled gateway falls back to its in-memory stores —
-   * a legitimate licensed configuration, so nothing skips.
+   * Optional Redis for the spawned gateway. Set in CI to run against the
+   * Redis-backed stores; unset locally the gateway falls back to its free
+   * in-memory stores (this fork drops Redis/HA, decision 6) — a legitimate
+   * configuration either way, so nothing skips.
    */
   readonly redisHost: string | undefined;
   readonly redisPort: string;

@@ -304,6 +304,8 @@ export const DashboardHeader = () => {
               className="hidden size-8 md:inline-flex"
               asChild
             >
+              {/* TODO(fork-domain): onecli.sh is upstream's docs domain, left
+                  as-is pending a fork domain decision (decision 0.C). */}
               <a
                 href="https://onecli.sh/docs"
                 target="_blank"
@@ -325,7 +327,7 @@ export const DashboardHeader = () => {
               asChild
             >
               <a
-                href="https://github.com/onecli/onecli"
+                href="https://github.com/whybutter/onecli"
                 target="_blank"
                 rel="noopener noreferrer"
               >

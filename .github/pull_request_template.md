@@ -1,4 +1,4 @@
-## I have read the [CONTRIBUTING.md](https://github.com/onecli/onecli/blob/main/CONTRIBUTING.md) file.
+## I have read the [CONTRIBUTING.md](https://github.com/whybutter/onecli/blob/main/CONTRIBUTING.md) file.
 
 YES/NO
 

@@ -321,17 +321,9 @@ const checkCloudEdition = async (mergedEnv) => {
 };
 
 // ── redis: who needs it, and starting it ────────────────────────────────────
-// Both rules mirror the GATEWAY's own source, so the launcher can never
-// disagree with what the gateway will do at boot:
-//   entitlement — apps/gateway/crates/common/src/edition.rs `parse_entitled`: trimmed,
-//     "true" case-insensitive or exactly "1" (cloud is always entitled);
-//   refusal — apps/gateway/crates/ee/ee/src/ha.rs `check_ha_entitlement`: unentitled +
-//     non-empty-after-trim REDIS_HOST refuses to boot.
-const entitled = (mergedEnv) => {
-  const raw = (mergedEnv.ENTERPRISE_ENABLED ?? "").trim();
-  return raw.toLowerCase() === "true" || raw === "1";
-};
-
+// Every self-host config is entitled now (no more ENTERPRISE_ENABLED flag), so
+// the only thing gating whether pnpm dev starts redis is whether REDIS_HOST is
+// configured at all.
 const redisConfigured = (mergedEnv) =>
   (mergedEnv.REDIS_HOST ?? "").trim() !== "";
 
@@ -437,15 +429,6 @@ const main = async () => {
   if (mergedEnv.SSH_TERMINATOR_SECRET && !mergedEnv.TERMINATOR_CONTROL_PLANE_TOKEN)
     mergedEnv.TERMINATOR_CONTROL_PLANE_TOKEN = mergedEnv.SSH_TERMINATOR_SECRET;
 
-  // Pre-flight coherence: an unentitled non-cloud config with REDIS_HOST set
-  // is GUARANTEED to be refused by the gateway — but only after turbo has
-  // painted five panes and the reason has scrolled away. Catch it here.
-  if (!isCloud && redisConfigured(mergedEnv) && !entitled(mergedEnv))
-    fail(
-      "REDIS_HOST is set, but this config is neither the cloud edition nor Enterprise-enabled — the gateway will refuse to boot (self-hosted Redis/HA is licensed).",
-      "Pick one in .env: remove REDIS_HOST (default self-host) · EDITION=cloud (cloud dev) · ENTERPRISE_ENABLED=true (licensed self-host)",
-    );
-
   // 3 · adapt to the machine. A user-supplied --filter/-F takes over service
   // selection entirely, so the runner checks only run when we own it.
   let skipRunner = false;
@@ -472,10 +455,9 @@ const main = async () => {
   await checkPostgres(mergedEnv);
   ensurePrismaClient();
   if (isCloud) await checkCloudEdition(mergedEnv);
-  // Redis is needed by exactly two configs — cloud, and an entitled self-host
-  // that set REDIS_HOST — and pnpm dev starts what a config needs.
-  if (isCloud || (redisConfigured(mergedEnv) && entitled(mergedEnv)))
-    await ensureRedis(mergedEnv);
+  // Redis is needed by cloud, or a self-host config that set REDIS_HOST —
+  // pnpm dev starts what a config needs.
+  if (isCloud || redisConfigured(mergedEnv)) await ensureRedis(mergedEnv);
   await checkPorts();
   checkPlatform();
 

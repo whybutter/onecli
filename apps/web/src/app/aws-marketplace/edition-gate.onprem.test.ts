@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * BEHAVIORAL proof that the AWS Marketplace web surface is dark on a
  * self-host — executes the real route handlers, page component, and server
  * actions under the onprem edition and observes the refusals (the
- * source-level pins in edition-gate.test.ts guard the gates' presence;
- * this file proves what they DO). Cloud-arm sanity checks confirm the
- * gates are edition checks, not unconditional dead ends.
+ * source-level pins in edition-gate.test.ts guard the gates' presence; this
+ * file proves what they DO). AWS Marketplace billing is permanently dropped
+ * in this onprem-only fork (v2 migration plan), so there is no cloud arm to
+ * contrast against anymore — every edition answers dark.
  */
 
 // Onprem before the module graph loads: NEXT_PUBLIC_EDITION deleted →
@@ -34,7 +35,6 @@ vi.mock("next/navigation", () => nav);
 const probes = vi.hoisted(() => ({
   cookieReads: 0,
   sessionReads: 0,
-  registerCalls: 0,
 }));
 
 vi.mock("next/headers", () => ({
@@ -63,20 +63,6 @@ vi.mock("@/lib/actions/resolve-user", () => ({
   }),
 }));
 
-// The api-package service: reaching this off cloud IS the leak this suite
-// exists to rule out.
-vi.mock("@onecli/api/ee/billing/aws-marketplace/service", () => ({
-  registerMarketplaceCustomer: async () => {
-    probes.registerCalls += 1;
-    return {
-      status: "pending",
-      entitledAgents: 0,
-      contractExpiresAt: null,
-    };
-  },
-  AwsMarketplaceError: class AwsMarketplaceError extends Error {},
-}));
-
 import { NextRequest } from "next/server";
 import { GET, POST } from "@/app/aws-marketplace/fulfill/route";
 import AwsMarketplaceRegisterPage from "@/app/aws-marketplace/register/page";
@@ -101,7 +87,6 @@ const fulfillRequest = (init?: FulfillInit) =>
 beforeEach(() => {
   probes.cookieReads = 0;
   probes.sessionReads = 0;
-  probes.registerCalls = 0;
 });
 
 afterEach(() => {
@@ -154,7 +139,6 @@ describe("onprem: the marketplace web surface answers dark", () => {
       ok: false,
       error: "Not available on this deployment.",
     });
-    expect(probes.registerCalls).toBe(0);
     expect(probes.cookieReads).toBe(0);
   });
 });

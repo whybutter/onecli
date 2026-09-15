@@ -1,93 +1,92 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthContext } from "../../providers/types";
 
-// Branch-level test of the 403-vs-404 management policy with the two access
-// predicates mocked, so each arm is exercised deterministically (the route
-// suite only drives managers end-to-end — the FORBIDDEN arm, access without
-// manage, is only reachable here).
+// The guard's four outcomes (api-ee-behaviour §2.4), with the predicates
+// stubbed so each arm is isolated: confinement fires before any predicate,
+// a manager never has access consulted, use-without-manage is a 403, and a
+// stranger is a 404.
+
+const predicates = vi.hoisted(() => ({
+  manage: vi.fn(async () => false),
+  access: vi.fn(async () => false),
+}));
 
 vi.mock("./authorization-service", () => ({
-  canManageWorkspace: vi.fn(),
-  canAccessWorkspace: vi.fn(),
+  canManageWorkspace: predicates.manage,
+  canAccessWorkspace: predicates.access,
 }));
 
 import { requireWorkspaceManagement } from "./workspace-management-guard";
-import {
-  canManageWorkspace,
-  canAccessWorkspace,
-} from "./authorization-service";
-import type { AuthContext } from "../../providers";
 
-const mockManage = vi.mocked(canManageWorkspace);
-const mockAccess = vi.mocked(canAccessWorkspace);
-
-const ctx = (over: Partial<AuthContext> = {}): AuthContext => ({
+const ctx = (
+  scope: AuthContext["scope"],
+  workspaceId?: string,
+): AuthContext => ({
   userId: "user-1",
-  userEmail: "u@a.com",
+  userEmail: "user@example.com",
   organizationId: "org-1",
-  ...over,
+  workspaceId,
+  scope,
 });
 
 beforeEach(() => {
-  mockManage.mockReset();
-  mockAccess.mockReset();
+  predicates.manage.mockReset().mockResolvedValue(false);
+  predicates.access.mockReset().mockResolvedValue(false);
 });
 
 describe("requireWorkspaceManagement", () => {
-  it("404s a workspace-scoped key reaching outside its own workspace, before any DB check", async () => {
+  it("confines a workspace key to its own workspace before any predicate runs", async () => {
     await expect(
-      requireWorkspaceManagement(
-        ctx({ scope: "workspace", workspaceId: "proj-a" }),
-        "proj-b",
-      ),
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
-    // Confinement short-circuits — neither predicate is consulted.
-    expect(mockManage).not.toHaveBeenCalled();
-    expect(mockAccess).not.toHaveBeenCalled();
+      requireWorkspaceManagement(ctx("workspace", "ws-a"), "ws-b"),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "Workspace not found",
+    });
+    expect(predicates.manage).not.toHaveBeenCalled();
+    expect(predicates.access).not.toHaveBeenCalled();
   });
 
-  it("allows a manager (creator or admin) and never consults access", async () => {
-    mockManage.mockResolvedValue(true);
+  it("lets a workspace key manage its own workspace", async () => {
+    predicates.manage.mockResolvedValue(true);
     await expect(
-      requireWorkspaceManagement(ctx({ scope: "session" }), "proj-a"),
+      requireWorkspaceManagement(ctx("workspace", "ws-a"), "ws-a"),
     ).resolves.toBeUndefined();
-    expect(mockAccess).not.toHaveBeenCalled();
   });
 
-  it("403s a shared-in member who can access but not manage (the rename-bug fix)", async () => {
-    mockManage.mockResolvedValue(false);
-    mockAccess.mockResolvedValue(true);
+  it("never confines an org key or a session", async () => {
+    predicates.manage.mockResolvedValue(true);
     await expect(
-      requireWorkspaceManagement(ctx({ scope: "session" }), "proj-a"),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-  });
-
-  it("404s a stranger with neither manage nor access — no existence leak", async () => {
-    mockManage.mockResolvedValue(false);
-    mockAccess.mockResolvedValue(false);
-    await expect(
-      requireWorkspaceManagement(ctx({ scope: "session" }), "proj-a"),
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
-  });
-
-  it("never confines an org key (scope!=='workspace'), gating only on management", async () => {
-    mockManage.mockResolvedValue(true);
-    await expect(
-      requireWorkspaceManagement(
-        ctx({ scope: "organization", workspaceId: undefined }),
-        "proj-b",
-      ),
+      requireWorkspaceManagement(ctx("organization", "ws-a"), "ws-b"),
     ).resolves.toBeUndefined();
-    expect(mockManage).toHaveBeenCalledWith("user-1", "proj-b");
+    await expect(
+      requireWorkspaceManagement(ctx("session", "ws-a"), "ws-b"),
+    ).resolves.toBeUndefined();
   });
 
-  it("lets a workspace key manage its OWN workspace (passes confinement, then gates)", async () => {
-    mockManage.mockResolvedValue(true);
+  it("a manager passes without access being consulted", async () => {
+    predicates.manage.mockResolvedValue(true);
     await expect(
-      requireWorkspaceManagement(
-        ctx({ scope: "workspace", workspaceId: "proj-a" }),
-        "proj-a",
-      ),
+      requireWorkspaceManagement(ctx("session"), "ws-a"),
     ).resolves.toBeUndefined();
-    expect(mockManage).toHaveBeenCalledWith("user-1", "proj-a");
+    expect(predicates.access).not.toHaveBeenCalled();
+  });
+
+  it("use without manage is a 403", async () => {
+    predicates.access.mockResolvedValue(true);
+    await expect(
+      requireWorkspaceManagement(ctx("session"), "ws-a"),
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "You don't have permission to manage this workspace",
+    });
+  });
+
+  it("a stranger is a 404 — existence never leaks", async () => {
+    await expect(
+      requireWorkspaceManagement(ctx("session"), "ws-a"),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "Workspace not found",
+    });
   });
 });

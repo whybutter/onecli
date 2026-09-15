@@ -21,6 +21,8 @@ export const CloudUpsell = ({ before, after, className }: CloudUpsellProps) => {
   return (
     <p className={cn("text-muted-foreground text-xs", className)}>
       {before}{" "}
+      {/* TODO(fork-domain): app.onecli.sh is upstream's domain, left as-is
+          pending a fork domain decision (decision 0.C). */}
       <a
         href="https://app.onecli.sh"
         target="_blank"

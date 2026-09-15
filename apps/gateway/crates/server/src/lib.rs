@@ -192,9 +192,10 @@ fn parse_skip_verify_hosts() -> Vec<String> {
 
 /// `GATEWAY_DANGER_ACCEPT_INVALID_CERTS` disables upstream TLS verification
 /// for EVERY host the gateway injects credentials into, so only an explicit
-/// truthy value (`true`/`1`, the same spellings `ENTERPRISE_ENABLED` accepts)
-/// enables it. A bare presence check would turn `=false` or an empty export
-/// into a gateway that silently verifies nothing.
+/// truthy value (`true`/`1`, the same boolean-env-var spellings used
+/// elsewhere in this codebase) enables it. A bare presence check would turn
+/// `=false` or an empty export into a gateway that silently verifies
+/// nothing.
 fn parse_danger_accept_invalid_certs(raw: Option<&str>) -> bool {
     matches!(
         raw.map(str::trim),

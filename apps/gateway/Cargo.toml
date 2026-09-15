@@ -1,15 +1,12 @@
 # Workspace root for the gateway: a virtual manifest over a flat crates/
 # directory. The binary is crates/onecli-gateway (the composition root); every
 # other member is a library crate, layered so Cargo itself rejects a cycle.
-# See the "Gateway (Rust)" section of CLOUD-DEVELOPMENT.md for the layer map.
 [workspace]
 resolver = "2"
-# Members are listed explicitly, in two groups, because the split IS the
-# licence boundary and a glob would hide it: `crates/*` cannot express "except
-# the licensed ones", and `exclude` silently wins over an explicit glob (tried;
-# it dropped ee from the workspace).
-#
-# APACHE-2.0 — everything the free product needs.
+# Members are listed explicitly, in two groups, purely by history: `crates/ee/ee`
+# used to be a separately licensed crate (now Apache-2.0 like everything
+# else, see its own Cargo.toml) and stays a nested path because the other
+# crates depend on it there.
 members = [
   "crates/approval",
   "crates/apps",
@@ -30,10 +27,9 @@ members = [
   "crates/vault",
   "crates/onecli-gateway",
 
-  # ENTERPRISE-LICENSED — see /LICENSE-ENTERPRISE and crates/ee/LICENSE.
-  # The licence is scoped by PATH SEGMENT here, the same shape as
-  # apps/web/src/ee/ and packages/api/src/ee/: anything under `crates/ee/`
-  # is licensed, everything above is not.
+  # Formerly enterprise-licensed, now Apache-2.0 like everything else — kept
+  # as a separate workspace member because the free crates depend on it by
+  # path and Cargo can't glob-exclude a single member.
   "crates/ee/ee",
 ]
 
@@ -55,7 +51,6 @@ ap-proxy-protocol = "0.9.0"
 async-trait = "0.1"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = "1"
-aws-sdk-kms = "1"
 aws-sdk-sts = "1"
 aws-sigv4 = "1"
 axum = "0.8"
@@ -72,7 +67,6 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 jsonwebtoken = "9"
 percent-encoding = "2"
 rcgen = "0.13"
-redis = { version = "1", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
 regex = "1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
 ring = "0.17"

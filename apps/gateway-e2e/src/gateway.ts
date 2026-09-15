@@ -217,18 +217,16 @@ export const startGateway = async (
   const env: Record<string, string> = {
     PATH: process.env.PATH ?? "",
     HOME: process.env.HOME ?? "",
-    // The binary is edition-less; the suite defaults to the ENTERPRISE
-    // edition — an entitled self-host (`EDITION=onprem` +
-    // `ENTERPRISE_ENABLED=true`), the canonical licensed deployment — so the
-    // runtime switch must reach the child (assertEdition guards it did; the
-    // unlicensed and cloud lanes override per test).
+    // The binary is edition-less; the suite defaults to the onprem
+    // edition — self-host is always entitled now (no more
+    // ENTERPRISE_ENABLED flag) — so the runtime switch must reach the child
+    // (assertEdition guards it did; the cloud lane overrides per test).
     EDITION: "onprem",
-    ENTERPRISE_ENABLED: "true",
     DATABASE_URL: databaseUrl,
-    // The licensed HA stores: multi-instance operation is an entitled
-    // feature, and this lane is entitled — so it runs the Redis-backed cache
-    // and approval stores, not the in-memory fallback. (The unlicensed lane
-    // overrides REDIS_HOST to empty and runs in-memory.)
+    // This fork drops Redis/HA (decision 6): E2E_REDIS_HOST is optional, and
+    // the default (unset → "") runs the gateway against its free in-memory
+    // cache/approval stores. A caller may still set E2E_REDIS_HOST to smoke
+    // the Redis-backed path.
     REDIS_HOST: config.redisHost,
     REDIS_PORT: config.redisPort,
     // The self-host default is plain TCP; a plain container speaks TCP.
