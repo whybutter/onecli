@@ -63,9 +63,13 @@ pub async fn user_is_org_admin(
 /// `status <> 'suspended'`), then any of: org role owner/admin; a
 /// `workspace_access` row for this workspace with `user_id`; a
 /// `workspace_access` row for this workspace with a `group_id` the user
-/// belongs to via `group_members`. `workspace_access.role` is never
-/// consulted here — usage is role-blind, unlike the management-role checks
-/// the web app runs. One query; no caching.
+/// belongs to via `group_members`, the group itself fenced to the
+/// workspace's org (mirrors `principals::find_principal_set`'s
+/// `direct_groups` fence — without it, a `workspace_access` row binding a
+/// cross-org group would grant management here while the principal CTE
+/// excludes that same row). `workspace_access.role` is never consulted here
+/// — usage is role-blind, unlike the management-role checks the web app
+/// runs. One query; no caching.
 pub async fn user_can_manage_workspace(
     pool: &sqlx::PgPool,
     user_id: &str,
@@ -81,6 +85,7 @@ pub async fn user_can_manage_workspace(
                OR EXISTS (
                  SELECT 1
                  FROM workspace_access wa
+                 JOIN groups g ON g.id = wa.group_id AND g.organization_id = w.organization_id
                  JOIN group_members gm ON gm.group_id = wa.group_id
                  WHERE wa.workspace_id = $2 AND gm.user_id = $1
                )

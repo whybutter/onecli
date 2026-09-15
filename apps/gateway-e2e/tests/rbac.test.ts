@@ -25,12 +25,24 @@ const invalidateWorkspaceCache = (
     },
   });
 
-const pendingOrgApprovals = (
+// A scoped org key needs an X-Workspace-Id to use most control-plane routes
+// (`/v1/org/approvals/pending` is the one exception, but it long-polls for
+// up to 30s when nothing is pending — see git history for why this suite
+// moved off it). `/v1/cache/invalidate` exercises the exact same auth path
+// (lookup -> liveness -> `user_is_org_admin` -> workspace-in-org) and
+// answers immediately either way.
+const invalidateOrgCache = (
   origin: string,
   orgApiKey: string,
+  workspaceId: string,
 ): Promise<Response> =>
-  fetch(`${origin}/v1/org/approvals/pending`, {
-    headers: { authorization: `Bearer ${orgApiKey}` },
+  fetch(`${origin}/v1/cache/invalidate`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${orgApiKey}`,
+      "content-type": "application/json",
+      "x-workspace-id": workspaceId,
+    },
   });
 
 describe("org key admin recheck", () => {
@@ -38,7 +50,11 @@ describe("org key admin recheck", () => {
     await cx.seed({ withOrgApiKey: true, orgApiKeyRole: "member" });
     const gw = await cx.startGateway();
 
-    const res = await pendingOrgApprovals(gw.origin, cx.ids.orgApiKey);
+    const res = await invalidateOrgCache(
+      gw.origin,
+      cx.ids.orgApiKey,
+      cx.ids.workspace,
+    );
 
     // A plain member's org key fails the `user_is_org_admin` recheck —
     // the uniform 401, same as an unknown key.
@@ -49,7 +65,11 @@ describe("org key admin recheck", () => {
     await cx.seed({ withOrgApiKey: true, orgApiKeyRole: "owner" });
     const gw = await cx.startGateway();
 
-    const res = await pendingOrgApprovals(gw.origin, cx.ids.orgApiKey);
+    const res = await invalidateOrgCache(
+      gw.origin,
+      cx.ids.orgApiKey,
+      cx.ids.workspace,
+    );
 
     expect(res.status).toBe(200);
   });
@@ -58,7 +78,11 @@ describe("org key admin recheck", () => {
     await cx.seed({ withOrgApiKey: true, orgApiKeyRole: "admin" });
     const gw = await cx.startGateway();
 
-    const res = await pendingOrgApprovals(gw.origin, cx.ids.orgApiKey);
+    const res = await invalidateOrgCache(
+      gw.origin,
+      cx.ids.orgApiKey,
+      cx.ids.workspace,
+    );
 
     expect(res.status).toBe(200);
   });
