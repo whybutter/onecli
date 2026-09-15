@@ -5,7 +5,11 @@ export type ServiceErrorCode =
   | "CONFLICT"
   | "FORBIDDEN"
   | "GONE"
-  | "RATE_LIMITED";
+  | "RATE_LIMITED"
+  // The gateway's client-cert minting endpoint is unreachable, or reachable
+  // but has no minting authority configured (`state.client_ca` is `None`) —
+  // see `mintClientCert` in `lib/gateway-client-cert.ts`.
+  | "SERVICE_UNAVAILABLE";
 
 export class ServiceError extends Error {
   readonly code: ServiceErrorCode;
