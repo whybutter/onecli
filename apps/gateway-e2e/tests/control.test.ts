@@ -229,25 +229,31 @@ const GMAIL_BLOCKED = {
 };
 
 describe("app availability", () => {
-  scenario("blocks a provider the org has not made available", async (cx) => {
-    await cx.seed({ ...GMAIL_BLOCKED, appAvailabilityMode: "restricted" });
-    const gw = await cx.startGateway();
+  // Phase 0 ships an always-unrestricted `load_available_apps`; app
+  // availability is deferred (plan.md decision 3). Re-enable when the loader
+  // lands.
+  scenario.skip(
+    "blocks a provider the org has not made available",
+    async (cx) => {
+      await cx.seed({ ...GMAIL_BLOCKED, appAvailabilityMode: "restricted" });
+      const gw = await cx.startGateway();
 
-    const res = await throughProxy(gw.origin, {
-      url: GMAIL_URL,
-      token: cx.ids.agentToken,
-    });
+      const res = await throughProxy(gw.origin, {
+        url: GMAIL_URL,
+        token: cx.ids.agentToken,
+      });
 
-    expect(res.status).toBe(403);
-    expect(res.header("x-should-retry")).toBe("false");
-    // Availability is checked ahead of policy, so it wins over the block rule
-    // — which also pins that ordering.
-    expect(res.json()).toMatchObject({
-      error: "app_unavailable",
-      provider: "gmail",
-      host: "gmail.googleapis.com",
-    });
-  });
+      expect(res.status).toBe(403);
+      expect(res.header("x-should-retry")).toBe("false");
+      // Availability is checked ahead of policy, so it wins over the block
+      // rule — which also pins that ordering.
+      expect(res.json()).toMatchObject({
+        error: "app_unavailable",
+        provider: "gmail",
+        host: "gmail.googleapis.com",
+      });
+    },
+  );
 
   scenario("leaves the gate inert when the org is open", async (cx) => {
     await cx.seed({ ...GMAIL_BLOCKED, appAvailabilityMode: "open" });
