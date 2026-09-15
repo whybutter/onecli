@@ -46,6 +46,7 @@ apps/gateway/       # Rust proxy gateway (onecli-gateway), workspace of crates
 apps/gateway-e2e/  # Black-box e2e suite for the gateway (spawns the real binary)
 apps/hosted-e2e/   # Black-box e2e suite for the hosted-agents path
 apps/runner/        # Hosted-agent sandbox daemon (off by default, see above)
+apps/sandbox-supervisor/  # In-sandbox supervisor process (platform tools, MCP bridge) — same
 apps/ssh-terminator/, apps/channel-adapter/  # Hosted-agent/channel plumbing (same)
 packages/api/       # Shared API: routes, services, validations (@onecli/api)
   src/ee/            #   our Apache-2.0 replacement for upstream's licensed package
@@ -141,37 +142,37 @@ All state-changing operations (create, update, delete, regenerate) must be audit
 **Pattern:**
 
 ```typescript
-import { resolveProjectContext } from "@/lib/actions/resolve-user";
+import { resolveWorkspaceContext } from "@/lib/actions/resolve-user";
 import {
   withAudit,
   AUDIT_ACTIONS,
   AUDIT_SERVICES,
 } from "@onecli/api/services/audit-service";
 
-export const createAgent = async (name: string, identifier: string) => {
-  const { userId, userEmail, projectId } = await resolveProjectContext();
+export const regenerateAgentToken = async (agentId: string) => {
+  const { userId, userEmail, workspaceId } = await resolveWorkspaceContext();
   return withAudit(
-    () => createAgentService(projectId, name, identifier),
-    (agent) => ({
-      projectId,
+    () => regenerateAgentTokenService(workspaceId, agentId),
+    () => ({
+      workspaceId,
       userId,
       userEmail,
-      action: AUDIT_ACTIONS.CREATE,
+      action: AUDIT_ACTIONS.REGENERATE,
       service: AUDIT_SERVICES.AGENT,
-      metadata: { agentId: agent.id, name, identifier },
+      metadata: { agentId },
     }),
   );
 };
 ```
 
+`withAudit` takes `workspaceId` and/or `organizationId` (whichever the resource is scoped to) — never `accountId`/`projectId`. Get them from `resolveWorkspaceContext()` (workspace-scoped actions) or `resolveOrgContext()` (org-scoped actions), both in `apps/web/src/lib/actions/resolve-user.ts`.
+
 **Available constants** — see `packages/api/src/services/audit-service.ts` for the full set:
 
-- `AUDIT_ACTIONS`: `CREATE`, `UPDATE`, `DELETE`, `REGENERATE`, `DISCONNECT`, `PUBLISH`
-- `AUDIT_SERVICES`: `AGENT`, `SECRET`, `POLICY`, `GRANT`, `API_KEY`, `APP_CONNECTION`, `APP_CONFIG`, `PROJECT`, `ORGANIZATION`, `MEMBER`, `INVITATION`, `GROUP`
+- `AUDIT_ACTIONS`: `CREATE`, `UPDATE`, `DELETE`, `REGENERATE`, `DISCONNECT`, `APPROVE`, `DENY`, `PUBLISH`, `REDACT`, `VERIFY`, `INVITE`, `ACCEPT`, `MINT`, `SESSION_OPEN`, `SESSION_CLOSE`
+- `AUDIT_SERVICES`: `AGENT`, `SECRET`, `POLICY`, `GRANT`, `API_KEY`, `APP_CONNECTION`, `APP_CONFIG`, `CHANNEL`, `CRON`, `MEMORY`, `SKILL`, `APP_AVAILABILITY`, `WORKSPACE`, `ORGANIZATION`, `BUDGET`, `AUTH`, `DOMAIN`, `SSO_CONNECTION`, `MEMBER`, `GROUP`, `ROLE_MAPPING`, `SCIM_TOKEN`, `INVITATION`, `PROVISION`, `SSH`
 - `AUDIT_STATUS`: `SUCCESS`, `FAILURE`
-- `AUDIT_SOURCE`: `APP`, `API`
-
-Events are scoped by `projectId` / `organizationId`, not `accountId`.
+- `AUDIT_SOURCE`: `APP`, `API`, `SSO_JIT`, `SSO_LOGIN`, `SCIM`
 
 **Metadata guidelines:**
 

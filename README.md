@@ -30,7 +30,7 @@
 ### Self-hosted
 
 ```bash
-git clone https://github.com/onecli/onecli.git && cd onecli
+git clone https://github.com/whybutter/onecli.git && cd onecli
 pnpm install
 pnpm run setup
 ```
@@ -100,7 +100,7 @@ Agents run on your own infrastructure. The runner is outbound-only and holds no 
 ## Local Development
 
 ```bash
-git clone https://github.com/onecli/onecli.git && cd onecli
+git clone https://github.com/whybutter/onecli.git && cd onecli
 mise install
 pnpm install
 pnpm dev
