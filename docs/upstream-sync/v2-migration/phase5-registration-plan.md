@@ -32,6 +32,7 @@ Two work packages, two worktrees, developed in parallel against the **interface 
 ### 1.2 WP-A — api-server enforcement, env, tests, docs (owns the policy)
 
 **Owned files:**
+
 - `packages/api/src/lib/env.ts` — add `REGISTRATION_MODE`.
 - `packages/api/src/lib/registration.ts` — add the invite gate.
 - `packages/api/src/lib/better-auth.ts` — wire it into the creation hook; fix the now-inaccurate comments.
@@ -44,6 +45,7 @@ Two work packages, two worktrees, developed in parallel against the **interface 
 **Exact edits:**
 
 1. `env.ts`, inserted in the "Auth & Encryption" section right after `GOOGLE_CLIENT_SECRET` (currently line 74):
+
    ```ts
    export type RegistrationMode = "open" | "invite";
 
@@ -64,10 +66,12 @@ Two work packages, two worktrees, developed in parallel against the **interface 
        ? "open"
        : "invite";
    ```
+
 2. `registration.ts`:
    - Rewrite the module doc (lines 9–23): it currently asserts "Registration is open by design... a deployment that must not accept strangers keeps its dashboard behind the network boundary — the product deliberately offers no registration switch." That is now false; replace with a statement of the `open`/`invite` policy and point at `REGISTRATION_MODE`.
    - Add `export { REGISTRATION_MODE, type RegistrationMode } from "./env";` near the top (after the existing imports).
    - Add the token + error constructor, mirroring `SIGNUP_BLOCKED_BY_UPGRADE` / `signupBlockedByUpgradeError` exactly (same `APIError("FORBIDDEN", ...)` shape, same code-as-message trick documented at lines 25–33):
+
      ```ts
      export const SIGNUP_REQUIRES_INVITATION = "SIGNUP_REQUIRES_INVITATION";
 
@@ -77,7 +81,9 @@ Two work packages, two worktrees, developed in parallel against the **interface 
          message: SIGNUP_REQUIRES_INVITATION,
        });
      ```
+
    - Add the gate function:
+
      ```ts
      /**
       * Refuse a NEW account unless this instance's registration policy admits
@@ -113,6 +119,7 @@ Two work packages, two worktrees, developed in parallel against the **interface 
        throw signupRequiresInvitationError();
      };
      ```
+
 3. `better-auth.ts:141-176` — call the new gate right after `assertUpgradeWindowClear` (line 152), same `before` hook, same ordering guarantee (password + social, single choke point):
    ```ts
    await assertUpgradeWindowClear(options.prisma ?? db);
@@ -130,6 +137,7 @@ Two work packages, two worktrees, developed in parallel against the **interface 
 7. `CLAUDE.md` line 133 — replace "Registration is open by design — every account gets its own organization on first sign-in; joining someone else's org goes through an invitation" with a sentence describing the `ONECLI_REGISTRATION` setting (open/invite, default invite) and that joining is still via invitation either way.
 
 **Tests:**
+
 - `registration.test.ts` (unit, mocked `prisma`, same style as the existing `registrationState` suite): extend the mock to include `invitation.findFirst`; cases for `assertRegistrationAllowed`: open mode always allows (even 2 established users, no invitation); invite mode + firstAccount allows regardless of invitation; invite mode + established + pending unexpired invitation (exact case, and a differently-cased email) allows; invite mode + established + expired invitation refuses; invite mode + established + no invitation refuses (assert the thrown error's `code`).
 - `registration.pg.test.ts` — reframe as "registration mode wiring over real PostgreSQL": keep the existing seeded-established-instance fixture but split into (a) `ONECLI_REGISTRATION` unset/default → `signUpEmail` for an uninvited newcomer on the established instance returns the refusal status with `code: SIGNUP_REQUIRES_INVITATION`, and nothing is created; (b) `vi.stubEnv("ONECLI_REGISTRATION", "open")` + `vi.resetModules()` + re-import (same pattern already used in `better-auth.test.ts`'s cloud-edition case) → the existing "accepts a sign-up on an instance that already has accounts" assertion, unchanged; (c) a real pending invitation row for the newcomer's email → default (invite) mode still accepts the sign-up. Do not touch `legacy-adoption.pg.test.ts` — its assertion is already correct under the new default (see §0).
 
@@ -138,6 +146,7 @@ Two work packages, two worktrees, developed in parallel against the **interface 
 ### 1.3 WP-B — web signup/login pages, invitation-accept prefill, tests
 
 **Owned files:**
+
 - `apps/web/src/app/auth/signup/page.tsx`
 - `apps/web/src/app/auth/login/page.tsx`
 - `apps/web/src/lib/auth/signup-content-onprem.tsx`
@@ -169,6 +178,7 @@ Two work packages, two worktrees, developed in parallel against the **interface 
 **No changes needed to:** `apps/web/src/lib/team/join-page.tsx`, `join-form.tsx`, `join-sign-in.tsx`, `join-wrong-account.tsx`, `join-unavailable.tsx`, `use-post-auth-redirect.ts`, or `apps/web/src/lib/cli-auth/**` — the invitation-accept flow never creates an account by itself (it requires an existing session, `invitations.ts:196-202`), and the CLI-pairing page confirms an already-authenticated session's org/workspace choice (`cli-auth-confirm.tsx`) — it never signs anyone up. Both are outside the gate by construction; do not touch them.
 
 **Tests:**
+
 - `signup-content-onprem.test.tsx` — new cases: `closed` renders the invite-only message and no form/Google button; `closed` is ignored when `invitation` is also passed (an invited joiner always sees the join form, never the closed state — assert this precedence explicitly since both could theoretically be true if `page.tsx` had a bug); existing `firstAccount`/`invitation` cases unaffected.
 - `login-content-onprem.test.tsx` — new cases: `signupOpen={false}` hides the "Create an account" link; `signupOpen={true}` shows it (existing default assumption made explicit); a `?error=SIGNUP_REQUIRES_INVITATION` query renders the new copy via `AuthFormError`.
 - `auth-errors.test.ts` — `authErrorMessage({code: "SIGNUP_REQUIRES_INVITATION"})` and `redirectErrorMessage("SIGNUP_REQUIRES_INVITATION")` both resolve to the exact copy above.
@@ -177,16 +187,16 @@ Two work packages, two worktrees, developed in parallel against the **interface 
 
 ## 2. Behaviour spec — decision table
 
-| Mode | Path | Invitation for the email | Users in DB | Result | Message / where it renders |
-|---|---|---|---|---|---|
-| `open` | password or Google | any | any | **Allow** | — |
-| `invite` | password or Google | pending, unexpired (case-insensitive email match) | any | **Allow** | — |
-| `invite` | password or Google | none / expired / wrong case-normalized email | 0 users, or exactly the unclaimed pre-2.0 placeholder (`firstAccount: true`) | **Allow** (bootstrap) | — |
-| `invite` | password | none / expired | ≥1 established user, no first-account exception | **Refuse** | JSON `{code: "SIGNUP_REQUIRES_INVITATION"}` from `POST /sign-up/email` → rendered under the (in-UI, never-shown-because-gated) signup form via `AuthFormError`/`authErrorMessage`; the normal path is the signup PAGE itself rendering the closed state, so this is the direct-API-call defense-in-depth case |
-| `invite` | Google | none / expired | ≥1 established user | **Refuse** | better-auth redirects to `/auth/login?error=SIGNUP_REQUIRES_INVITATION`; login screen shows "This instance only accepts new accounts by invitation. Ask an existing member for an invite link." via `AuthFormError`/`redirectErrorMessage` |
-| any | password or Google | — | pre-2.0 upgrade window open (unclaimed placeholder + 1 unfinished claimer) | **Refuse** (pre-existing, unchanged, checked first) | `SIGNUP_BLOCKED_BY_UPGRADE` copy, same rendering paths |
-| any | — (accepting an invitation, `POST /invitations/accept`) | — | — | **N/A — gate does not apply.** Requires an existing session; never creates a user row. | — |
-| any | — (CLI pairing, `/auth/cli`) | — | — | **N/A — gate does not apply.** Requires an existing session; never creates a user row. | — |
+| Mode     | Path                                                    | Invitation for the email                          | Users in DB                                                                  | Result                                                                                 | Message / where it renders                                                                                                                                                                                                                                                                                    |
+| -------- | ------------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `open`   | password or Google                                      | any                                               | any                                                                          | **Allow**                                                                              | —                                                                                                                                                                                                                                                                                                             |
+| `invite` | password or Google                                      | pending, unexpired (case-insensitive email match) | any                                                                          | **Allow**                                                                              | —                                                                                                                                                                                                                                                                                                             |
+| `invite` | password or Google                                      | none / expired / wrong case-normalized email      | 0 users, or exactly the unclaimed pre-2.0 placeholder (`firstAccount: true`) | **Allow** (bootstrap)                                                                  | —                                                                                                                                                                                                                                                                                                             |
+| `invite` | password                                                | none / expired                                    | ≥1 established user, no first-account exception                              | **Refuse**                                                                             | JSON `{code: "SIGNUP_REQUIRES_INVITATION"}` from `POST /sign-up/email` → rendered under the (in-UI, never-shown-because-gated) signup form via `AuthFormError`/`authErrorMessage`; the normal path is the signup PAGE itself rendering the closed state, so this is the direct-API-call defense-in-depth case |
+| `invite` | Google                                                  | none / expired                                    | ≥1 established user                                                          | **Refuse**                                                                             | better-auth redirects to `/auth/login?error=SIGNUP_REQUIRES_INVITATION`; login screen shows "This instance only accepts new accounts by invitation. Ask an existing member for an invite link." via `AuthFormError`/`redirectErrorMessage`                                                                    |
+| any      | password or Google                                      | —                                                 | pre-2.0 upgrade window open (unclaimed placeholder + 1 unfinished claimer)   | **Refuse** (pre-existing, unchanged, checked first)                                    | `SIGNUP_BLOCKED_BY_UPGRADE` copy, same rendering paths                                                                                                                                                                                                                                                        |
+| any      | — (accepting an invitation, `POST /invitations/accept`) | —                                                 | —                                                                            | **N/A — gate does not apply.** Requires an existing session; never creates a user row. | —                                                                                                                                                                                                                                                                                                             |
+| any      | — (CLI pairing, `/auth/cli`)                            | —                                                 | —                                                                            | **N/A — gate does not apply.** Requires an existing session; never creates a user row. | —                                                                                                                                                                                                                                                                                                             |
 
 ## 3. Risks
 
@@ -223,3 +233,16 @@ pnpm test
 2. **Does `pnpm dev` / local single-developer flow need anything?** Today a fresh `pnpm dev` database has zero users, so the bootstrap exception makes the very first account work unchanged. A SECOND local developer (or a second manual test account) on the same dev DB would now need either a real invitation row or `ONECLI_REGISTRATION=open` in their `.env` — I did not find any dev-setup doc promising "just sign up a second time," so I believe this needs no code change, only for `.env.example`'s comment to be clear enough that a developer hits it once and understands why (drafted in §1.2 step 5). Confirm this is acceptable rather than wanting a dev-only default of `open`.
 3. **Merge order into `phase5/registration`.** WP-A and WP-B touch disjoint files and share only the two string/constant contracts in §1.1, agreed up front — either can land first. Confirm no preferred order, or state one.
 4. **Should the closed-signup screen also apply to the (dead-in-this-fork) cloud edition?** `signup/page.tsx` already redirects to `/auth/login` unconditionally when `IS_CLOUD` (Cognito owns its own signup), so `REGISTRATION_MODE` never applies there — I've treated this as correctly out of scope per CLAUDE.md ("the EE/cloud edition never builds here"), but flagging since the decision text didn't explicitly say so.
+
+## Orchestrator vetting notes (2026-09-15)
+
+Accepted as written, with these decisions:
+
+1. **Copy approved as proposed.** Signup closed state: title "Invite only", body "This OneCLI instance only accepts new accounts by invitation. Ask an existing member to send you an invite link." Error-map entry: "This instance only accepts new accounts by invitation. Ask an existing member for an invite link." Do not name `ONECLI_REGISTRATION` in user-facing copy: strangers see these screens; the operator reads `.env.example`.
+2. **No dev-only default.** `invite` is the default everywhere, including `pnpm dev`. The bootstrap exception covers the first local account; a second local account needs `ONECLI_REGISTRATION=open` in `.env` or a real invitation, which is the product behaving as designed. WP-A makes the `.env.example` comment say exactly that.
+3. **Merge order A → B** into `phase5/registration`. No code dependency, but the assembled behaviour (server refuses, page hides) is only meaningful with A present, and the assembled gate runs once.
+4. **Cloud edition out of scope**, confirmed: the cloud signup path redirects away before any of this runs and the edition never builds here.
+5. **Google with an invitation whose email differs from the Google account's email is refused** with `SIGNUP_REQUIRES_INVITATION` on the login page. Acceptable: the invite-accept flow already rejects a wrong-account join, and the gate is keyed on the email being created, never on the token. WP-B adds no special handling; WP-A adds a unit case proving a pending invitation for a different email does not admit the signup.
+6. **Operator path without email.** WP-A confirms (report, do not change) that an admin on an instance with no email provider configured can still obtain the invite link from the members UI after `POST /invitations` returns `emailed: false`; if that is not the case, say so in the report so it becomes a QA finding, not a silent gap.
+7. **Ordering test.** WP-A adds one unit case asserting the hook's refusal order: with the upgrade window open AND no invitation, the thrown code is `SIGNUP_BLOCKED_BY_UPGRADE`, not `SIGNUP_REQUIRES_INVITATION`.
+8. **Free-file surface** stays exactly the two lists in §1.2 and §1.3 plus their tests. Anything beyond that is a plan change, not a developer call.
