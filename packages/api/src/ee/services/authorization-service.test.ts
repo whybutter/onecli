@@ -101,6 +101,11 @@ import {
 
 const ORG = "org-1";
 const WS = "ws-1";
+// A sibling workspace in the same org, and a workspace in ANOTHER org where
+// an admin of org-1 holds nothing — the fence the whole law hangs on.
+const SIBLING_WS = "ws-2";
+const OTHER_ORG = "org-b";
+const OTHER_WS = "ws-b";
 const member = (userId: string, role: string, status = "active") => ({
   organizationId: ORG,
   userId,
@@ -116,6 +121,12 @@ beforeEach(() => {
     member("manager", "member"),
     member("plain", "member"),
     member("suspended", "admin", "suspended"),
+    {
+      organizationId: OTHER_ORG,
+      userId: "other-owner",
+      role: "owner",
+      status: "active",
+    },
   ];
   store.bindings = [
     { workspaceId: WS, userId: "bound", role: "member" },
@@ -123,7 +134,11 @@ beforeEach(() => {
     // A stale binding: suspension must win over it.
     { workspaceId: WS, userId: "suspended", role: "owner" },
   ];
-  store.workspaces = [{ id: WS, organizationId: ORG }];
+  store.workspaces = [
+    { id: WS, organizationId: ORG },
+    { id: SIBLING_WS, organizationId: ORG },
+    { id: OTHER_WS, organizationId: OTHER_ORG },
+  ];
   store.bindingReads = 0;
 });
 
@@ -231,6 +246,59 @@ describe("canManageWorkspace (rename / share / delete)", () => {
     ["stranger", false],
   ])("%s → %s", async (userId, expected) => {
     await expect(canManageWorkspace(userId, WS)).resolves.toBe(expected);
+  });
+});
+
+describe("the org fence", () => {
+  it("an owner/admin of org-1 has neither use nor management in org-b", async () => {
+    for (const userId of ["owner", "admin"]) {
+      await expect(canAccessWorkspace(userId, OTHER_WS)).resolves.toBe(false);
+      await expect(canManageWorkspace(userId, OTHER_WS)).resolves.toBe(false);
+    }
+    expect(store.bindingReads).toBe(0);
+  });
+
+  it("the checker denies a foreign workspace even when the caller's own org id is supplied", async () => {
+    // A (workspaceId, organizationId) pair that disagrees with the database
+    // is the caller's bug; the checker answers for the org it was given, so
+    // an org-1 admin asked about ws-b under org-1 is not admitted by ws-b's
+    // org — and a member's binding lookup is keyed by the workspace, so a
+    // sibling-org pair never leaks a binding either.
+    await expect(
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("bound", {
+        id: OTHER_WS,
+        organizationId: ORG,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("owner", {
+        id: OTHER_WS,
+        organizationId: OTHER_ORG,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("a member bound on ws-1 reaches neither the sibling ws-2 nor its management", async () => {
+    await expect(canAccessWorkspace("bound", WS)).resolves.toBe(true);
+    await expect(canAccessWorkspace("bound", SIBLING_WS)).resolves.toBe(false);
+    await expect(canManageWorkspace("bound", SIBLING_WS)).resolves.toBe(false);
+    await expect(canManageWorkspace("manager", SIBLING_WS)).resolves.toBe(
+      false,
+    );
+    await expect(
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("bound", {
+        id: SIBLING_WS,
+        organizationId: ORG,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("the other org's owner sees only their own workspace", async () => {
+    await expect(canAccessWorkspace("other-owner", OTHER_WS)).resolves.toBe(
+      true,
+    );
+    await expect(canAccessWorkspace("other-owner", WS)).resolves.toBe(false);
+    await expect(canManageWorkspace("other-owner", WS)).resolves.toBe(false);
   });
 });
 
