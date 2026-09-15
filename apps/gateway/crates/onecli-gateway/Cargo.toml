@@ -15,6 +15,7 @@ path = "src/main.rs"
 approval = { path = "../approval" }
 ca = { path = "../ca" }
 cache = { path = "../cache" }
+client-ca = { path = "../client-ca" }
 common = { path = "../common" }
 context = { path = "../context" }
 crypto = { path = "../crypto" }

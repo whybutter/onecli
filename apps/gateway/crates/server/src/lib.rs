@@ -14,9 +14,11 @@
 mod vault_api;
 
 pub mod entrypoint;
+pub(crate) mod mtls;
 pub use entrypoint::Entrypoint;
+pub use mtls::MtlsEntrypoint;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -27,7 +29,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio_rustls::TlsConnector;
 use tower::ServiceExt;
 use tower_http::cors::CorsLayer;
@@ -56,6 +58,10 @@ pub use context::{GatewayState, ProxyContext};
 pub struct GatewayServer {
     state: GatewayState,
     port: u16,
+    /// Bind address for the plaintext listener (`GATEWAY_PLAIN_BIND`,
+    /// defaulting to `0.0.0.0` — today's behavior, unchanged unless an
+    /// operator opts into narrowing it). See [`parse_plain_bind`].
+    plain_bind: IpAddr,
 }
 
 /// Build the HTTP client used for upstream requests.
@@ -203,6 +209,36 @@ fn parse_danger_accept_invalid_certs(raw: Option<&str>) -> bool {
     )
 }
 
+/// Parse an already-read `GATEWAY_PLAIN_BIND` value (`None` when the var is
+/// unset) into a bind address, defaulting to `0.0.0.0` (unrestricted —
+/// today's behavior, unchanged unless the operator opts into narrowing it).
+///
+/// Fails closed: unset/empty stays the default, but a SET-and-unparseable
+/// value (a typo like `127.0.0.q`, or `localhost`, which isn't an IP literal)
+/// is an `Err`, not a silent fallback to the wide-open default. This is the
+/// one operator knob for restricting the always-open plaintext listener, so
+/// silently widening it on a typo would defeat the whole point of the knob.
+///
+/// No env access — that's [`parse_plain_bind`]'s job — so this is directly
+/// unit-testable, mirroring the `from_parts`/`from_env` split in
+/// `client_ca::mtls`.
+fn parse_plain_bind_value(value: Option<&str>) -> Result<IpAddr> {
+    match value {
+        None => Ok(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+        Some(s) if s.trim().is_empty() => Ok(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+        Some(s) => s
+            .trim()
+            .parse()
+            .with_context(|| format!("GATEWAY_PLAIN_BIND {s:?} is not a valid IP address")),
+    }
+}
+
+/// Read `GATEWAY_PLAIN_BIND` from the environment and parse it via
+/// [`parse_plain_bind_value`].
+fn parse_plain_bind() -> Result<IpAddr> {
+    parse_plain_bind_value(std::env::var("GATEWAY_PLAIN_BIND").ok().as_deref())
+}
+
 /// Returns true if `host` matches any pattern in `patterns`.
 ///
 /// - `*.example.com` matches `sub.example.com` but NOT `example.com` itself.
@@ -222,6 +258,7 @@ fn host_matches_skip_verify(host: &str, patterns: &[String]) -> bool {
 }
 
 impl GatewayServer {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ca: CertificateAuthority,
         port: u16,
@@ -229,7 +266,8 @@ impl GatewayServer {
         vault_service: Arc<vault::VaultService>,
         cache: Arc<dyn CacheStore>,
         approval_store: Arc<dyn ApprovalStore>,
-    ) -> Self {
+        client_ca: Option<Arc<client_ca::ClientCa>>,
+    ) -> Result<Self> {
         let global_skip = parse_danger_accept_invalid_certs(
             std::env::var("GATEWAY_DANGER_ACCEPT_INVALID_CERTS")
                 .ok()
@@ -243,6 +281,19 @@ impl GatewayServer {
             info!(hosts = ?skip_verify_hosts.as_ref(), "TLS verification disabled for matched hosts (GATEWAY_SKIP_VERIFY_HOSTS)");
         }
 
+        // `GATEWAY_PLAIN_BIND` fails closed (Err on a set-but-unparseable
+        // value) — see `parse_plain_bind_value`'s doc comment. The "mTLS is
+        // configured but this is still 0.0.0.0" warning can't live here: this
+        // constructor holds the client-CA *minting authority*
+        // (`client_ca: None` when an operator supplies an external
+        // `GATEWAY_CLIENT_CA`), not whether the mTLS *listener* is actually
+        // configured (`client_ca::MtlsConfig`) — those are independent, and
+        // conflating them would under-warn for exactly the "bring your own
+        // client CA" case the fallback exists to support. `main` has the real
+        // `mtls.is_some()` signal and emits that warning itself, via
+        // `Self::plain_bind`.
+        let plain_bind = parse_plain_bind()?;
+
         let state = GatewayState {
             ca: Arc::new(ca),
             http_client: build_http_client(global_skip),
@@ -254,14 +305,34 @@ impl GatewayServer {
             cache,
             vault_service,
             approval_store,
+            client_ca,
         };
 
-        Self { state, port }
+        Ok(Self {
+            state,
+            port,
+            plain_bind,
+        })
+    }
+
+    /// This entrypoint's shared context — cloned into a second `Entrypoint`
+    /// (the mTLS listener) so it serves the same router/state as this one.
+    pub fn state(&self) -> &GatewayState {
+        &self.state
+    }
+
+    /// The plaintext listener's resolved bind address (`GATEWAY_PLAIN_BIND`,
+    /// defaulting to `0.0.0.0`). `main` reads this to decide whether to warn
+    /// that an unspecified bind defeats mTLS/binding-enforcement posture —
+    /// this constructor doesn't know whether mTLS is actually configured
+    /// (see the doc comment on [`Self::new`]'s `plain_bind` computation).
+    pub fn plain_bind(&self) -> IpAddr {
+        self.plain_bind
     }
 
     /// Start the gateway TCP listener. Runs forever.
     pub async fn run(&self) -> Result<()> {
-        let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
+        let addr = SocketAddr::new(self.plain_bind, self.port);
         let listener = TcpListener::bind(addr)
             .await
             .context("binding TCP listener")?;
@@ -273,119 +344,7 @@ impl GatewayServer {
 
         info!(addr = %bound_addr, "listening for connections");
 
-        // CORS configuration for browser → gateway requests.
-        // credentials: true requires explicit headers/methods (not wildcard *).
-        let cors_layer = CorsLayer::new()
-            .allow_origin(tower_http::cors::AllowOrigin::mirror_request())
-            .allow_headers([
-                hyper::header::CONTENT_TYPE,
-                hyper::header::AUTHORIZATION,
-                hyper::header::ACCEPT,
-                // Cloud scopes browser → gateway vault calls to the active
-                // workspace via this header; it must be allow-listed or the CORS
-                // preflight blocks the request. (OSS never sends it.)
-                hyper::header::HeaderName::from_static("x-workspace-id"),
-                // Rename compat (temporary): old browser callers still send
-                // the pre-rename header.
-                common::compat::LEGACY_WORKSPACE_HEADER,
-            ])
-            .allow_methods([
-                Method::GET,
-                Method::POST,
-                Method::PUT,
-                Method::DELETE,
-                Method::OPTIONS,
-            ])
-            .allow_credentials(true);
-
-        // Build the Axum router for non-CONNECT routes.
-        // The fallback returns 400 Bad Request for anything other than defined routes.
-        let axum_router = Router::new()
-            .route("/healthz", axum::routing::get(healthz))
-            .route("/me", axum::routing::get(me))
-            // /v1 routes
-            .route(
-                "/v1/vault/{provider}/pair",
-                axum::routing::post(vault_api::vault_pair),
-            )
-            .route(
-                "/v1/vault/{provider}/status",
-                axum::routing::get(vault_api::vault_status),
-            )
-            .route(
-                "/v1/vault/{provider}/pair",
-                axum::routing::delete(vault_api::vault_disconnect),
-            )
-            // 1Password value picker (browse vaults → items → fields)
-            .route(
-                "/v1/vault/onepassword/vaults",
-                axum::routing::get(vault_api::vault_op_vaults),
-            )
-            .route(
-                "/v1/vault/onepassword/vaults/{vaultId}/items",
-                axum::routing::get(vault_api::vault_op_items),
-            )
-            .route(
-                "/v1/vault/onepassword/items/{vaultId}/{itemId}/fields",
-                axum::routing::get(vault_api::vault_op_fields),
-            )
-            .route(
-                "/v1/cache/invalidate",
-                axum::routing::post(invalidate_cache),
-            )
-            .route(
-                "/v1/approvals/pending",
-                axum::routing::get(get_pending_approvals),
-            )
-            .route(
-                "/v1/approvals/{id}/decision",
-                axum::routing::post(submit_approval_decision),
-            )
-            // /api legacy routes (backwards compatibility)
-            .route(
-                "/api/vault/{provider}/pair",
-                axum::routing::post(vault_api::vault_pair),
-            )
-            .route(
-                "/api/vault/{provider}/status",
-                axum::routing::get(vault_api::vault_status),
-            )
-            .route(
-                "/api/vault/{provider}/pair",
-                axum::routing::delete(vault_api::vault_disconnect),
-            )
-            // 1Password value picker (legacy /api alias)
-            .route(
-                "/api/vault/onepassword/vaults",
-                axum::routing::get(vault_api::vault_op_vaults),
-            )
-            .route(
-                "/api/vault/onepassword/vaults/{vaultId}/items",
-                axum::routing::get(vault_api::vault_op_items),
-            )
-            .route(
-                "/api/vault/onepassword/items/{vaultId}/{itemId}/fields",
-                axum::routing::get(vault_api::vault_op_fields),
-            )
-            .route(
-                "/api/cache/invalidate",
-                axum::routing::post(invalidate_cache),
-            )
-            .route(
-                "/api/approvals/pending",
-                axum::routing::get(get_pending_approvals),
-            )
-            .route(
-                "/api/approvals/{id}/decision",
-                axum::routing::post(submit_approval_decision),
-            );
-
-        // Org-scoped routes (`ee/org_routes.rs`) mount in every edition; an
-        // org-less credential is rejected per-handler (403).
-        let axum_router = ee::org_routes::mount(axum_router)
-            .layer(cors_layer)
-            .fallback(fallback)
-            .with_state(self.state.clone());
+        let axum_router = build_router(&self.state);
 
         let mut shutdown_signal = shutdown::subscribe();
 
@@ -413,7 +372,13 @@ impl GatewayServer {
 
             tokio::spawn(async move {
                 let _guard = guard;
-                if let Err(e) = handle_connection(stream, peer_addr, state, router).await {
+                // The plaintext listener never has a client certificate to
+                // extract an identity from — `None`/`false`, always. The
+                // mTLS listener (`crate::mtls::MtlsEntrypoint`) is the only
+                // caller that ever passes `Some`/`true`.
+                if let Err(e) = handle_connection(stream, peer_addr, state, router, None, false)
+                    .await
+                {
                     warn!(peer = %peer_addr, error = ?e, "connection error");
                 }
             });
@@ -430,7 +395,8 @@ impl GatewayServer {
 }
 
 /// The combined HTTP proxy + control-plane listener as an [`Entrypoint`] —
-/// the gateway's first (and so far only) front door.
+/// the gateway's first front door (the plaintext listener; `crate::mtls`'s
+/// [`MtlsEntrypoint`] is the second, opt-in one).
 #[async_trait::async_trait]
 impl Entrypoint for GatewayServer {
     fn name(&self) -> &'static str {
@@ -440,6 +406,127 @@ impl Entrypoint for GatewayServer {
     async fn run(self: Box<Self>) -> Result<()> {
         GatewayServer::run(&self).await
     }
+}
+
+/// Build the Axum router for non-CONNECT routes (healthz, vault API,
+/// approvals, org routes, ...). Shared by both listeners — the plaintext one
+/// ([`GatewayServer::run`]) and, when configured, the mTLS one
+/// (`crate::mtls::MtlsEntrypoint`) — so a route added to one is never missed
+/// on the other.
+pub(crate) fn build_router(state: &GatewayState) -> Router {
+    // CORS configuration for browser → gateway requests.
+    // credentials: true requires explicit headers/methods (not wildcard *).
+    let cors_layer = CorsLayer::new()
+        .allow_origin(tower_http::cors::AllowOrigin::mirror_request())
+        .allow_headers([
+            hyper::header::CONTENT_TYPE,
+            hyper::header::AUTHORIZATION,
+            hyper::header::ACCEPT,
+            // Cloud scopes browser → gateway vault calls to the active
+            // workspace via this header; it must be allow-listed or the CORS
+            // preflight blocks the request. (OSS never sends it.)
+            hyper::header::HeaderName::from_static("x-workspace-id"),
+            // Rename compat (temporary): old browser callers still send
+            // the pre-rename header.
+            common::compat::LEGACY_WORKSPACE_HEADER,
+        ])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_credentials(true);
+
+    // Build the Axum router for non-CONNECT routes.
+    // The fallback returns 400 Bad Request for anything other than defined routes.
+    let axum_router = Router::new()
+        .route("/healthz", axum::routing::get(healthz))
+        .route("/me", axum::routing::get(me))
+        // /v1 routes
+        .route(
+            "/v1/vault/{provider}/pair",
+            axum::routing::post(vault_api::vault_pair),
+        )
+        .route(
+            "/v1/vault/{provider}/status",
+            axum::routing::get(vault_api::vault_status),
+        )
+        .route(
+            "/v1/vault/{provider}/pair",
+            axum::routing::delete(vault_api::vault_disconnect),
+        )
+        // 1Password value picker (browse vaults → items → fields)
+        .route(
+            "/v1/vault/onepassword/vaults",
+            axum::routing::get(vault_api::vault_op_vaults),
+        )
+        .route(
+            "/v1/vault/onepassword/vaults/{vaultId}/items",
+            axum::routing::get(vault_api::vault_op_items),
+        )
+        .route(
+            "/v1/vault/onepassword/items/{vaultId}/{itemId}/fields",
+            axum::routing::get(vault_api::vault_op_fields),
+        )
+        .route(
+            "/v1/cache/invalidate",
+            axum::routing::post(invalidate_cache),
+        )
+        .route(
+            "/v1/approvals/pending",
+            axum::routing::get(get_pending_approvals),
+        )
+        .route(
+            "/v1/approvals/{id}/decision",
+            axum::routing::post(submit_approval_decision),
+        )
+        // /api legacy routes (backwards compatibility)
+        .route(
+            "/api/vault/{provider}/pair",
+            axum::routing::post(vault_api::vault_pair),
+        )
+        .route(
+            "/api/vault/{provider}/status",
+            axum::routing::get(vault_api::vault_status),
+        )
+        .route(
+            "/api/vault/{provider}/pair",
+            axum::routing::delete(vault_api::vault_disconnect),
+        )
+        // 1Password value picker (legacy /api alias)
+        .route(
+            "/api/vault/onepassword/vaults",
+            axum::routing::get(vault_api::vault_op_vaults),
+        )
+        .route(
+            "/api/vault/onepassword/vaults/{vaultId}/items",
+            axum::routing::get(vault_api::vault_op_items),
+        )
+        .route(
+            "/api/vault/onepassword/items/{vaultId}/{itemId}/fields",
+            axum::routing::get(vault_api::vault_op_fields),
+        )
+        .route(
+            "/api/cache/invalidate",
+            axum::routing::post(invalidate_cache),
+        )
+        .route(
+            "/api/approvals/pending",
+            axum::routing::get(get_pending_approvals),
+        )
+        .route(
+            "/api/approvals/{id}/decision",
+            axum::routing::post(submit_approval_decision),
+        );
+
+    // Org-scoped routes (`ee/org_routes.rs`) mount in every edition; an
+    // org-less credential is rejected per-handler (403).
+    ee::org_routes::mount(axum_router)
+        .layer(cors_layer)
+        .fallback(fallback)
+        .with_state(state.clone())
 }
 
 // ── Axum route handlers ─────────────────────────────────────────────────
@@ -780,15 +867,29 @@ fn is_http_proxy_request<T>(req: &Request<T>) -> bool {
 
 /// Handle a single client connection.
 ///
+/// Generic over the stream type so both listeners can share this function:
+/// the plaintext listener passes a raw [`TcpStream`], the mTLS listener
+/// (`crate::mtls::MtlsEntrypoint`) passes a completed `TlsStream<TcpStream>`.
+///
 /// Uses a `service_fn` wrapper that intercepts CONNECT requests before they reach
 /// the Axum router (CONNECT URIs like `host:port` don't match Axum's path-based routing).
 /// All other HTTP routes (vault API, healthz, etc.) go through the Axum router.
-async fn handle_connection(
-    stream: TcpStream,
+pub(crate) async fn handle_connection<S>(
+    stream: S,
     peer_addr: SocketAddr,
     state: GatewayState,
     router: Router,
-) -> Result<()> {
+    client_identity: Option<Arc<client_ca::ClientIdentity>>,
+    // Whether this connection came in on the mTLS listener — threaded as its
+    // OWN signal rather than inferred from `client_identity.is_some()`: a
+    // future cert↔token binding check needs to tell "mTLS handshake, cert had
+    // no usable identity" (deny) apart from "plain listener, no cert at all"
+    // (exempt) — both look identical as `client_identity: None` otherwise.
+    on_mtls: bool,
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let io = TokioIo::new(stream);
 
     let conn = http1::Builder::new()
@@ -799,11 +900,12 @@ async fn handle_connection(
             service_fn(move |req: Request<Incoming>| {
                 let state = state.clone();
                 let router = router.clone();
+                let client_identity = client_identity.clone();
                 async move {
                     if req.method() == Method::CONNECT {
-                        handle_connect(req, peer_addr, state).await
+                        handle_connect(req, peer_addr, state, client_identity, on_mtls).await
                     } else if is_http_proxy_request(&req) {
-                        handle_http_proxy(req, peer_addr, state).await
+                        handle_http_proxy(req, peer_addr, state, client_identity, on_mtls).await
                     } else {
                         // Axum handles all non-proxy routes (healthz, vault API, fallback)
                         let resp: Response<axum::body::Body> = router
@@ -837,10 +939,16 @@ async fn handle_connection(
 // ── CONNECT handling ────────────────────────────────────────────────────
 
 /// Handle a CONNECT request: authenticate, resolve policy, then MITM.
+///
+/// `client_identity`/`on_mtls` are threaded through but not yet acted on —
+/// they carry the mTLS listener's verified identity (if any) for a future
+/// cert↔token binding check to consume; this phase only wires the plumbing.
 async fn handle_connect(
     req: Request<Incoming>,
     peer_addr: SocketAddr,
     state: GatewayState,
+    _client_identity: Option<Arc<client_ca::ClientIdentity>>,
+    _on_mtls: bool,
 ) -> Result<Response<axum::body::Body>, anyhow::Error> {
     let host = req
         .uri()
@@ -1000,10 +1108,15 @@ async fn handle_connect(
 /// Unlike CONNECT, there is no tunnel upgrade — the gateway reads the request
 /// directly, applies credential injection, and forwards upstream over the
 /// original scheme (reqwest handles TLS transparently for `https://`).
+///
+/// `client_identity`/`on_mtls` are threaded through but not yet acted on —
+/// see the same note on [`handle_connect`].
 async fn handle_http_proxy(
     req: Request<Incoming>,
     peer_addr: SocketAddr,
     state: GatewayState,
+    _client_identity: Option<Arc<client_ca::ClientIdentity>>,
+    _on_mtls: bool,
 ) -> Result<Response<axum::body::Body>, anyhow::Error> {
     let authority = req
         .uri()
@@ -1259,6 +1372,54 @@ mod tests {
         assert!(!parse_danger_accept_invalid_certs(Some("")));
         assert!(!parse_danger_accept_invalid_certs(Some("yes")));
         assert!(!parse_danger_accept_invalid_certs(None));
+    }
+
+    // ── parse_plain_bind_value ───────────────────────────────────────────
+
+    #[test]
+    fn plain_bind_defaults_to_unspecified_when_unset() {
+        assert_eq!(
+            parse_plain_bind_value(None).unwrap(),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
+    }
+
+    #[test]
+    fn plain_bind_defaults_to_unspecified_when_empty() {
+        assert_eq!(
+            parse_plain_bind_value(Some("")).unwrap(),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
+        assert_eq!(
+            parse_plain_bind_value(Some("   ")).unwrap(),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
+    }
+
+    #[test]
+    fn plain_bind_parses_valid_ip() {
+        assert_eq!(
+            parse_plain_bind_value(Some("127.0.0.1")).unwrap(),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+        );
+    }
+
+    /// A set-but-unparseable value must fail closed (`Err`), not silently
+    /// fall back to the wide-open `0.0.0.0` default — that default is exactly
+    /// what this knob exists to let an operator narrow.
+    #[test]
+    fn plain_bind_unparseable_value_errs_naming_var_and_value() {
+        let err = parse_plain_bind_value(Some("127.0.0.q")).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("GATEWAY_PLAIN_BIND"), "message: {msg}");
+        assert!(msg.contains("127.0.0.q"), "message: {msg}");
+    }
+
+    #[test]
+    fn plain_bind_hostname_is_not_an_ip_literal_errs() {
+        // "localhost" is a valid hostname but not an IP literal — parsing it
+        // as an IpAddr must fail rather than silently resolve or default.
+        assert!(parse_plain_bind_value(Some("localhost")).is_err());
     }
 
     /// Named for what it actually checks. An earlier version looped over both
