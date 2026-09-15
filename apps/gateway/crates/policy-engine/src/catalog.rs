@@ -190,6 +190,7 @@ pub(super) fn app_target_matches(
     request_method: &str,
     request_path: &str,
     body: ConditionBody<'_>,
+    headers: Option<&hyper::HeaderMap>,
     conditions: &Option<serde_json::Value>,
     polarity: PolicyAction,
 ) -> bool {
@@ -257,7 +258,7 @@ pub(super) fn app_target_matches(
                     conditions,
                     polarity.clone(),
                 );
-                matches_request(&rule, request_method, request_path, body)
+                matches_request(&rule, request_method, request_path, body, headers)
             })
         })
     })
@@ -484,6 +485,7 @@ mod tests {
             method,
             path,
             ConditionBody::None,
+            None,
             &None,
             PolicyAction::Allow,
         )
@@ -505,6 +507,7 @@ mod tests {
             method,
             path,
             ConditionBody::Full(body.as_bytes()),
+            None,
             &None,
             PolicyAction::Allow,
         )
@@ -883,6 +886,7 @@ mod tests {
             "POST",
             "/gmail/v1/send",
             ConditionBody::Full(b"hello world"),
+            None,
             &conditions,
             PolicyAction::Allow,
         ));
@@ -1162,6 +1166,7 @@ mod tests {
                     "POST",
                     &path,
                     ConditionBody::None,
+                    None,
                     &None,
                     PolicyAction::Allow,
                 ),
@@ -1208,6 +1213,7 @@ mod tests {
                             method,
                             &concrete_path,
                             ConditionBody::Full(&body),
+                            None,
                             &None,
                             PolicyAction::Allow,
                         );
