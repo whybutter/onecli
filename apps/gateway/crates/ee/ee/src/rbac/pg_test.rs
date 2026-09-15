@@ -341,3 +341,161 @@ async fn s14k_org_admin_recheck_matrix() {
     );
     cleanup(&pool, &p).await;
 }
+
+/// s14l: a `workspace_access` GROUP binding naming a group from a DIFFERENT
+/// organization must not grant — mirrors
+/// `principals::pg_test::cross_org_group_ignored`. Before the org fence was
+/// added to the group disjunct, this row granted management here while the
+/// principal CTE excluded the identical row, which is exactly the
+/// disagreement a security recheck must not have.
+#[tokio::test]
+async fn s14l_group_binding_cross_org_denied() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let p = test_prefix("s14l");
+    let (org, foreign_org, ws, user, group) = (
+        format!("{p}-org"),
+        format!("{p}-foreign-org"),
+        format!("{p}-ws"),
+        format!("{p}-user"),
+        format!("{p}-group"),
+    );
+    seed_org(&pool, &org).await;
+    seed_org(&pool, &foreign_org).await;
+    seed_workspace(&pool, &ws, &org).await;
+    seed_user(&pool, &user).await;
+    seed_membership(&pool, &org, &user, "member", "active").await;
+    // The group belongs to the FOREIGN org but is (erroneously, or via a
+    // stray write) granted to this workspace.
+    seed_group(&pool, &group, &foreign_org).await;
+    seed_group_member(&pool, &group, &user).await;
+    seed_workspace_access_group(&pool, &format!("{p}-wa"), &ws, &group).await;
+
+    assert!(
+        !user_can_manage_workspace(&pool, &user, &ws)
+            .await
+            .expect("query"),
+        "a workspace_access group binding naming a cross-org group must deny"
+    );
+    cleanup(&pool, &p).await;
+}
+
+/// Cross-org matrix: every RBAC input is per-org, so an org-A admin asking
+/// about an org-B workspace must not ride the wrong org's role.
+#[tokio::test]
+async fn cross_org_admin_in_a_denied_for_workspace_in_b() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let p = test_prefix("crossadmin");
+    let (org_a, org_b, ws_b, user) = (
+        format!("{p}-org-a"),
+        format!("{p}-org-b"),
+        format!("{p}-ws-b"),
+        format!("{p}-user"),
+    );
+    seed_org(&pool, &org_a).await;
+    seed_org(&pool, &org_b).await;
+    seed_workspace(&pool, &ws_b, &org_b).await;
+    seed_user(&pool, &user).await;
+    // Admin of A only — no membership of any kind in B.
+    seed_membership(&pool, &org_a, &user, "admin", "active").await;
+
+    assert!(
+        !user_can_manage_workspace(&pool, &user, &ws_b)
+            .await
+            .expect("query"),
+        "an org-A admin with no membership in org B must not manage a B workspace"
+    );
+    cleanup(&pool, &p).await;
+}
+
+/// An admin in org A who is merely a member in org B, with no binding, must
+/// still be denied a B workspace — the admin role does not travel across
+/// orgs.
+#[tokio::test]
+async fn cross_org_admin_in_a_member_in_b_without_binding_denied() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let p = test_prefix("crossmember");
+    let (org_a, org_b, ws_b, user) = (
+        format!("{p}-org-a"),
+        format!("{p}-org-b"),
+        format!("{p}-ws-b"),
+        format!("{p}-user"),
+    );
+    seed_org(&pool, &org_a).await;
+    seed_org(&pool, &org_b).await;
+    seed_workspace(&pool, &ws_b, &org_b).await;
+    seed_user(&pool, &user).await;
+    seed_membership(&pool, &org_a, &user, "admin", "active").await;
+    seed_membership(&pool, &org_b, &user, "member", "active").await;
+
+    assert!(
+        !user_can_manage_workspace(&pool, &user, &ws_b)
+            .await
+            .expect("query"),
+        "a plain B membership with no binding must deny, regardless of an A admin role"
+    );
+    cleanup(&pool, &p).await;
+}
+
+/// A user active in org A but suspended in org B must be denied a B
+/// workspace even with BOTH a direct and a group binding there — suspension
+/// beats every binding, per-org.
+#[tokio::test]
+async fn cross_org_suspended_in_b_active_in_a_with_bindings_denied() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let p = test_prefix("crosssuspended");
+    let (org_a, org_b, ws_b, user, group) = (
+        format!("{p}-org-a"),
+        format!("{p}-org-b"),
+        format!("{p}-ws-b"),
+        format!("{p}-user"),
+        format!("{p}-group"),
+    );
+    seed_org(&pool, &org_a).await;
+    seed_org(&pool, &org_b).await;
+    seed_workspace(&pool, &ws_b, &org_b).await;
+    seed_user(&pool, &user).await;
+    seed_membership(&pool, &org_a, &user, "member", "active").await;
+    seed_membership(&pool, &org_b, &user, "member", "suspended").await;
+    seed_workspace_access_user(&pool, &format!("{p}-wa-direct"), &ws_b, &user, "member").await;
+    seed_group(&pool, &group, &org_b).await;
+    seed_group_member(&pool, &group, &user).await;
+    seed_workspace_access_group(&pool, &format!("{p}-wa-group"), &ws_b, &group).await;
+
+    assert!(
+        !user_can_manage_workspace(&pool, &user, &ws_b)
+            .await
+            .expect("query"),
+        "suspension in B must deny even with both a direct and a group binding there"
+    );
+    cleanup(&pool, &p).await;
+}
+
+/// A workspace id that does not exist at all must deny — the join simply
+/// produces no row.
+#[tokio::test]
+async fn nonexistent_workspace_denied() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let p = test_prefix("noworkspace");
+    let (org, user) = (format!("{p}-org"), format!("{p}-user"));
+    seed_org(&pool, &org).await;
+    seed_user(&pool, &user).await;
+    seed_membership(&pool, &org, &user, "owner", "active").await;
+
+    assert!(
+        !user_can_manage_workspace(&pool, &user, &format!("{p}-no-such-workspace"))
+            .await
+            .expect("query"),
+        "a nonexistent workspace must deny, even for an org owner"
+    );
+    cleanup(&pool, &p).await;
+}
