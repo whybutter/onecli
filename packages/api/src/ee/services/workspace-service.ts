@@ -233,24 +233,24 @@ export const getUserOrgsWithWorkspaces = async (
   const memberships = await db.organizationMember.findMany({
     where: { userId, ...activeMembershipWhere },
     orderBy: { createdAt: "asc" },
-    select: {
-      organization: {
-        select: {
-          id: true,
-          name: true,
-          workspaces: {
-            where: { createdByUserId: userId },
-            select: { id: true, name: true },
-            orderBy: { createdAt: "asc" },
-          },
-        },
-      },
+    select: { organization: { select: { id: true, name: true } } },
+  });
+  if (memberships.length === 0) return [];
+
+  const workspaces = await db.workspace.findMany({
+    where: {
+      createdByUserId: userId,
+      organizationId: { in: memberships.map((m) => m.organization.id) },
     },
+    select: { id: true, name: true, organizationId: true },
+    orderBy: { createdAt: "asc" },
   });
   return memberships.map(({ organization }) => ({
     id: organization.id,
     name: organization.name,
-    workspaces: organization.workspaces,
+    workspaces: workspaces
+      .filter((workspace) => workspace.organizationId === organization.id)
+      .map(({ id, name }) => ({ id, name })),
   }));
 };
 
