@@ -11,6 +11,7 @@
 //! `tower::service_fn` wrapper, following the official Axum http-proxy
 //! example pattern.
 
+mod client_cert_route;
 mod vault_api;
 
 pub mod entrypoint;
@@ -481,6 +482,15 @@ pub(crate) fn build_router(state: &GatewayState) -> Router {
         .route(
             "/v1/approvals/{id}/decision",
             axum::routing::post(submit_approval_decision),
+        )
+        // Internal gateway<->Node boundary (X-Gateway-Secret, not session/
+        // API-key auth): mints a client mTLS certificate from a CSR Node
+        // forwards on an agent's behalf. See `client_cert_route`'s module
+        // doc for why this is a NEW inbound-direction secret check, not a
+        // reuse of `vault::onepassword_api`'s outbound one.
+        .route(
+            "/v1/internal/client-cert/issue",
+            axum::routing::post(client_cert_route::issue_client_cert),
         )
         // /api legacy routes (backwards compatibility)
         .route(

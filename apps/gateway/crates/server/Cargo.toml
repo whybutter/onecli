@@ -34,3 +34,12 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 webpki-roots = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+crypto = { path = "../crypto" }
+rcgen = { workspace = true }
+sqlx = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
+x509-parser = { workspace = true }
