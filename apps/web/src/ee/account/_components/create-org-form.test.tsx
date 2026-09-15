@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mocks.push }),
 }));
-vi.mock("@/ee/account/actions", () => ({
+vi.mock("@/ee/settings/actions", () => ({
   createOrganizationAction: mocks.createOrganizationAction,
 }));
 vi.mock("sonner", () => ({

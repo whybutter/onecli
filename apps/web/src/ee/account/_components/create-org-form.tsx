@@ -14,7 +14,7 @@ import {
 } from "@onecli/ui/components/card";
 import { Input } from "@onecli/ui/components/input";
 import { Label } from "@onecli/ui/components/label";
-import { createOrganizationAction } from "@/ee/account/actions";
+import { createOrganizationAction } from "@/ee/settings/actions";
 
 export interface CreateOrgFormProps {
   /** Pre-filled name ("{name}'s Org" from the session); the field stays
