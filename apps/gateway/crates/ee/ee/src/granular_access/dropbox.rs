@@ -38,6 +38,15 @@ fn normalize(entry: &str) -> String {
 /// (`gateway-ee-behaviour.md` §1.8: `{folders: []}` and `{folders: ["/"]}`
 /// both mean "no guard" — the former is caught earlier by
 /// `denies_everything`, the latter is genuinely unrestricted).
+///
+/// NOTE (Phase 0, not changed here): a `folders` key present with a raw,
+/// non-empty array but ZERO usable string entries (e.g. `{"folders": [42]}`)
+/// or a non-array value (`{"folders": "x"}`) also falls through to `None`
+/// ("no restriction") today, per `gateway-ee-behaviour.md` §1.8's literal
+/// reading of `folders(policy)`. This is a spec gap, not an implementation
+/// bug: Phase 1 is expected to amend the spec so a recognised key with a
+/// non-empty raw array and no usable entries denies-all instead (consistent
+/// with how `denies_everything` already treats an explicitly empty array).
 fn allowed_folders(policy: Option<&Value>) -> Option<Vec<String>> {
     let obj = policy?.as_object()?;
     let entries = obj.get("folders")?.as_array()?;
@@ -52,10 +61,19 @@ fn allowed_folders(policy: Option<&Value>) -> Option<Vec<String>> {
 
 /// Whether `target` (a raw request path/argument) falls within `allowed` — a
 /// normalized folder list. The target must itself look like an absolute
-/// path (`id:…`, `rev:…`, `ns:…` references are refused), and containment is
-/// segment-bounded so `/marketing` does not admit `/marketing-2024/x`.
+/// path (`id:…`, `rev:…`, `ns:…` references are refused); must not contain a
+/// `.`/`..` path segment or a backslash (defence in depth — Dropbox's own
+/// handling of dot segments and backslashes is undocumented, so this guard
+/// does not rely on it); and containment is segment-bounded so `/marketing`
+/// does not admit `/marketing-2024/x`.
 fn path_allowed(target: &str, allowed: &[String]) -> bool {
-    if !target.starts_with('/') {
+    if !target.starts_with('/') || target.contains('\\') {
+        return false;
+    }
+    if target
+        .split('/')
+        .any(|segment| segment == "." || segment == "..")
+    {
         return false;
     }
     let norm = normalize(target);
@@ -69,6 +87,24 @@ fn path_allowed(target: &str, allowed: &[String]) -> bool {
 
 fn endpoint_of(path: &str) -> &str {
     path.split('?').next().unwrap_or(path)
+}
+
+/// Dropbox accepts `?arg=` (content-endpoint target) and, on some auth
+/// flows, `?authorization=` as query-parameter alternatives to the
+/// equivalent header/body — an override channel this guard otherwise never
+/// inspects. A request that ships a compliant, in-scope header/body AND one
+/// of these query parameters could smuggle a second, out-of-scope target
+/// past every check below, so any occurrence denies the request outright
+/// rather than being silently ignored. Case-insensitive key match, checked
+/// against the raw query string (before `endpoint_of` strips it).
+fn has_smuggled_query_param(path: &str) -> bool {
+    let Some((_, query)) = path.split_once('?') else {
+        return false;
+    };
+    query.split('&').any(|pair| {
+        let key = pair.split('=').next().unwrap_or(pair);
+        key.eq_ignore_ascii_case("arg") || key.eq_ignore_ascii_case("authorization")
+    })
 }
 
 fn deny(reason: String, allowed: &[String]) -> Option<super::Denial> {
@@ -129,6 +165,16 @@ pub(super) fn enforce(
     let allowed = allowed_folders(policy)?;
     let endpoint = endpoint_of(path);
 
+    // Checked on BOTH hosts, before anything else: a smuggled `?arg=` or
+    // `?authorization=` query parameter could name a second, out-of-scope
+    // target alongside an otherwise-compliant header or body.
+    if has_smuggled_query_param(path) {
+        return deny(
+            format!("ambiguous Dropbox request target for {endpoint}: query parameter override"),
+            &allowed,
+        );
+    }
+
     if PATHLESS_ALLOWLIST.contains(&endpoint) {
         return None;
     }
@@ -144,8 +190,16 @@ pub(super) fn enforce(
             | "/2/files/get_thumbnail_v2" => &["path"],
             _ => return deny(format!("endpoint not permitted: {endpoint}"), &allowed),
         };
-        let Some(header_value) = headers.get("Dropbox-API-Arg").and_then(|v| v.to_str().ok())
-        else {
+        // hyper forwards every occurrence of a repeated header; exactly one
+        // `Dropbox-API-Arg` is required. Zero is "missing", more than one is
+        // "ambiguous" (a second, attacker-controlled value the real Dropbox
+        // API would itself reject, or interpret differently than this guard
+        // — either way, never resolve the ambiguity in the requester's favor).
+        let values = headers.get_all("Dropbox-API-Arg");
+        if values.iter().count() != 1 {
+            return deny("ambiguous Dropbox-API-Arg".to_string(), &allowed);
+        }
+        let Some(header_value) = values.iter().next().and_then(|v| v.to_str().ok()) else {
             return deny(format!("missing or invalid path for {endpoint}"), &allowed);
         };
         let Ok(json) = serde_json::from_str::<Value>(header_value) else {
@@ -196,6 +250,13 @@ mod tests {
         headers
     }
 
+    fn headers_with_two_args(a: &str, b: &str) -> hyper::HeaderMap {
+        let mut headers = hyper::HeaderMap::new();
+        headers.append("Dropbox-API-Arg", a.parse().unwrap());
+        headers.append("Dropbox-API-Arg", b.parse().unwrap());
+        headers
+    }
+
     #[test]
     fn root_boundary_means_no_restriction() {
         assert!(allowed_folders(Some(&json!({"folders": ["/"]}))).is_none());
@@ -228,6 +289,27 @@ mod tests {
         let allowed = vec!["/clients".to_string()];
         assert!(!path_allowed("id:abc123", &allowed));
         assert!(!path_allowed("", &allowed));
+    }
+
+    #[test]
+    fn path_allowed_refuses_rev_and_ns_references() {
+        let allowed = vec!["/clients".to_string()];
+        assert!(!path_allowed("rev:abc123", &allowed));
+        assert!(!path_allowed("ns:456", &allowed));
+    }
+
+    #[test]
+    fn path_allowed_refuses_dot_segments_and_backslashes() {
+        let allowed = vec!["/clients".to_string()];
+        assert!(!path_allowed("/clients/../sales/x", &allowed));
+        assert!(!path_allowed("/clients/./x", &allowed));
+        assert!(!path_allowed("/clients\\x", &allowed));
+    }
+
+    #[test]
+    fn path_allowed_is_case_insensitive() {
+        let allowed = vec!["/clients".to_string()];
+        assert!(path_allowed("/CLIENTS/Acme", &allowed));
     }
 
     #[test]
@@ -396,6 +478,243 @@ mod tests {
             "/2/files/upload_session/finish",
             &headers_with_arg(&header),
             None,
+        )
+        .is_none());
+    }
+
+    // ── Coordinator review fixes (MUST-FIX 1, SHOULD 2/4) ───────────────
+
+    #[test]
+    fn duplicate_dropbox_api_arg_header_denies() {
+        let policy = json!({"folders": ["/clients"]});
+        let good = json!({"path": "/clients/acme/file.txt"}).to_string();
+        let sneaky = json!({"path": "/sales/secret"}).to_string();
+        let denial = enforce(
+            Some(&policy),
+            "content.dropboxapi.com",
+            "/2/files/download",
+            &headers_with_two_args(&good, &sneaky),
+            None,
+        )
+        .expect("denied");
+        assert_eq!(denial.reason, "ambiguous Dropbox-API-Arg");
+    }
+
+    #[test]
+    fn single_dropbox_api_arg_header_allows() {
+        let policy = json!({"folders": ["/clients"]});
+        let header = json!({"path": "/clients/acme/file.txt"}).to_string();
+        assert!(enforce(
+            Some(&policy),
+            "content.dropboxapi.com",
+            "/2/files/download",
+            &headers_with_arg(&header),
+            None,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn arg_query_parameter_on_content_host_denies() {
+        let policy = json!({"folders": ["/clients"]});
+        let header = json!({"path": "/clients/acme/file.txt"}).to_string();
+        assert!(enforce(
+            Some(&policy),
+            "content.dropboxapi.com",
+            "/2/files/download?arg=%7B%22path%22%3A%22%2Fsales%2Fsecret%22%7D",
+            &headers_with_arg(&header),
+            None,
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn arg_query_parameter_on_api_host_denies() {
+        let policy = json!({"folders": ["/clients"]});
+        let body = json!({"path": "/clients/acme"}).to_string();
+        assert!(enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/files/list_folder?arg=%7B%22path%22%3A%22%2Fsales%22%7D",
+            &hyper::HeaderMap::new(),
+            Some(body.as_bytes()),
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn authorization_query_parameter_denies_case_insensitively() {
+        let policy = json!({"folders": ["/clients"]});
+        let body = json!({"path": "/clients/acme"}).to_string();
+        assert!(enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/files/list_folder?Authorization=Bearer%20xyz",
+            &hyper::HeaderMap::new(),
+            Some(body.as_bytes()),
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn unrelated_query_parameter_still_allowed() {
+        // Also pins query-string stripping: the endpoint match itself ignores
+        // the query string entirely.
+        let policy = json!({"folders": ["/clients"]});
+        let body = json!({"path": "/clients/acme"}).to_string();
+        assert!(enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/files/list_folder?foo=1",
+            &hyper::HeaderMap::new(),
+            Some(body.as_bytes()),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn non_json_body_denies() {
+        let policy = json!({"folders": ["/clients"]});
+        assert!(enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/files/list_folder",
+            &hyper::HeaderMap::new(),
+            Some(b"not json"),
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn invalid_json_dropbox_api_arg_denies() {
+        let policy = json!({"folders": ["/clients"]});
+        assert!(enforce(
+            Some(&policy),
+            "content.dropboxapi.com",
+            "/2/files/download",
+            &headers_with_arg("not json"),
+            None,
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn v1_and_v2_move_copy_endpoints_all_check_both_paths() {
+        let policy = json!({"folders": ["/clients"]});
+        for endpoint in [
+            "/2/files/move_v2",
+            "/2/files/copy_v2",
+            "/2/files/move",
+            "/2/files/copy",
+        ] {
+            let good = json!({"from_path": "/clients/a", "to_path": "/clients/b"}).to_string();
+            assert!(
+                enforce(
+                    Some(&policy),
+                    "api.dropboxapi.com",
+                    endpoint,
+                    &hyper::HeaderMap::new(),
+                    Some(good.as_bytes()),
+                )
+                .is_none(),
+                "{endpoint} should allow when both paths are in scope"
+            );
+
+            let bad_to = json!({"from_path": "/clients/a", "to_path": "/sales/b"}).to_string();
+            assert!(
+                enforce(
+                    Some(&policy),
+                    "api.dropboxapi.com",
+                    endpoint,
+                    &hyper::HeaderMap::new(),
+                    Some(bad_to.as_bytes()),
+                )
+                .is_some(),
+                "{endpoint} should deny an out-of-scope to_path"
+            );
+
+            let bad_from = json!({"from_path": "/sales/a", "to_path": "/clients/b"}).to_string();
+            assert!(
+                enforce(
+                    Some(&policy),
+                    "api.dropboxapi.com",
+                    endpoint,
+                    &hyper::HeaderMap::new(),
+                    Some(bad_from.as_bytes()),
+                )
+                .is_some(),
+                "{endpoint} should deny an out-of-scope from_path"
+            );
+        }
+    }
+
+    #[test]
+    fn v1_search_reads_path_not_options_path() {
+        let policy = json!({"folders": ["/clients"]});
+        let ok = json!({"path": "/clients/acme"}).to_string();
+        assert!(enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/files/search",
+            &hyper::HeaderMap::new(),
+            Some(ok.as_bytes()),
+        )
+        .is_none());
+
+        let bad = json!({"path": "/sales"}).to_string();
+        assert!(enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/files/search",
+            &hyper::HeaderMap::new(),
+            Some(bad.as_bytes()),
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn empty_and_root_path_values_deny() {
+        let policy = json!({"folders": ["/clients"]});
+        for value in ["", "/"] {
+            let body = json!({"path": value}).to_string();
+            assert!(
+                enforce(
+                    Some(&policy),
+                    "api.dropboxapi.com",
+                    "/2/files/list_folder",
+                    &hyper::HeaderMap::new(),
+                    Some(body.as_bytes()),
+                )
+                .is_some(),
+                "path {value:?} should deny"
+            );
+        }
+    }
+
+    #[test]
+    fn enforce_is_case_insensitive_for_targets_and_boundary() {
+        let policy = json!({"folders": ["/Clients"]});
+        let body = json!({"path": "/CLIENTS/Acme"}).to_string();
+        assert!(enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/files/list_folder",
+            &hyper::HeaderMap::new(),
+            Some(body.as_bytes()),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn root_folder_policy_passes_through_enforce() {
+        let policy = json!({"folders": ["/"]});
+        let body = json!({"path": "/anything/at/all"}).to_string();
+        assert!(enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/files/list_folder",
+            &hyper::HeaderMap::new(),
+            Some(body.as_bytes()),
         )
         .is_none());
     }
