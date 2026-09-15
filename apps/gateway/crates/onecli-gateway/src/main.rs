@@ -311,6 +311,25 @@ async fn main() -> Result<()> {
         approval_store,
         client_ca,
     )?;
+
+    // The plaintext listener has no client-certificate check at all — if
+    // mTLS is configured but this is still 0.0.0.0, anyone who can reach the
+    // plaintext port bypasses certificate authentication entirely. Evaluated
+    // here (not inside `GatewayServer::new`) because `mtls.is_some()` is the
+    // real "is the mTLS listener configured" signal; `client_ca` above only
+    // tracks whether *this process* holds the minting authority, which is
+    // `None` even with mTLS configured when an operator supplies an external
+    // `GATEWAY_CLIENT_CA`.
+    if mtls.is_some() && server.plain_bind().is_unspecified() {
+        warn!(
+            "GATEWAY_MTLS_PORT is set but the plaintext listener is still bound to \
+             0.0.0.0 — anyone who can reach that port bypasses certificate \
+             authentication entirely. Set GATEWAY_PLAIN_BIND=127.0.0.1 to restrict it, \
+             but note that loopback also breaks Docker-published browser -> gateway \
+             vault/approval/cache calls, which arrive on the plaintext listener."
+        );
+    }
+
     let mut entrypoints: Vec<Box<dyn Entrypoint>> = Vec::with_capacity(2);
     // Cloned before `server` is moved into the entrypoints vec below — the
     // mTLS entrypoint needs its own handle to the same shared state so it

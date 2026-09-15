@@ -281,22 +281,18 @@ impl GatewayServer {
             info!(hosts = ?skip_verify_hosts.as_ref(), "TLS verification disabled for matched hosts (GATEWAY_SKIP_VERIFY_HOSTS)");
         }
 
+        // `GATEWAY_PLAIN_BIND` fails closed (Err on a set-but-unparseable
+        // value) — see `parse_plain_bind_value`'s doc comment. The "mTLS is
+        // configured but this is still 0.0.0.0" warning can't live here: this
+        // constructor holds the client-CA *minting authority*
+        // (`client_ca: None` when an operator supplies an external
+        // `GATEWAY_CLIENT_CA`), not whether the mTLS *listener* is actually
+        // configured (`client_ca::MtlsConfig`) — those are independent, and
+        // conflating them would under-warn for exactly the "bring your own
+        // client CA" case the fallback exists to support. `main` has the real
+        // `mtls.is_some()` signal and emits that warning itself, via
+        // `Self::plain_bind`.
         let plain_bind = parse_plain_bind()?;
-        // `GATEWAY_MTLS_PORT` being configured is what `main` reads to decide
-        // whether to push a second (mTLS) entrypoint — this constructor only
-        // holds the client-CA minting authority, not the mTLS listener config
-        // itself, so this warning fires whenever a client CA exists (`main`
-        // only ever builds one when mTLS was actually requested; see its
-        // wiring).
-        if client_ca.is_some() && plain_bind.is_unspecified() {
-            warn!(
-                "GATEWAY_MTLS_PORT is set but the plaintext listener is still bound to \
-                 0.0.0.0 — anyone who can reach that port bypasses certificate \
-                 authentication entirely. Set GATEWAY_PLAIN_BIND=127.0.0.1 to restrict it, \
-                 but note that loopback also breaks Docker-published browser -> gateway \
-                 vault/approval/cache calls, which arrive on the plaintext listener."
-            );
-        }
 
         let state = GatewayState {
             ca: Arc::new(ca),
@@ -323,6 +319,15 @@ impl GatewayServer {
     /// (the mTLS listener) so it serves the same router/state as this one.
     pub fn state(&self) -> &GatewayState {
         &self.state
+    }
+
+    /// The plaintext listener's resolved bind address (`GATEWAY_PLAIN_BIND`,
+    /// defaulting to `0.0.0.0`). `main` reads this to decide whether to warn
+    /// that an unspecified bind defeats mTLS/binding-enforcement posture —
+    /// this constructor doesn't know whether mTLS is actually configured
+    /// (see the doc comment on [`Self::new`]'s `plain_bind` computation).
+    pub fn plain_bind(&self) -> IpAddr {
+        self.plain_bind
     }
 
     /// Start the gateway TCP listener. Runs forever.
@@ -1367,6 +1372,54 @@ mod tests {
         assert!(!parse_danger_accept_invalid_certs(Some("")));
         assert!(!parse_danger_accept_invalid_certs(Some("yes")));
         assert!(!parse_danger_accept_invalid_certs(None));
+    }
+
+    // ── parse_plain_bind_value ───────────────────────────────────────────
+
+    #[test]
+    fn plain_bind_defaults_to_unspecified_when_unset() {
+        assert_eq!(
+            parse_plain_bind_value(None).unwrap(),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
+    }
+
+    #[test]
+    fn plain_bind_defaults_to_unspecified_when_empty() {
+        assert_eq!(
+            parse_plain_bind_value(Some("")).unwrap(),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
+        assert_eq!(
+            parse_plain_bind_value(Some("   ")).unwrap(),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
+    }
+
+    #[test]
+    fn plain_bind_parses_valid_ip() {
+        assert_eq!(
+            parse_plain_bind_value(Some("127.0.0.1")).unwrap(),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
+        );
+    }
+
+    /// A set-but-unparseable value must fail closed (`Err`), not silently
+    /// fall back to the wide-open `0.0.0.0` default — that default is exactly
+    /// what this knob exists to let an operator narrow.
+    #[test]
+    fn plain_bind_unparseable_value_errs_naming_var_and_value() {
+        let err = parse_plain_bind_value(Some("127.0.0.q")).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("GATEWAY_PLAIN_BIND"), "message: {msg}");
+        assert!(msg.contains("127.0.0.q"), "message: {msg}");
+    }
+
+    #[test]
+    fn plain_bind_hostname_is_not_an_ip_literal_errs() {
+        // "localhost" is a valid hostname but not an IP literal — parsing it
+        // as an IpAddr must fail rather than silently resolve or default.
+        assert!(parse_plain_bind_value(Some("localhost")).is_err());
     }
 
     /// Named for what it actually checks. An earlier version looped over both
