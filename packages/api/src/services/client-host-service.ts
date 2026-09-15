@@ -18,12 +18,15 @@ import { ServiceError } from "./errors";
  *   `hostId` alone — and reuse its existing `id`/`spiffeUri`. Never falls
  *   through to creating a new row on a lookup miss.
  *
- * IDOR guard: `findFirst({ where: { id: hostId, workspaceId } })` returns
- * nothing for BOTH "no such host" and "that host belongs to a different
- * workspace" — the two cases are handled identically (a `NOT_FOUND` thrown
- * here, not silently falling through to `create`), so a caller probing
- * another tenant's `hostId` cannot distinguish "wrong tenant" from "doesn't
- * exist" and never learns anything about a row it doesn't own.
+ * IDOR guard: `findFirst({ where: { id: hostId, workspaceId, revokedAt: null } })`
+ * returns nothing for "no such host", "that host belongs to a different
+ * workspace", AND "that host is revoked" alike — all three are handled
+ * identically (a `NOT_FOUND` thrown here, not silently falling through to
+ * `create`), so a caller probing another tenant's `hostId` cannot distinguish
+ * "wrong tenant" from "doesn't exist", and a revoked host cannot renew its
+ * certificate by re-presenting its old `hostId` (revocation has no writer yet
+ * — see the schema doc comment — but the read side must already respect it
+ * once one exists).
  *
  * The id is generated client-side (`randomUUID()`, passed explicitly to
  * `create` instead of relying on the schema's `@default(uuid())`)
@@ -44,7 +47,7 @@ export const ensureClientHost = async (
 ): Promise<{ id: string; spiffeUri: string }> => {
   if (hostId) {
     const existing = await db.clientHost.findFirst({
-      where: { id: hostId, workspaceId },
+      where: { id: hostId, workspaceId, revokedAt: null },
       select: { id: true, spiffeUri: true },
     });
     if (!existing) {

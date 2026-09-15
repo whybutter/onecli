@@ -7,10 +7,11 @@ import { proofDatabaseUrl } from "../testing/pg-proof.js";
  * only show up against a real database, not the mocked-Prisma unit tests in
  * `gateway-client-cert.test.ts`:
  *
- * 1. The IDOR fence (`ensureClientHost`'s `where: { id, workspaceId }`)
- *    actually excludes a row scoped to a different workspace, exercised
- *    through the real `@onecli/db` client rather than a hand-rolled mock of
- *    Prisma's `findFirst`.
+ * 1. The IDOR fence (`ensureClientHost`'s
+ *    `where: { id, workspaceId, revokedAt: null }`) actually excludes a row
+ *    scoped to a different workspace — or a revoked one — exercised through
+ *    the real `@onecli/db` client rather than a hand-rolled mock of Prisma's
+ *    `findFirst`.
  * 2. The FK/cascade pg-proof the Phase 4 plan requires: deleting a workspace
  *    removes its `client_hosts` rows via the `ON DELETE CASCADE` on
  *    `client_hosts.workspace_id`, with NO change needed to the api-server's
@@ -34,8 +35,15 @@ const ORG = `${P}org`;
 const WORKSPACE = `${P}ws`;
 const FOREIGN_WORKSPACE = `${P}foreign-ws`;
 
+// `ensureClientHost` mints its own `id` via `randomUUID()` — never prefixed
+// with `P` — so client_hosts rows must be swept by `workspaceId`, not by an
+// `id` prefix (an `id`-prefix filter would silently miss every row this
+// suite creates and leak them across tests, as a workspaceId-scoped count
+// assertion would then intermittently see).
 const reset = async () => {
-  await db.clientHost.deleteMany({ where: { id: { startsWith: P } } });
+  await db.clientHost.deleteMany({
+    where: { workspaceId: { in: [WORKSPACE, FOREIGN_WORKSPACE] } },
+  });
   await db.workspace.deleteMany({ where: { id: { startsWith: P } } });
   await db.organization.deleteMany({ where: { id: { startsWith: P } } });
 };
@@ -67,7 +75,9 @@ afterAll(async () => {
 
 beforeEach(async () => {
   if (!PROOF_URL) return;
-  await db.clientHost.deleteMany({ where: { id: { startsWith: P } } });
+  await db.clientHost.deleteMany({
+    where: { workspaceId: { in: [WORKSPACE, FOREIGN_WORKSPACE] } },
+  });
 });
 
 describe.skipIf(!PROOF_URL)("ClientHost over real PostgreSQL", () => {
@@ -85,6 +95,32 @@ describe.skipIf(!PROOF_URL)("ClientHost over real PostgreSQL", () => {
         undefined,
         undefined,
         foreign.id,
+      ),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("ensureClientHost refuses renewal of a revoked host — same NOT_FOUND as the IDOR case", async () => {
+    const revoked = await clientHostService.ensureClientHost(
+      WORKSPACE,
+      undefined,
+      "revoked-host",
+      undefined,
+    );
+    await db.clientHost.update({
+      where: { id: revoked.id },
+      data: { revokedAt: new Date() },
+    });
+
+    // Same workspace, same hostId — the ONLY thing that changed is
+    // revokedAt. If this ever regressed to plain `{ id, workspaceId }`
+    // (dropping the `revokedAt: null` filter), this call would silently
+    // succeed and re-mint a certificate for a revoked identity.
+    await expect(
+      clientHostService.ensureClientHost(
+        WORKSPACE,
+        undefined,
+        undefined,
+        revoked.id,
       ),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
