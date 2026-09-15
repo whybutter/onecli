@@ -25,7 +25,7 @@ use context::GatewayState;
 /// limit. Checked explicitly in `issue_client_cert` before the body is
 /// parsed, matching the 16KB cap `validations/client-cert.ts` enforces on
 /// the Node side.
-const MAX_CLIENT_CERT_REQUEST_BODY_BYTES: usize = 16 * 1024;
+pub(crate) const MAX_CLIENT_CERT_REQUEST_BODY_BYTES: usize = 16 * 1024;
 
 /// Shared secret the internal gateway<->Node endpoints authenticate with,
 /// presented as the `X-Gateway-Secret` header. Read once, cached in a

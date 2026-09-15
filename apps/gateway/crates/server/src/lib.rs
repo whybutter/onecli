@@ -512,9 +512,21 @@ pub(crate) fn build_router(state: &GatewayState) -> Router {
         // forwards on an agent's behalf. See `client_cert_route`'s module
         // doc for why this is a NEW inbound-direction secret check, not a
         // reuse of `vault::onepassword_api`'s outbound one.
+        //
+        // `DefaultBodyLimit` is scoped to THIS route only (axum's own
+        // default is 2 MiB, buffered before any handler runs) — without it,
+        // an unauthorized caller could still force the gateway to buffer up
+        // to 2 MiB per request before `issue_client_cert`'s own 16 KiB
+        // `MAX_CLIENT_CERT_REQUEST_BODY_BYTES` check ever runs. The
+        // handler's own cap stays too (belt-and-braces, and it's what the
+        // unit tests exercise directly without a real HTTP body).
         .route(
             "/v1/internal/client-cert/issue",
-            axum::routing::post(client_cert_route::issue_client_cert),
+            axum::routing::post(client_cert_route::issue_client_cert).layer(
+                axum::extract::DefaultBodyLimit::max(
+                    client_cert_route::MAX_CLIENT_CERT_REQUEST_BODY_BYTES,
+                ),
+            ),
         )
         // /api legacy routes (backwards compatibility)
         .route(
