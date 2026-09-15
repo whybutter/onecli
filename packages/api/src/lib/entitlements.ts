@@ -2,21 +2,17 @@
  * Enterprise entitlement — the single source of truth for "may this
  * deployment run enterprise features".
  *
- * Self-hosted deployments opt in with `ENTERPRISE_ENABLED=true` (the honor
- * system, backed by the OneCLI Enterprise License in each `ee/` directory).
- * Cloud is always entitled — there, billing plans decide feature access, a
- * separate dial this module never touches. A future signed-license-key
- * validator replaces the body of `isEntitled()` without touching any gate.
+ * This build is always entitled. The `ee/` directories are Apache-licensed
+ * here (v2 migration, principle 3): there is no licence flag, no
+ * `ENTERPRISE_ENABLED`, and every unlicensed arm in the free code collapses
+ * to the licensed one. The feature registry stays because the web's plan
+ * gate and the refusal-message helper still key on it.
  *
  * This module is pure and dependency-free — safe to import from any runtime.
- * ⚠️ Client bundles always see `false` on self-host (`ENTERPRISE_ENABLED` is
- * runtime-only, never a baked `NEXT_PUBLIC_*` var), so client UI must read
- * entitlement from `GET /v1/instance`, never from this module or `CAPS`.
  */
-import { parseEdition, type Edition } from "./edition";
 
 /**
- * The features the OneCLI Enterprise License covers, with the human label the
+ * The features the enterprise licence used to cover, with the human label the
  * locked UI and refusal messages use. Deliberately NOT the same set as the
  * billing `PremiumFeature`s: deny-mode, manual approvals and rate limits are
  * plan-gated on cloud but free on self-host, so they have no key here. The
@@ -45,37 +41,12 @@ export const isEnterpriseFeature = (
 ): value is EnterpriseFeature => value in ENTERPRISE_FEATURES;
 
 /**
- * Whether a deployment is entitled to enterprise features. Pure: cloud is
- * always entitled; self-host requires the explicit opt-in flag.
+ * Kept so suites written against the two-state world still compile. There
+ * is only one state now; the override is accepted and ignored.
  */
-export const parseEntitled = (
-  raw: string | undefined | null,
-  edition: Edition,
-): boolean => {
-  if (edition === "cloud") return true;
-  const value = (raw ?? "").trim().toLowerCase();
-  return value === "true" || value === "1";
-};
+export const initEntitlementForTests: (
+  value: boolean | null,
+) => void = () => {};
 
-/**
- * Test-only override so suites can exercise both entitlement states without
- * mutating `process.env` (house rule). `null` restores the env-derived value.
- */
-let testOverride: boolean | null = null;
-
-export const initEntitlementForTests = (value: boolean | null): void => {
-  testOverride = value;
-};
-
-/**
- * Whether THIS process is entitled, read at call time (long-lived servers pick
- * up the env exactly once per call site, like `policy-flags.ts`). The seam a
- * real license-key validator plugs into later.
- */
-export const isEntitled = (): boolean => {
-  if (testOverride !== null) return testOverride;
-  const { edition } = parseEdition(
-    process.env.EDITION ?? process.env.NEXT_PUBLIC_EDITION,
-  );
-  return parseEntitled(process.env.ENTERPRISE_ENABLED, edition);
-};
+/** Whether THIS process is entitled to enterprise features: always. */
+export const isEntitled = (): boolean => true;
