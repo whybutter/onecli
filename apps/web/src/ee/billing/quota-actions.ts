@@ -1,6 +1,6 @@
 "use server";
 
-import { getPlanUsage } from "@/ee/billing/api-request-actions";
+import { resolveOrgContext } from "@/lib/actions/resolve-user";
 
 export interface ResourceQuota {
   current: number;
@@ -10,18 +10,29 @@ export interface ResourceQuota {
   organizationId: string;
 }
 
-export const getResourceQuota = async (
+/**
+ * There is no quota service in this build (Decision 2 of the v2 migration
+ * plan: no cap on organizations, and plan-based resource caps went with
+ * billing). Always reports "unlimited, not at limit" so the free create
+ * buttons (agents, secrets, invites) never block. `organizationId` is best-
+ * effort — the callers only read it to build a "manage plan" link, which is
+ * itself dead code once `atLimit` is always false.
+ */
+export const getResourceQuota: (
   resourceName: string,
-): Promise<ResourceQuota> => {
-  const usage = await getPlanUsage();
-  const resource = usage.resources.find((r) => r.name === resourceName);
+) => Promise<ResourceQuota> = async () => {
+  let organizationId = "";
+  try {
+    ({ organizationId } = await resolveOrgContext());
+  } catch {
+    // No org context yet (e.g. called before bootstrap) — quota is still
+    // reported as unlimited, so callers proceed regardless.
+  }
   return {
-    current: resource?.current ?? 0,
-    limit: resource?.limit ?? Infinity,
-    plan: usage.plan,
-    atLimit: resource
-      ? resource.limit !== Infinity && resource.current >= resource.limit
-      : false,
-    organizationId: usage.organizationId,
+    current: 0,
+    limit: Number.POSITIVE_INFINITY,
+    plan: "enterprise",
+    atLimit: false,
+    organizationId,
   };
 };

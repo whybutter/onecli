@@ -1,18 +1,19 @@
-import { PageHeader } from "@dashboard/page-header";
-import { OrgSsoCard } from "./_components/org-sso-card";
-import { RequireSsoCard } from "./_components/require-sso-card";
-import { ScimCard } from "./_components/scim-card";
+import { ComingSoonCard } from "@/lib/components/coming-soon-card";
+import { requireOrgAdmin } from "@/lib/auth/require-org-admin";
 
-export default function OrgSsoPage() {
+/**
+ * SSO/SCIM (Cognito-shaped SAML/OIDC connections) is permanently dropped in
+ * this build — this fork uses Google login + email/password instead. Kept
+ * as a placeholder page rather than removing the route outright, since the
+ * settings sub-nav still links here; a later cleanup may drop the nav entry
+ * and this route together.
+ */
+export default async function OrgSsoPage() {
+  await requireOrgAdmin();
   return (
-    <div className="flex flex-1 flex-col gap-4">
-      <PageHeader
-        title="Single sign-on"
-        description="Connect your identity provider so your team signs in with their company accounts."
-      />
-      <OrgSsoCard />
-      <RequireSsoCard />
-      <ScimCard />
-    </div>
+    <ComingSoonCard
+      title="Single sign-on"
+      description="This build authenticates with Google and email/password. SAML/OIDC single sign-on is not part of this build."
+    />
   );
 }

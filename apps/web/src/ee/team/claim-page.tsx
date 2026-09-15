@@ -1,48 +1,20 @@
-import { redirect } from "next/navigation";
-import { findPendingProvisionByToken } from "@onecli/api/ee/services/user-provision-service";
-import { getServerSession } from "@/lib/auth/server";
-import { ClaimForm } from "./_components/claim-form";
-import { ClaimSignIn } from "./_components/claim-sign-in";
+import { ComingSoonCard } from "@/lib/components/coming-soon-card";
 
 /**
- * Redeeming a provision claim link (pre-2.0 feature, API-minted on 2.0).
- *
- * Deliberately link-only: nothing in the dashboard points here — the page
- * exists so the claim URLs handed out by POST /v1/team/provisions keep
- * working. The provision is resolved from the token server-side (the /join
- * posture), so a crafted URL cannot dress up a foreign organization's name.
- *
- * Someone signed out is sent to sign IN (not up): on cloud, Cognito owns
- * sign-up inside its own login screen; on a self-hosted deployment the login
- * screen links to signup, so a claimer without an account creates one there
- * and the stashed claim marker survives either path.
+ * Phase 0 stand-in for the claim/provisioning flow. Member provisioning and
+ * claim links are permanently dropped (this fork uses invitations + Google
+ * login instead — see the v2 migration plan), so this renders a plain
+ * placeholder rather than resolving a claim token. Keeps the same signature
+ * as the real page (`{ searchParams }`) so `app/claim/page.tsx` needs no
+ * changes beyond dropping its dead entitlement branch.
  */
-export default async function ClaimPage({
-  searchParams,
-}: {
+export default async function ClaimPage({}: {
   searchParams: Promise<{ token?: string | string[] }>;
 }) {
-  const session = await getServerSession();
-  const params = await searchParams;
-  // A repeated ?token= param arrives as an array at runtime — treat anything
-  // but a single string as absent rather than handing Prisma an array.
-  const token = typeof params.token === "string" ? params.token : undefined;
-
-  if (!token) {
-    redirect(session ? "/" : "/auth/login");
-  }
-
-  const provision = await findPendingProvisionByToken(token);
-  if (provision) {
-    if (!session) {
-      return <ClaimSignIn callbackUrl={`/claim?token=${token}`} />;
-    }
-    return <ClaimForm token={token} orgName={provision.organizationName} />;
-  }
-
-  // Expired, cancelled, already claimed, or simply not a real token — the
-  // join page's breadcrumb posture rather than a bare silent redirect.
-  redirect(
-    session ? "/?error=claim_invalid" : "/auth/login?error=claim_invalid",
+  return (
+    <ComingSoonCard
+      title="Claim link"
+      description="Pre-provisioned invitations are not part of this build. Ask an organization admin to send you an invite instead."
+    />
   );
 }

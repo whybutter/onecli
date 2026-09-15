@@ -1,13 +1,6 @@
-"use client";
-
-import { AgentsQuotaWarning } from "./agents-quota-warning";
-import { IntegrationCallsWarning } from "./integration-calls-warning";
-
-export const SidebarQuota = () => {
-  return (
-    <>
-      <AgentsQuotaWarning />
-      <IntegrationCallsWarning />
-    </>
-  );
-};
+/**
+ * Billing is dropped in this build — always rendered behind `CAPS.billing`
+ * (permanently false here), so this is dead code kept only so
+ * `dashboard-sidebar.tsx` compiles unchanged.
+ */
+export const SidebarQuota = () => null;

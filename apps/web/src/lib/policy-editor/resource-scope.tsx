@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { granularAccessConfigs } from "@/lib/granular-access";
 import { IS_CLOUD } from "@/lib/env";
-import type { ResourceScopeFieldsProps } from "@/ee/policy-editor/_components/resource-scope-fields";
+import type { ResourceScopeFieldsProps } from "@/lib/policy-editor/resource-scope-types";
 
 export type { ResourceScopeFieldsProps };
 
