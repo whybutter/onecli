@@ -40,6 +40,12 @@ export const useOrg = () =>
  * write, replacing the fork's old direct-`db.organization.update` server
  * action pattern with the real HTTP route Phase 2 shipped. Owner-only
  * server-side; a non-owner's attempt surfaces as this hook's error toast.
+ *
+ * Also invalidates `queryKeys.org.list()` — the org switcher / account menu's
+ * own query (`lib/dashboard/use-active-org.ts`) — so a rename shows up there
+ * without a manual reload; that query reads the renamed org's facts via a
+ * separate server action (`getUserOrganizations`), not this hook's own
+ * `GET /v1/org` response, so a `setQueryData` here can't reach it.
  */
 export const useUpdateOrg = () => {
   const qc = useQueryClient();
@@ -47,6 +53,7 @@ export const useUpdateOrg = () => {
     mutationFn: (input: { name: string }) => org.update(input),
     onSuccess: (data) => {
       qc.setQueryData(queryKeys.org.all(), data);
+      qc.invalidateQueries({ queryKey: queryKeys.org.list() });
     },
     onError: (err) => toast.error(err.message),
   });
