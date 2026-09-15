@@ -23,7 +23,6 @@ import { eePlatformLlm } from "./ee/services/platform-llm";
 import { onpremNewWorkspacePolicySeeder } from "./services/policy-onprem-seeder";
 import { pgAttachmentBlobStore } from "./services/attachments/pg-blob-store";
 import { setDefaultAttachmentStore } from "./providers/attachment-store";
-import { isEntitled } from "./lib/entitlements";
 import { setDefaultCrypto } from "./providers/crypto";
 import { kmsSshCa } from "./ee/ssh/kms-ssh-ca";
 import { setDefaultSshCa } from "./providers/ssh-ca";
@@ -168,24 +167,21 @@ export const ensureEditionDefaults = (): void => {
     // the client graph (it rides policy-service → the DB client).
     setDefaultNewOrgPolicySeeder(onpremNewWorkspacePolicySeeder);
 
-    // A LICENSED self-host gets role enforcement (#66): CAPS.rbac flips on
-    // via the entitlement, and the role reads come from the same DB-backed
-    // resolver cloud uses. `initRoleResolver`, not `setDefaultRoleResolver`:
-    // the "cloud default" arm of a slot is invisible to the onprem getter, so
-    // the injection must ride the override arm here. Unlicensed keeps the
-    // null resolver — the flat-team behavior role checks fall back to.
-    if (isEntitled()) {
-      initRoleResolver({ getUserRole });
-      // The workspace-access checker rides the same override arm: the shared
-      // predicates delegate to the licensed admin-or-binding resolution the
-      // moment CAPS.rbac flips on, in lockstep with the resolver.
-      initWorkspaceAccessChecker(eeWorkspaceAccessChecker);
-      // Same reasoning for the team hooks: a licensed self-host reconciles
-      // invited roles against directory group mappings. Its seat-cap half is
-      // inert here — quotas are a billing concept and this edition has none —
-      // so injecting the pair together costs nothing.
-      initTeamHooks(eeTeamHooks);
-    }
+    // Every self-host gets role enforcement (#66): CAPS.rbac is on, and the
+    // role reads come from the same DB-backed resolver cloud uses.
+    // `initRoleResolver`, not `setDefaultRoleResolver`: the "cloud default"
+    // arm of a slot is invisible to the onprem getter, so the injection must
+    // ride the override arm here.
+    initRoleResolver({ getUserRole });
+    // The workspace-access checker rides the same override arm: the shared
+    // predicates delegate to the admin-or-binding resolution in lockstep
+    // with the resolver — deleting either injection reproduces the outage
+    // where an owner is bounced off every workspace.
+    initWorkspaceAccessChecker(eeWorkspaceAccessChecker);
+    // Same arm for the team hooks (invite-time and join-time interventions);
+    // the pair is a no-op today and becomes group→role reconciliation when
+    // groups land.
+    initTeamHooks(eeTeamHooks);
   }
 
   markEditionDefaultsApplied();
