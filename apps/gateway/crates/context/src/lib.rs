@@ -66,6 +66,11 @@ pub struct GatewayState {
     /// internal CSR-issuance endpoint 503s. `Some` when the gateway generated
     /// or was handed its own client CA (see `onecli-gateway`'s `main`).
     pub client_ca: Option<Arc<client_ca::ClientCa>>,
+    /// Cert-identity ↔ agent-token tenant binding enforcement posture, read
+    /// once at startup from `GATEWAY_BINDING_ENFORCEMENT`
+    /// (`binding::BindingMode::from_env`). Consulted by `server`'s
+    /// `enforce_binding`.
+    pub binding_mode: binding::BindingMode,
 }
 
 /// Resolves CONNECT policy by querying the database directly via SQLx
