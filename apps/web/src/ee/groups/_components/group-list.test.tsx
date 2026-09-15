@@ -6,10 +6,11 @@ import type { GroupRow } from "@/lib/api/types";
 
 // ── GroupList — loading / empty / populated / create / rename / delete ─────
 //
-// No plan gate, no SCIM copy branch reachable today (source is always
-// "manual"), but `source` must still be read defensively — this suite pins
-// the manual-row actions (rename/delete via kebab, manage members) and
-// leaves the "scim" branch to `group-members-dialog`'s own readOnly tests.
+// No plan gate, no SCIM copy or IdP-managed-row branch (dead code: nothing
+// mints a "scim" group in this fork, and there's no SCIM sync). Rows always
+// get the full rename/delete/manage-members treatment; `group-members-dialog`
+// still reads `source` defensively for the (currently unreachable) case a
+// group ever does arrive read-only.
 
 const state = vi.hoisted(() => ({
   groups: undefined as GroupRow[] | undefined,

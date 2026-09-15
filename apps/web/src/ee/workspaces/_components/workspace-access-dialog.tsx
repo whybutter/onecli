@@ -37,6 +37,9 @@ export interface WorkspaceAccessDialogProps {
 
 type Role = "owner" | "member";
 
+const isRole = (value: string): value is Role =>
+  value === "owner" || value === "member";
+
 const setsEqual = (a: Set<string>, b: Set<string>): boolean =>
   a.size === b.size && [...a].every((v) => b.has(v));
 
@@ -277,9 +280,9 @@ export const WorkspaceAccessDialog = ({
                             {checked && (
                               <Select
                                 value={roles.get(m.userId) ?? "member"}
-                                onValueChange={(v) =>
-                                  setRole(m.userId, v as Role)
-                                }
+                                onValueChange={(v) => {
+                                  if (isRole(v)) setRole(m.userId, v);
+                                }}
                               >
                                 <SelectTrigger
                                   className="h-8 w-28 border-none shadow-none"

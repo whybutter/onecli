@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@onecli/ui/components/card";
@@ -24,6 +25,7 @@ export const OrgDetailsForm = ({
   const [name, setName] = useState(orgName);
   const { copied, copy } = useCopyToClipboard();
   const updateOrg = useUpdateOrg();
+  const router = useRouter();
 
   const isDirty = name.trim() !== orgName;
 
@@ -31,7 +33,16 @@ export const OrgDetailsForm = ({
     if (!isDirty || updateOrg.isPending) return;
     updateOrg.mutate(
       { name: name.trim() },
-      { onSuccess: () => toast.success("Organization updated") },
+      {
+        onSuccess: () => {
+          toast.success("Organization updated");
+          // The org switcher / account menu read the renamed org via a
+          // separate server action (`getUserOrganizations`), not this
+          // mutation's response — refresh so server-rendered chrome (and
+          // this action's own next call) reflects the new name too.
+          router.refresh();
+        },
+      },
     );
   };
 

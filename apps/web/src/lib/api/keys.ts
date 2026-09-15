@@ -102,6 +102,12 @@ export const queryKeys = {
     // a route matching NEITHER regex would key to ["org","default","default"]
     // and must not trust that entry across org switches.
     all: () => ["org", ...scope()] as const,
+    // The org switcher's own read (`getUserOrganizations` +
+    // `getActiveOrganizationId`, server actions in `lib/workspaces/actions.ts`,
+    // not the `GET /v1/org` fetch `all()` backs) — its own key under the
+    // `org` namespace so a rename/switch invalidation reaches the switcher
+    // without also invalidating (or being invalidated by) the `all()` read.
+    list: () => [...queryKeys.org.all(), "list"] as const,
   },
   orgMembers: {
     all: () => ["org-members", ...scope()] as const,

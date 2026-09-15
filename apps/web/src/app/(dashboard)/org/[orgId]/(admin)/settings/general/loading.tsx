@@ -5,9 +5,12 @@ import { PageHeader } from "@dashboard/page-header";
 export default function OrgGeneralLoading() {
   return (
     <div className="flex flex-1 flex-col gap-8">
+      {/* Neutral description: the real page's copy branches on owner vs.
+          admin, and a hardcoded owner-only line here would flash-then-swap
+          for an admin once the real page loads. */}
       <PageHeader
         title="Organization"
-        description="Rename or delete your organization."
+        description="View your organization details."
       />
       <div className="flex flex-col gap-2">
         <Skeleton className="h-5 w-40" />

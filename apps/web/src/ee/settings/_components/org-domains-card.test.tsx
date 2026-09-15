@@ -11,6 +11,7 @@ import type { OrgDomain } from "@/lib/api/types";
 const state = vi.hoisted(() => ({
   domains: undefined as OrgDomain[] | undefined,
   isPending: false,
+  deletePending: false,
 }));
 
 const createMutate = vi.fn();
@@ -25,7 +26,10 @@ vi.mock("@/hooks/use-domains", () => ({
     isPending: false,
     variables: undefined,
   }),
-  useDeleteDomain: () => ({ mutate: deleteMutate, isPending: false }),
+  useDeleteDomain: () => ({
+    mutate: deleteMutate,
+    isPending: state.deletePending,
+  }),
 }));
 
 import { OrgDomainsCard } from "./org-domains-card";
@@ -48,6 +52,7 @@ const VERIFIED_DOMAIN: OrgDomain = {
 beforeEach(() => {
   state.domains = undefined;
   state.isPending = false;
+  state.deletePending = false;
   createMutate.mockReset();
   verifyMutate.mockReset();
   deleteMutate.mockReset();
@@ -125,5 +130,18 @@ describe("org domains card", () => {
         expect.objectContaining({ onSuccess: expect.any(Function) }),
       );
     });
+  });
+
+  it("shows a spinner and disables both actions while removing", async () => {
+    state.domains = [VERIFIED_DOMAIN];
+    state.deletePending = true;
+    const user = userEvent.setup();
+    render(<OrgDomainsCard />);
+    await user.click(
+      screen.getByRole("button", { name: "Remove verified.test" }),
+    );
+
+    expect(screen.getByRole("button", { name: "Removing..." })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
   });
 });

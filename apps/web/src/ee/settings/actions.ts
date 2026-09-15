@@ -3,8 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { db } from "@onecli/db";
 import { getServerSession } from "@/lib/auth/server";
-import { ServiceError } from "@onecli/api/services/errors";
-import { activeMembershipWhere } from "@onecli/api/services/organization-service";
+import {
+  activeMembershipWhere,
+  validateOrgName,
+} from "@onecli/api/services/organization-service";
+import {
+  withAudit,
+  AUDIT_ACTIONS,
+  AUDIT_SERVICES,
+} from "@onecli/api/services/audit-service";
 import {
   getUserRole,
   type OrgRole,
@@ -73,18 +80,21 @@ export const getOrganizationData = async (): Promise<OrgData | null> => {
 };
 
 /**
- * Delete the organization outright. `deleteOrganization` enforces
- * owner-only and cascades every workspace; not audited here (the service
- * logs it, and the org's own audit rows are deleted with it — matching
- * upstream's "not audited" note, since auditing a row that is about to be
- * deleted serves no reader). Redirects the caller to their oldest remaining
- * organization, or to `/create-org` if this was their last one.
+ * Delete the CALLER'S OWN organization outright — resolved server-side from
+ * `resolveOrgContext()`, never taken from the client, so a crafted call
+ * can't target an organization the caller merely used to belong to.
+ * `deleteOrganization` enforces owner-only and cascades every workspace;
+ * not audited here (the service logs it, and the org's own audit rows are
+ * deleted with it — matching upstream's "not audited" note, since auditing
+ * a row that is about to be deleted serves no reader). Redirects the caller
+ * to their oldest remaining organization, or to `/create-org` if this was
+ * their last one.
  */
-export const deleteOrganizationAction = async (
-  organizationId: string,
-): Promise<ActionResult<{ redirectTo: string }>> =>
+export const deleteOrganizationAction = async (): Promise<
+  ActionResult<{ redirectTo: string }>
+> =>
   safeAction(async () => {
-    const { userId } = await resolveOrgContext();
+    const { userId, organizationId } = await resolveOrgContext();
     await deleteOrganization(organizationId, userId);
 
     const nextMembership = await db.organizationMember.findFirst({
@@ -125,20 +135,29 @@ export const createOrganizationAction = async (
     });
     if (!user) throw new Error("User not found");
 
-    const trimmed = name.trim();
-    if (!trimmed) {
-      throw new ServiceError("BAD_REQUEST", "Name is required");
-    }
+    // Server-side validation (1-255 chars, trimmed) — the create-org form's
+    // `maxLength` is a UX nicety, not the actual guard.
+    const trimmed = validateOrgName(name);
 
-    const { workspace } = await createOrganization(
-      user.id,
-      user.email,
-      trimmed,
+    const { workspace, organization } = await withAudit(
+      () => createOrganization(user.id, user.email, trimmed),
+      (created) => ({
+        organizationId: created.organization.id,
+        userId: user.id,
+        userEmail: user.email,
+        action: AUDIT_ACTIONS.CREATE,
+        service: AUDIT_SERVICES.ORGANIZATION,
+        metadata: {
+          organizationId: created.organization.id,
+          workspaceId: created.workspace.id,
+          name: trimmed,
+        },
+      }),
     );
     await db.user.update({
       where: { id: user.id },
       data: { onboardingCompletedAt: new Date() },
     });
-    await setDefaultOrgCookie(workspace.organizationId);
+    await setDefaultOrgCookie(organization.id);
     return { redirectTo: `/w/${workspace.id}/overview` };
   });

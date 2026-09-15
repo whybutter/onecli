@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Globe, Trash2 } from "lucide-react";
+import { Globe, Loader2, Trash2 } from "lucide-react";
 import { Card } from "@onecli/ui/components/card";
 import { Button } from "@onecli/ui/components/button";
 import { Input } from "@onecli/ui/components/input";
@@ -146,7 +146,9 @@ export const OrgDomainsCard = () => {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteDomain.isPending}>
+              Cancel
+            </AlertDialogCancel>
             <AlertDialogAction
               onClick={(e) => {
                 e.preventDefault();
@@ -155,9 +157,17 @@ export const OrgDomainsCard = () => {
                   onSuccess: () => setRemoveTarget(null),
                 });
               }}
+              disabled={deleteDomain.isPending}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Remove
+              {deleteDomain.isPending ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Removing...
+                </>
+              ) : (
+                "Remove"
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
