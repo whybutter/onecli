@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@onecli/ui/components/card";
 import { Button } from "@onecli/ui/components/button";
@@ -67,7 +68,9 @@ export const DeleteOrgCard = ({
   const handleDelete = () => {
     if (!canConfirm) return;
     startTransition(async () => {
-      const result = await deleteOrganizationAction(orgId);
+      // The organization to delete is resolved server-side from the
+      // caller's own org context, never taken from this client argument.
+      const result = await deleteOrganizationAction();
       if (!result.ok) {
         toast.error(result.error);
         return;
@@ -158,9 +161,14 @@ export const DeleteOrgCard = ({
               disabled={!canConfirm}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {pending
-                ? "Deleting..."
-                : "I understand, delete this organization"}
+              {pending ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                "I understand, delete this organization"
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

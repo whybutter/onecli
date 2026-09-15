@@ -109,11 +109,45 @@ describe("delete org card", () => {
     );
 
     await waitFor(() => {
-      expect(deleteOrganizationAction).toHaveBeenCalledWith("org-1");
+      // The org to delete is resolved server-side, not taken from the client.
+      expect(deleteOrganizationAction).toHaveBeenCalledWith();
     });
     await waitFor(() => {
       expect(push).toHaveBeenCalledWith("/org/org-2/workspaces");
     });
+  });
+
+  it("shows a spinner and disables the confirm button while pending", async () => {
+    let resolveAction: (value: {
+      ok: true;
+      data: { redirectTo: string };
+    }) => void;
+    deleteOrganizationAction.mockReturnValue(
+      new Promise((resolve) => {
+        resolveAction = resolve;
+      }),
+    );
+    const user = await openDialog();
+    for (const checkbox of screen.getAllByRole("checkbox")) {
+      await user.click(checkbox);
+    }
+    await user.type(
+      screen.getByPlaceholderText("Enter the organization ID"),
+      "org-1",
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "I understand, delete this organization",
+      }),
+    );
+
+    const pendingButton = await screen.findByRole("button", {
+      name: "Deleting...",
+    });
+    expect(pendingButton).toBeDisabled();
+
+    resolveAction!({ ok: true, data: { redirectTo: "/org/org-2/workspaces" } });
+    await waitFor(() => expect(push).toHaveBeenCalled());
   });
 
   it("toasts the server error and stays open on failure", async () => {
