@@ -990,8 +990,10 @@ dependencies = [
  "reqwest",
  "ring",
  "sqlx",
+ "tokio",
  "tokio-rustls 0.26.4",
  "tracing",
+ "uuid",
  "vault",
 ]
 

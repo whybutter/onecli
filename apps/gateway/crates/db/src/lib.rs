@@ -176,6 +176,56 @@ pub async fn find_org_api_key(pool: &PgPool, key: &str) -> Result<Option<OrgApiK
     .context("querying org api_keys by key")
 }
 
+/// How stale `api_keys.last_used_at` may get before a gateway authentication
+/// writes it forward.
+///
+/// MUST move together with `API_KEY_LAST_USED_THROTTLE_MS` in
+/// `packages/api/src/services/api-key-service.ts` — the API and the gateway
+/// are two independent writers of the same column, and nothing but this
+/// comment ties the two values together.
+const LAST_USED_THROTTLE_MINUTES: i32 = 15;
+
+/// Stamp `api_keys.last_used_at = now()` for a key (`oc_...` or `oc_org_...`)
+/// that just authenticated SUCCESSFULLY at the gateway.
+///
+/// Callers MUST invoke this only after every recheck has passed — liveness
+/// (the user is still an active org member) and, where enforced, the role
+/// recheck (org-key admin, workspace-key access binding) — never merely after
+/// the row lookup. A revoked or demoted key must read as unused, not "used
+/// just now by an attacker who no longer has access."
+///
+/// Throttled (`LAST_USED_THROTTLE_MINUTES`, kept in lockstep with the API's
+/// `API_KEY_LAST_USED_THROTTLE_MS`) and pinned by the key VALUE, not the row
+/// id: `regenerateApiKey` swaps in a new secret and clears `last_used_at` on
+/// the SAME row, so without the `key = $1` predicate a request that
+/// authenticated with the OLD secret moments earlier could land after
+/// rotation, match the `IS NULL` arm precisely because rotation just cleared
+/// it, and stamp the brand-new secret as used.
+///
+/// One statement, no read-then-write: the `WHERE` repeats the staleness test,
+/// so a burst of concurrent requests within the same stale window issues N
+/// statements but at most one of them matches a row.
+///
+/// Never propagate a failure here into the request that authenticated —
+/// usage telemetry must not be able to turn a request that authenticates
+/// today into one that fails tomorrow. Callers log at debug/warn on `Err` and
+/// otherwise ignore the result.
+pub async fn stamp_api_key_last_used(pool: &PgPool, key: &str) -> Result<()> {
+    sqlx::query(
+        r#"UPDATE api_keys
+              SET last_used_at = NOW()
+            WHERE key = $1
+              AND (last_used_at IS NULL
+                   OR last_used_at < NOW() - make_interval(mins => $2))"#,
+    )
+    .bind(key)
+    .bind(LAST_USED_THROTTLE_MINUTES)
+    .execute(pool)
+    .await
+    .context("stamping api_keys.last_used_at")?;
+    Ok(())
+}
+
 /// Verify that a workspace belongs to the given organization.
 pub async fn verify_workspace_in_org(
     pool: &PgPool,
