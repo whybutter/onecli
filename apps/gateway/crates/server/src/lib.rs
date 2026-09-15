@@ -241,6 +241,23 @@ fn parse_plain_bind() -> Result<IpAddr> {
     parse_plain_bind_value(std::env::var("GATEWAY_PLAIN_BIND").ok().as_deref())
 }
 
+/// Whether the plaintext listener's bind address defeats mTLS client-cert
+/// authentication: true when mTLS is configured AND `plain_bind` is anything
+/// OTHER than loopback. The plaintext listener has no client-certificate
+/// check at all, so if it's reachable from wherever an mTLS-authenticated
+/// caller would connect from, mTLS buys nothing — an attacker just uses the
+/// plaintext port instead. Loopback (`127.0.0.0/8` / `::1`, via
+/// `IpAddr::is_loopback`) is the only address this crate can prove is
+/// host-local from the bind address alone; anything else — including the
+/// wildcard `0.0.0.0`/`::` AND a specific-looking but still off-host-reachable
+/// address (a pod/cluster IP) — must warn, for the same reason
+/// [`plain_bind_bypasses_binding_enforcement`] does below. No env access, so
+/// this is directly unit-testable — `main` calls it with `mtls.is_some()` and
+/// `server.plain_bind()`.
+pub fn mtls_bypasses_plain_listener(mtls_configured: bool, plain_bind: IpAddr) -> bool {
+    mtls_configured && !plain_bind.is_loopback()
+}
+
 /// Whether the plaintext listener's bind address defeats cert↔token binding
 /// enforcement: true when `binding_mode` is `Enforce` AND `plain_bind` is
 /// anything OTHER than loopback. `enforce_binding` exempts the plain listener
@@ -1489,6 +1506,25 @@ mod tests {
         // "localhost" is a valid hostname but not an IP literal — parsing it
         // as an IpAddr must fail rather than silently resolve or default.
         assert!(parse_plain_bind_value(Some("localhost")).is_err());
+    }
+
+    // ── mtls_bypasses_plain_listener ──────────────────────────────────────
+
+    #[test]
+    fn mtls_bypass_warns_only_when_configured_and_non_loopback() {
+        let unspecified = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+        let loopback = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        // A specific-looking but still off-host-reachable address (a
+        // pod/cluster IP) is just as much a bypass as the wildcard.
+        let specific_non_loopback = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5));
+
+        assert!(mtls_bypasses_plain_listener(true, unspecified));
+        assert!(mtls_bypasses_plain_listener(true, specific_non_loopback));
+        assert!(!mtls_bypasses_plain_listener(true, loopback));
+        // mTLS not configured never warns, regardless of bind address —
+        // there's no client-cert posture for the plaintext listener to defeat.
+        assert!(!mtls_bypasses_plain_listener(false, unspecified));
+        assert!(!mtls_bypasses_plain_listener(false, specific_non_loopback));
     }
 
     // ── plain_bind_bypasses_binding_enforcement ──────────────────────────

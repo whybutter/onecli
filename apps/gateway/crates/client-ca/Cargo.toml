@@ -23,3 +23,12 @@ x509-parser = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[features]
+# Compiles `test_support` (the loopback-handshake PKI harness) into a build
+# that isn't itself a `cargo test` of this crate — for `relay`/`server`,
+# which dev-depend on this crate with the feature enabled so their OWN test
+# binaries can reuse the harness instead of duplicating it. Never enabled by
+# a production build: `cargo build --workspace` never turns this on, and
+# `[dependencies]` (not `[dev-dependencies]`) never lists it either.
+test-support = []

@@ -236,8 +236,9 @@ async fn main() -> Result<()> {
         .is_some_and(|v| !v.trim().is_empty());
     let client_ca: Option<Arc<client_ca::ClientCa>> = if operator_configured_client_ca {
         info!(
-            "GATEWAY_CLIENT_CA is set — client-certificate minting stays unavailable (the \
-             internal endpoint 503s); the trust anchor is externally managed"
+            "GATEWAY_CLIENT_CA is set — GATEWAY_CLIENT_CA_KEY/GATEWAY_CLIENT_CA_CERT (if set) \
+             are ignored, and client-certificate minting stays unavailable (POST \
+             /v1/internal/client-cert/issue 503s); the trust anchor is externally managed"
         );
         None
     } else {
@@ -355,20 +356,24 @@ async fn main() -> Result<()> {
     )?;
 
     // The plaintext listener has no client-certificate check at all — if
-    // mTLS is configured but this is still 0.0.0.0, anyone who can reach the
-    // plaintext port bypasses certificate authentication entirely. Evaluated
-    // here (not inside `GatewayServer::new`) because `mtls.is_some()` is the
-    // real "is the mTLS listener configured" signal; `client_ca` above only
-    // tracks whether *this process* holds the minting authority, which is
-    // `None` even with mTLS configured when an operator supplies an external
+    // mTLS is configured but this isn't loopback, anyone who can reach the
+    // plaintext port bypasses certificate authentication entirely. Not just
+    // the literal wildcard address: a specific-looking but still
+    // off-host-reachable address (a pod/cluster IP) is just as much a bypass
+    // (see `mtls_bypasses_plain_listener`'s doc comment). Evaluated here (not
+    // inside `GatewayServer::new`) because `mtls.is_some()` is the real "is
+    // the mTLS listener configured" signal; `client_ca` above only tracks
+    // whether *this process* holds the minting authority, which is `None`
+    // even with mTLS configured when an operator supplies an external
     // `GATEWAY_CLIENT_CA`.
-    if mtls.is_some() && server.plain_bind().is_unspecified() {
+    if server::mtls_bypasses_plain_listener(mtls.is_some(), server.plain_bind()) {
         warn!(
-            "GATEWAY_MTLS_PORT is set but the plaintext listener is still bound to \
-             0.0.0.0 — anyone who can reach that port bypasses certificate \
-             authentication entirely. Set GATEWAY_PLAIN_BIND=127.0.0.1 to restrict it, \
-             but note that loopback also breaks Docker-published browser -> gateway \
-             vault/approval/cache calls, which arrive on the plaintext listener."
+            plain_bind = %server.plain_bind(),
+            "GATEWAY_MTLS_PORT is set but the plaintext listener is not bound to loopback \
+             — anyone who can reach that port bypasses certificate authentication entirely. \
+             Set GATEWAY_PLAIN_BIND=127.0.0.1 to restrict it, but note that loopback also \
+             breaks Docker-published browser -> gateway vault/approval/cache calls, which \
+             arrive on the plaintext listener."
         );
     }
 
