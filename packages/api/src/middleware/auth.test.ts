@@ -8,27 +8,10 @@ import type { ApiEnv } from "../types";
 // redirect — still resolve the right workspace. The regression these guard: with
 // local auth the session is ambient (no _token JWT), so before the fix the
 // _workspace param was ignored and the authorize fell back to the user's default
-// workspace. Pin to oss so header-less requests fall back to the default workspace
-// (CAPS.tenancy is org-per-user) and CAPS.rbac is off.
+// workspace. Pin to oss so header-less requests fall back to the default
+// workspace (CAPS.tenancy is org-per-user).
 vi.hoisted(() => {
   process.env.NEXT_PUBLIC_EDITION = "onprem";
-});
-
-// The role gate branches on CAPS.rbac (flat team vs enforced roles). CAPS is
-// captured at lib/env load, so the tests flip it through a mutable getter.
-const caps = vi.hoisted(() => ({ rbac: false }));
-
-vi.mock("../lib/env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/env")>();
-  return {
-    ...actual,
-    CAPS: {
-      ...actual.CAPS,
-      get rbac() {
-        return caps.rbac;
-      },
-    },
-  };
 });
 
 const USER = "user-1";
@@ -38,7 +21,7 @@ const DEFAULT_WORKSPACE = "proj-default";
 
 // Togglable membership: the role-gate tests plant a NON-member to prove the
 // membership fence (org/workspace resolution), not the role comparison, is
-// what keeps outsiders off flat-team deployments.
+// what keeps outsiders off before the role gate even runs.
 const membership = vi.hoisted(() => ({ active: true }));
 
 vi.mock("@onecli/db", () => ({
@@ -80,6 +63,7 @@ import { auth } from "./auth";
 import { initSession } from "../providers/session";
 import { initSessionEnforcer } from "../providers/session-enforcer";
 import { initRoleResolver } from "../providers/role-resolver";
+import { initWorkspaceAccessChecker } from "../providers/access-checker";
 
 const makeApp = () => {
   const app = new Hono<ApiEnv>();
@@ -89,7 +73,20 @@ const makeApp = () => {
   return app;
 };
 
+// A header-named workspace (as opposed to the createdByUserId-fallback
+// default) is access-checked (`canAccessWorkspaceAsUser`, RBAC is enforced in
+// every edition of this build; see CLAUDE.md). This suite is about the
+// query-param → header bridge, not access control, so it wires a permissive
+// checker rather than modeling the real admin-or-binding resolution.
+const ALLOW_ALL = {
+  canAccessWorkspaceAsUser: async () => true,
+  userIsOrgAdmin: async () => true,
+};
+
 describe("auth middleware — scope query-param bridge", () => {
+  beforeEach(() => initWorkspaceAccessChecker(ALLOW_ALL));
+  afterEach(() => initWorkspaceAccessChecker(null));
+
   describe("ambient session (OSS local auth, no _token)", () => {
     // Mirrors the local-auth session provider: authenticated regardless of the
     // request (it reads the ambient Next.js session, not the passed request).
@@ -218,16 +215,13 @@ describe("auth middleware — role gate", () => {
 
   afterEach(() => {
     initRoleResolver(null);
-    caps.rbac = false;
     membership.active = true;
   });
 
-  it("flat team: a caller with NO active membership never reaches the gate", async () => {
-    // The planted negative control for the flat-team arm: skipping the role
-    // comparison must never admit an outsider, because org resolution itself
-    // (the active-membership fences in resolve.ts) refuses them first — with
+  it("a caller with NO active membership never reaches the role comparison", async () => {
+    // Org resolution itself (the active-membership fences in resolve.ts)
+    // refuses an outsider before the role gate ever runs a comparison — with
     // or without an explicit x-organization-id.
-    caps.rbac = false;
     membership.active = false;
 
     const headerless = await makeAdminApp().request("/admin");
@@ -239,45 +233,26 @@ describe("auth middleware — role gate", () => {
     expect(withHeader.status).toBe(401);
   });
 
-  it("flat team: an ORG KEY whose holder left the org is re-fenced at the gate", async () => {
-    // API-key principals carry their org from the KEY row, not from a
-    // membership-fenced resolution — the role gate's flat-team arm must
-    // verify active membership itself or a departed holder's key keeps
-    // exercising admin surfaces.
-    caps.rbac = false;
-    membership.active = false;
+  it("an ORG KEY whose holder has no role fails at key authentication (the admin re-check)", async () => {
+    // Org keys are an admin capability by construction: `authenticateApiKey`
+    // re-checks the holder's role on every request (a demoted or departed
+    // holder's key stops working immediately, never reaching this route's
+    // OWN role gate at all). No resolver result reads the same as "departed".
+    initRoleResolver({ getUserRole: async () => null });
 
     const res = await makeAdminApp().request("/admin", {
       headers: { authorization: "Bearer oc_org_k1" },
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     expect(await res.json()).toEqual({
       error: {
-        message: "Not a member of this organization",
+        message: "Invalid API key or token.",
         type: "authentication_error",
       },
     });
   });
 
-  it("flat team: an ORG KEY with an active holder passes", async () => {
-    caps.rbac = false;
-    const res = await makeAdminApp().request("/admin", {
-      headers: { authorization: "Bearer oc_org_k1" },
-    });
-    expect(res.status).toBe(200);
-  });
-
-  it("flat team (no RBAC): an active member passes admin gates with no resolver", async () => {
-    // Membership is proven by org resolution itself (active-membership fences
-    // in resolve.ts), so the flat-team arm skips only the role comparison.
-    caps.rbac = false;
-    const res = await makeAdminApp().request("/admin");
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ role: null });
-  });
-
-  it("RBAC with no resolver fails closed (host wiring bug, not flat team)", async () => {
-    caps.rbac = true;
+  it("fails closed with no resolver at all (host wiring bug)", async () => {
     const res = await makeAdminApp().request("/admin");
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({
@@ -288,8 +263,7 @@ describe("auth middleware — role gate", () => {
     });
   });
 
-  it("RBAC: a member below the threshold is refused", async () => {
-    caps.rbac = true;
+  it("a member below the threshold is refused", async () => {
     initRoleResolver({ getUserRole: async () => "member" });
     const res = await makeAdminApp().request("/admin");
     expect(res.status).toBe(403);
@@ -301,8 +275,7 @@ describe("auth middleware — role gate", () => {
     });
   });
 
-  it("RBAC: an admin passes and the role lands on the auth context", async () => {
-    caps.rbac = true;
+  it("an admin passes and the role lands on the auth context", async () => {
     initRoleResolver({ getUserRole: async () => "admin" });
     const res = await makeAdminApp().request("/admin");
     expect(res.status).toBe(200);

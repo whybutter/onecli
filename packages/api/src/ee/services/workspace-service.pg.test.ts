@@ -34,6 +34,8 @@ const MEMBER_EMAIL = `${MEMBER}@example.invalid`;
 const OTHER_ORG = `${P}org-b`;
 const OTHER_OWNER = `${P}owner-b`;
 const OTHER_OWNER_EMAIL = `${OTHER_OWNER}@example.invalid`;
+const GROUPED = `${P}grouped`;
+const GROUPED_EMAIL = `${GROUPED}@example.invalid`;
 
 beforeAll(async () => {
   if (!PROOF_URL) return;
@@ -82,12 +84,17 @@ const resetAll = async () => {
     },
   });
   await db.workspace.deleteMany({ where: { organizationId: { in: orgs } } });
+  // Groups are Restrict on their organization (like the identity tables the
+  // org-delete cascade fixes elsewhere) — must go before the org row, not
+  // after. `groupMember` and any `workspaceAccess` group binding cascade
+  // from the group itself.
+  await db.group.deleteMany({ where: { organizationId: { in: orgs } } });
   await db.organizationMember.deleteMany({
     where: { organizationId: { in: orgs } },
   });
   await db.organization.deleteMany({ where: { id: { in: orgs } } });
   await db.user.deleteMany({
-    where: { id: { in: [OWNER, MEMBER, OTHER_OWNER] } },
+    where: { id: { in: [OWNER, MEMBER, OTHER_OWNER, GROUPED] } },
   });
 };
 
@@ -341,6 +348,79 @@ describe.skipIf(!PROOF_URL)("workspace service on PostgreSQL", () => {
     ).resolves.toBe(true);
   });
 
+  it("the GROUP arm on real Postgres: a bound group's member can access but never manage (risk 1)", async () => {
+    const grouped = GROUPED;
+    await db.user.create({
+      data: {
+        id: grouped,
+        email: GROUPED_EMAIL,
+        externalAuthId: `${P}auth-grouped`,
+      },
+    });
+    await db.organizationMember.create({
+      data: {
+        organizationId: ORG,
+        userId: grouped,
+        userEmail: GROUPED_EMAIL,
+        role: "member",
+      },
+    });
+    const group = await db.group.create({
+      data: { organizationId: ORG, name: `${P}group`, source: "manual" },
+    });
+    await db.groupMember.create({
+      data: { groupId: group.id, userId: grouped },
+    });
+    const ws = await workspaces.createWorkspace(
+      OWNER,
+      OWNER_EMAIL,
+      "Group-bound",
+      ORG,
+    );
+    await db.workspaceAccess.create({
+      data: { workspaceId: ws.id, groupId: group.id },
+    });
+
+    // The group's member reaches the workspace through the binding, on
+    // every one of the predicates the group arm touches...
+    await expect(authz.canAccessWorkspace(grouped, ws.id)).resolves.toBe(true);
+    await expect(
+      authz.eeWorkspaceAccessChecker.canAccessWorkspaceAsUser(grouped, {
+        id: ws.id,
+        organizationId: ORG,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      workspaces.listOrgWorkspacesForUser(grouped, ORG, "member"),
+    ).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: ws.id })]),
+    );
+
+    // ...but never management: a group binding carries no owner role.
+    await expect(authz.canManageWorkspace(grouped, ws.id)).resolves.toBe(false);
+
+    // An org member who is NOT in the group gets nothing from its binding —
+    // the group arm never widens into "any org member".
+    await expect(authz.canAccessWorkspace(MEMBER, ws.id)).resolves.toBe(false);
+
+    // A suspended group member is denied through `getUserRole`'s choke point
+    // even though their group binding still exists — the same invariant the
+    // direct-binding arm already pins.
+    await db.organizationMember.update({
+      where: {
+        organizationId_userId: { organizationId: ORG, userId: grouped },
+      },
+      data: { status: "suspended" },
+    });
+    await expect(authz.canAccessWorkspace(grouped, ws.id)).resolves.toBe(false);
+    await expect(
+      authz.eeWorkspaceAccessChecker.canAccessWorkspaceAsUser(grouped, {
+        id: ws.id,
+        organizationId: ORG,
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("removeMember deletes only the truly-personal workspaces, then the membership", async () => {
     const personal = await workspaces.createWorkspace(
       MEMBER,
@@ -378,7 +458,7 @@ describe.skipIf(!PROOF_URL)("workspace service on PostgreSQL", () => {
 
     await expect(
       team.removeMember(ORG, MEMBER, { revokeIdentity: false }),
-    ).resolves.toBe("skipped");
+    ).resolves.toMatchObject({ revocation: "skipped", email: MEMBER_EMAIL });
 
     const remaining = await db.workspace.findMany({
       where: { organizationId: ORG },

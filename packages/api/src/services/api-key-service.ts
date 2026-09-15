@@ -1,7 +1,79 @@
 import { randomBytes } from "crypto";
 import { db } from "@onecli/db";
+import { logger } from "../lib/logger";
 import type { ResourceScope } from "./resource-scope";
 import { scopeWhere, scopeCreate, isOrgScope } from "./resource-scope";
+
+/**
+ * How often a key's `lastUsedAt` is actually written, in milliseconds.
+ *
+ * The card this feeds ("Last used 3h ago") renders at that granularity, so a
+ * write on every authenticated request would buy nothing observable while
+ * costing a write on the hot auth path. MUST move together with the
+ * gateway's own throttle constant once the gateway-side stamp lands
+ * (phase2-plan risk 8 — deferred to the Phase 1 + Phase 2 integration step;
+ * nothing but this comment ties the two values today).
+ */
+export const API_KEY_LAST_USED_THROTTLE_MS = 15 * 60 * 1000;
+
+/**
+ * Record that `apiKey` just authenticated — throttled, and deliberately NOT a
+ * write on the per-request path.
+ *
+ * Two guards, in order:
+ *
+ * 1. The stored `lastUsedAt` comes back on the row the auth lookup already
+ *    read, so the freshness check costs zero extra I/O. Inside the throttle
+ *    window this returns immediately having touched nothing — which is the
+ *    overwhelming majority of authenticated requests.
+ * 2. When the window HAS elapsed, the update repeats the staleness test in its
+ *    own `where`. That makes the write idempotent across concurrent requests
+ *    and across replicas: a burst that all read the same stale row issues N
+ *    statements but only the first matches a row, the rest are no-ops.
+ *
+ * The `where` also pins the key VALUE, not just the row id. Without it,
+ * rotation races the write: `regenerateApiKey` swaps in a new secret and
+ * clears `lastUsedAt` on the SAME row, so a request that authenticated with
+ * the OLD secret milliseconds earlier could land afterwards, match the
+ * `lastUsedAt: null` arm precisely *because* rotation just cleared it, and
+ * stamp the new secret as used — showing "Last used just now" on a key nobody
+ * has ever held, at the exact moment an operator rotates a leak and checks.
+ *
+ * Never throws and never reports failure upward — usage telemetry must not be
+ * able to turn a request that authenticates today into one that 401s tomorrow.
+ * Returns whether a write was attempted (the throttle's observable behaviour).
+ */
+export const recordApiKeyUse = async (
+  apiKey: { id: string; key: string; lastUsedAt: Date | null },
+  now: number = Date.now(),
+): Promise<boolean> => {
+  // Defensive: a caller that forgot to select `id`/`key` must be a silent
+  // no-op, not a crash inside authentication.
+  if (!apiKey?.id || !apiKey.key) return false;
+
+  const staleBefore = new Date(now - API_KEY_LAST_USED_THROTTLE_MS);
+  if (apiKey.lastUsedAt !== null && apiKey.lastUsedAt > staleBefore) {
+    return false;
+  }
+
+  try {
+    await db.apiKey.updateMany({
+      where: {
+        id: apiKey.id,
+        // The secret that actually authenticated — see the rotation race above.
+        key: apiKey.key,
+        OR: [{ lastUsedAt: null }, { lastUsedAt: { lt: staleBefore } }],
+      },
+      data: { lastUsedAt: new Date(now) },
+    });
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to record API key usage; authentication is unaffected.",
+    );
+  }
+  return true;
+};
 
 export const generateApiKey = (scope?: ResourceScope) => {
   const prefix = scope && isOrgScope(scope) ? "oc_org_" : "oc_";
@@ -27,7 +99,11 @@ export const regenerateApiKey = async (
   if (existing) {
     await db.apiKey.update({
       where: { id: existing.id },
-      data: { key },
+      // Regenerate mints a NEW secret on the same row, so the old secret's
+      // usage history does not describe the new one — carrying `lastUsedAt`
+      // over would report a key nobody has ever presented as recently used,
+      // which is exactly backwards for the leak it was rotated to fix.
+      data: { key, lastUsedAt: null },
     });
   } else {
     const user = await db.user.findUniqueOrThrow({
@@ -54,17 +130,29 @@ export const regenerateApiKey = async (
  *
  * `created` is `true` only when a key was actually minted, letting callers audit
  * the first provision without logging on every read.
+ *
+ * `lastUsedAt` rides along so a caller can say whether the key it is about to
+ * show is in circulation — a freshly minted key reports `null` here.
  */
 export const ensureApiKey = async (
   userId: string,
   scope: ResourceScope,
-): Promise<{ apiKey: string; created: boolean }> => {
+): Promise<{
+  apiKey: string;
+  created: boolean;
+  lastUsedAt: Date | null;
+}> => {
   // Personal keys only — same reasoning as `regenerateApiKey` above.
   const existing = await db.apiKey.findFirst({
     where: { userId, kind: "user", ...scopeWhere(scope) },
-    select: { key: true },
+    select: { key: true, lastUsedAt: true },
   });
-  if (existing) return { apiKey: existing.key, created: false };
+  if (existing)
+    return {
+      apiKey: existing.key,
+      created: false,
+      lastUsedAt: existing.lastUsedAt,
+    };
 
   const user = await db.user.findUniqueOrThrow({
     where: { id: userId },
@@ -74,7 +162,7 @@ export const ensureApiKey = async (
   await db.apiKey.create({
     data: { key, userId, userEmail: user.email, ...scopeCreate(scope) },
   });
-  return { apiKey: key, created: true };
+  return { apiKey: key, created: true, lastUsedAt: null };
 };
 
 /**

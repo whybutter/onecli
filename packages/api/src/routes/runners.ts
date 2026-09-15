@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import type { ApiEnv } from "../types";
 import { auth } from "../middleware/auth";
-import { CAPS } from "../lib/env";
 import { listRunners } from "../services/runner-service";
 
 /**
@@ -18,18 +17,11 @@ import { listRunners } from "../services/runner-service";
  *
  * It carries no workspace, agent, or credential detail either way — the token
  * column is never even selected.
- *
- * The admin requirement applies only where roles exist. With RBAC off there is
- * no role resolver at all, so asking for one would 403 every caller including
- * the owner — and a deployment without roles is one where every API-key holder
- * is already an operator. Same posture as the rest of the onprem surface.
  */
 export const runnersRoutes = () => {
   const app = new Hono<ApiEnv>();
 
-  const guard = CAPS.rbac
-    ? auth({ requireWorkspace: false, role: "admin" })
-    : auth({ requireWorkspace: false });
+  const guard = auth({ requireWorkspace: false, role: "admin" });
 
   app.get("/", guard, async (c) => c.json({ runners: await listRunners() }));
 

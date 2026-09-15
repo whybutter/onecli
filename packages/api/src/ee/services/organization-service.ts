@@ -62,6 +62,15 @@ export const deleteOrganizationContent = async (
   await tx.userProvision.deleteMany({ where: { organizationId } });
   await tx.budgetSpend.deleteMany({ where: { organizationId } });
   await tx.budget.deleteMany({ where: { organizationId } });
+  // These four FKs are `onDelete: Restrict` (verified by a pg test in
+  // `organization-service.pg.test.ts`), so they must go before the org row
+  // or the delete fails loudly rather than orphaning identity state:
+  // app-availability rules, org domains, the org's one SSO connection, and
+  // its SCIM tokens. `appAvailabilityRuleIdentity` cascades from the rule.
+  await tx.appAvailabilityRule.deleteMany({ where: { organizationId } });
+  await tx.organizationDomain.deleteMany({ where: { organizationId } });
+  await tx.organizationSsoConnection.deleteMany({ where: { organizationId } });
+  await tx.organizationScimToken.deleteMany({ where: { organizationId } });
   await tx.groupRoleMapping.deleteMany({ where: { organizationId } });
   await tx.group.deleteMany({ where: { organizationId } });
   await tx.organizationMember.deleteMany({ where: { organizationId } });
@@ -106,4 +115,51 @@ export const deleteOrganization = async (
     { organizationId, userId, workspaces: workspaces.length },
     "organization deleted",
   );
+};
+
+/**
+ * Rename the organization (name only; `slug` is immutable). Owner-only —
+ * enforced primarily by the route's `role: "owner"` auth gate, re-checked
+ * here (same defense-in-depth as `deleteOrganization` above) so a direct
+ * service caller can't skip it.
+ */
+export const renameOrganization = async (
+  organizationId: string,
+  userId: string,
+  name: string,
+) => {
+  const membership = await db.organizationMember.findUnique({
+    where: { organizationId_userId: { organizationId, userId } },
+    select: { role: true, status: true },
+  });
+  if (
+    !membership ||
+    membership.role !== "owner" ||
+    membership.status === "suspended"
+  ) {
+    throw new ServiceError(
+      "FORBIDDEN",
+      "Only the organization owner can rename it",
+    );
+  }
+
+  const trimmed = name.trim();
+  if (trimmed.length === 0 || trimmed.length > 255) {
+    throw new ServiceError(
+      "BAD_REQUEST",
+      "Name must be between 1 and 255 characters",
+    );
+  }
+
+  return db.organization.update({
+    where: { id: organizationId },
+    data: { name: trimmed },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      byoLegacy: true,
+      byoEnabled: true,
+    },
+  });
 };

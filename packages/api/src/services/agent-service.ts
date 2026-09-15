@@ -17,6 +17,7 @@ import { presenceSettingsUrlFor } from "./channels/registry";
 import { autoAttachLlmKeys } from "./llm-autoattach-service";
 import { llmProvider } from "../llm/registry";
 import { isOnpremEdition } from "../lib/policy-flags";
+import { getResourceHooks } from "../providers";
 import {
   IDENTIFIER_REGEX,
   INSTRUCTIONS_MAX_LENGTH,
@@ -173,6 +174,13 @@ export const createAgent = async (
   input: CreateAgentInput,
   /** Who to record as the grantor of the auto-attached LLM keys. */
   userId: string | null = null,
+  /**
+   * Threaded from the route's auth context so the post-create resource hook
+   * (agent-default-connections, etc.) can run without a second workspace
+   * lookup. `null` when the caller has no organization context to hand —
+   * the hook is then simply skipped (best-effort, not a required step).
+   */
+  organizationId: string | null = null,
 ) => {
   const trimmed = input.name.trim();
   if (!trimmed || trimmed.length > 255) {
@@ -317,6 +325,18 @@ export const createAgent = async (
       agent.id,
       userId,
     ).catch(() => ({ secretIds: [] as string[] }));
+
+    // Best-effort, post-commit: apply the workspace's default-connections
+    // template (an optional edition hook — OSS/EE wires a real
+    // implementation, an edition without one is simply skipped) so a
+    // brand-new agent doesn't start with zero access. Never fails agent
+    // creation itself, and never re-runs for an existing identifier (the
+    // conflict check above already returned before this point in that case).
+    if (organizationId) {
+      await getResourceHooks()
+        .afterCreateAgent?.(organizationId, workspaceId, agent.id)
+        .catch(() => {});
+    }
 
     // `llmKeys` is part of the create contract: an empty array means the
     // workspace has no LLM key, which is the one thing a caller must be able
