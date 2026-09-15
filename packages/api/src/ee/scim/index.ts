@@ -1,1 +1,0 @@
-export { createScimApp } from "./app";
