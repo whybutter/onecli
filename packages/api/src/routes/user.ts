@@ -54,7 +54,7 @@ export const userRoutes = () => {
   app.get("/api-key", async (c) => {
     const auth = c.get("auth");
     const workspaceId = requireWorkspaceId(auth);
-    const { apiKey, created } = await ensureApiKey(auth.userId, {
+    const { apiKey, created, lastUsedAt } = await ensureApiKey(auth.userId, {
       workspaceId,
     });
     if (created) {
@@ -68,7 +68,9 @@ export const userRoutes = () => {
         metadata: { scope: "workspace", autoProvisioned: true },
       });
     }
-    return c.json({ apiKey });
+    // `lastUsedAt` is additive — existing clients (the CLI reads `apiKey`)
+    // keep working unchanged.
+    return c.json({ apiKey, lastUsedAt });
   });
 
   // POST /user/api-key/regenerate
