@@ -124,17 +124,19 @@ const mtlsBoundPort = async (gw: GatewayHandle): Promise<number> => {
       (l["message"] as string).includes("listening for mTLS connections"),
   );
   if (line === undefined) {
-    throw new Error(
-      "mTLS boot line not found even though waitForLog resolved",
-    );
+    throw new Error("mTLS boot line not found even though waitForLog resolved");
   }
   const addr = line["addr"];
   if (typeof addr !== "string") {
-    throw new Error(`mTLS boot line missing a usable addr: ${JSON.stringify(line)}`);
+    throw new Error(
+      `mTLS boot line missing a usable addr: ${JSON.stringify(line)}`,
+    );
   }
   const port = Number.parseInt(addr.split(":").pop() ?? "", 10);
   if (!Number.isInteger(port) || port <= 0) {
-    throw new Error(`could not parse a port out of the mTLS bound address ${addr}`);
+    throw new Error(
+      `could not parse a port out of the mTLS bound address ${addr}`,
+    );
   }
   return port;
 };
@@ -330,6 +332,25 @@ describe("mTLS listener", () => {
       } finally {
         rmSync(pki.dir, { recursive: true, force: true });
       }
+    },
+  );
+
+  scenario(
+    "with GATEWAY_MTLS_PORT unset, only the plaintext listener boots",
+    async (cx) => {
+      // No PKI, no mTLS env at all — the default spawn env every other test
+      // in this suite already exercises. Full backward compatibility means
+      // the second entrypoint is never even constructed, so its boot line
+      // must never appear.
+      const gw = await cx.startGateway();
+
+      const lines = parsedLogLines(gw).map((l) => l["message"]);
+      expect(lines).toContain("listening for connections");
+      expect(lines).not.toContain("listening for mTLS connections");
+      expect(lines).toContain("mTLS disabled (GATEWAY_MTLS_PORT not set)");
+
+      const res = await fetch(`${gw.origin}/healthz`);
+      expect(res.status).toBe(200);
     },
   );
 });

@@ -218,4 +218,85 @@ mod tests {
             None
         );
     }
+
+    // ── identity_from_peer_certs: real certificates ─────────────────────
+
+    #[test]
+    fn identity_from_peer_certs_uses_the_first_of_two_uri_sans() {
+        crate::test_support::ensure_crypto_provider();
+
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
+        let mut params = rcgen::CertificateParams::default();
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "agent-1");
+        params.subject_alt_names = vec![
+            rcgen::SanType::URI(
+                rcgen::Ia5String::try_from("spiffe://onecli/agent/1".to_string()).unwrap(),
+            ),
+            rcgen::SanType::URI(
+                rcgen::Ia5String::try_from("spiffe://onecli/agent/2".to_string()).unwrap(),
+            ),
+        ];
+        let cert = params.self_signed(&key).expect("self-sign");
+        let der = cert.der().clone();
+
+        let identity =
+            identity_from_peer_certs(std::slice::from_ref(&der)).expect("identity extracted");
+        assert_eq!(
+            identity.uri_sans,
+            vec![
+                "spiffe://onecli/agent/1".to_string(),
+                "spiffe://onecli/agent/2".to_string(),
+            ],
+            "both URI SANs must be captured, in certificate order"
+        );
+        // `primary()` is the field callers compare/log against — it must
+        // pick the FIRST SAN, not just any of them.
+        assert_eq!(identity.primary(), Some("spiffe://onecli/agent/1"));
+    }
+
+    /// `certs[0]` is the end-entity leaf — rustls presents the chain
+    /// leaf-first — so a real two-element chain (leaf + intermediate) must
+    /// yield the LEAF's identity, never the intermediate's, even though the
+    /// intermediate is itself a validly-parseable certificate that would
+    /// otherwise satisfy `identity_from_peer_certs` just as well.
+    #[test]
+    fn identity_from_peer_certs_uses_the_leaf_not_the_intermediate() {
+        crate::test_support::ensure_crypto_provider();
+
+        let intermediate_key =
+            rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("intermediate key");
+        let mut intermediate_params = rcgen::CertificateParams::default();
+        intermediate_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        intermediate_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "Intermediate CA");
+        intermediate_params.key_usages = vec![
+            rcgen::KeyUsagePurpose::KeyCertSign,
+            rcgen::KeyUsagePurpose::CrlSign,
+        ];
+        let intermediate_cert = intermediate_params
+            .self_signed(&intermediate_key)
+            .expect("self-sign intermediate");
+
+        let leaf_key =
+            rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params = rcgen::CertificateParams::default();
+        leaf_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "leaf-agent");
+        leaf_params.subject_alt_names = vec![rcgen::SanType::URI(
+            rcgen::Ia5String::try_from("spiffe://onecli/agent/leaf".to_string()).unwrap(),
+        )];
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &intermediate_cert, &intermediate_key)
+            .expect("sign leaf under intermediate");
+
+        // Leaf-first, as rustls presents `peer_certificates()`.
+        let chain = [leaf_cert.der().clone(), intermediate_cert.der().clone()];
+        let identity = identity_from_peer_certs(&chain).expect("identity extracted");
+        assert_eq!(identity.primary(), Some("spiffe://onecli/agent/leaf"));
+        assert_eq!(identity.cn.as_deref(), Some("leaf-agent"));
+    }
 }

@@ -24,4 +24,8 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
+# Enables `client_ca::test_support` (the loopback-handshake PKI harness) for
+# this crate's own tests only — the plain `[dependencies]` entry above never
+# turns this feature on, so a production build of `relay` never carries it.
+client-ca = { path = "../client-ca", features = ["test-support"] }
 tempfile = { workspace = true }
