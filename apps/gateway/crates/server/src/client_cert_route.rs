@@ -279,6 +279,7 @@ mod tests {
             vault_service,
             approval_store,
             client_ca: None,
+            binding_mode: binding::BindingMode::Off,
         }
     }
 
