@@ -73,6 +73,25 @@ export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "";
 
 export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? "";
 
+export type RegistrationMode = "open" | "invite";
+
+/**
+ * Who may create a NEW account on this instance. "open": anyone (the old,
+ * only behaviour). "invite" (default): only an existing member's invite
+ * link, or the deployment's very first account (see `registrationState()`
+ * in `./registration` — covers both a fresh install and a pre-2.0 upgrade
+ * claimer). Case-insensitive; any value other than exactly "open" is
+ * "invite" — unset or a typo fails closed, not open.
+ *
+ * NOT the runner/channel-adapter "registration anchor" tokens below
+ * (RUNNER_TOKEN, CHANNEL_ADAPTER_TOKEN) — same word, unrelated concept:
+ * those gate a Runner/ChannelAdapter row, not a user account.
+ */
+export const REGISTRATION_MODE: RegistrationMode =
+  (process.env.ONECLI_REGISTRATION ?? "").trim().toLowerCase() === "open"
+    ? "open"
+    : "invite";
+
 // ── Cloud: Cognito ──────────────────────────────────────────────────────
 
 export const COGNITO_CLIENT_ID =
