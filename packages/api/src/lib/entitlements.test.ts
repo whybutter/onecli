@@ -1,44 +1,27 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   ENTERPRISE_FEATURES,
   initEntitlementForTests,
   isEnterpriseFeature,
   isEntitled,
-  parseEntitled,
 } from "./entitlements";
 import { assertEntitled, enterpriseLicenseMessage } from "./entitlements-guard";
-import { ServiceError } from "../services/errors";
 
-describe("parseEntitled", () => {
-  it.each<[string | undefined, boolean]>([
-    ["true", true],
-    [" TRUE ", true],
-    ["1", true],
-    [undefined, false],
-    ["", false],
-    ["false", false],
-    ["yes", false],
-    ["0", false],
-  ])("onprem: %p → %p", (raw, expected) => {
-    expect(parseEntitled(raw, "onprem")).toBe(expected);
-  });
+// This build is always entitled (v2 migration, principle 3): there is no
+// licence flag and no unentitled state. The registry and the refusal-message
+// helper survive because the web's plan gate still keys on them.
 
-  it("cloud is always entitled regardless of the flag", () => {
-    expect(parseEntitled(undefined, "cloud")).toBe(true);
-    expect(parseEntitled("false", "cloud")).toBe(true);
-    expect(parseEntitled("garbage", "cloud")).toBe(true);
-  });
-});
-
-describe("isEntitled test override", () => {
-  afterEach(() => initEntitlementForTests(null));
-
-  it("honors the override in both directions", () => {
-    initEntitlementForTests(true);
+describe("isEntitled", () => {
+  it("is unconditionally true", () => {
     expect(isEntitled()).toBe(true);
+  });
+
+  it("ignores the legacy test override in both directions", () => {
     initEntitlementForTests(false);
-    expect(isEntitled()).toBe(false);
+    expect(isEntitled()).toBe(true);
+    initEntitlementForTests(null);
+    expect(isEntitled()).toBe(true);
   });
 });
 
@@ -56,25 +39,17 @@ describe("isEnterpriseFeature", () => {
 });
 
 describe("assertEntitled", () => {
-  afterEach(() => initEntitlementForTests(null));
-
-  it("passes when entitled", () => {
-    initEntitlementForTests(true);
-    expect(() => assertEntitled("groups")).not.toThrow();
+  it("never throws", () => {
+    for (const key of Object.keys(ENTERPRISE_FEATURES)) {
+      expect(() =>
+        assertEntitled(key as keyof typeof ENTERPRISE_FEATURES),
+      ).not.toThrow();
+    }
   });
 
-  it("throws FORBIDDEN with the license message when not entitled", () => {
-    initEntitlementForTests(false);
-    try {
-      assertEntitled("groups");
-      expect.unreachable("assertEntitled must throw");
-    } catch (err) {
-      expect(err).toBeInstanceOf(ServiceError);
-      expect((err as ServiceError).code).toBe("FORBIDDEN");
-      expect((err as ServiceError).message).toBe(
-        enterpriseLicenseMessage("groups"),
-      );
-      expect((err as ServiceError).message).toContain("Enterprise license");
-    }
+  it("still formats the historical refusal message", () => {
+    expect(enterpriseLicenseMessage("groups")).toBe(
+      "Directory groups requires a OneCLI Enterprise license.",
+    );
   });
 });
