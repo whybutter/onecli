@@ -7,6 +7,14 @@ import type {
 
 export type { BudgetListRow, CreateBudgetInput, UpdateBudgetInput };
 
+export type BudgetPeriod = CreateBudgetInput["period"];
+
+/** `BudgetListRow.period` is a bare `string` on the wire (it's a Prisma
+ * column, not a validated enum on read) — narrow it before treating it as
+ * the `"monthly" | "total"` union, instead of asserting with `as`. */
+export const isBudgetPeriod = (value: string): value is BudgetPeriod =>
+  value === "monthly" || value === "total";
+
 // Spend budgets are ORG guardrails: always `/v1/org/budgets` (admin-gated,
 // requireWorkspace: false). A budget caps spend on a metered LLM secret the
 // org owns; the gateway enforces it (see apps/gateway/src/budget.rs). Wire

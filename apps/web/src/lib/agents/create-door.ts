@@ -45,10 +45,6 @@ export type CreateDoor =
   | "hosted-with-byo";
 
 export interface CreateDoorInput {
-  /** The workspace's agents. `undefined` while the list is still loading.
-   *  `kind` is typed loosely because the server action widens it to `string`;
-   *  an unrecognized kind simply isn't legacy, which is the safe read. */
-  agents: { kind: string }[] | undefined;
   availability: HostedAvailability;
   /** The org's creation world on cloud — `Organization.byoLegacy` from
    *  GET /v1/org. `null` = self-host, or the read failed: fall back to the

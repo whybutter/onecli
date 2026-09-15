@@ -169,6 +169,7 @@ export const WorkspaceCard = ({
               <DropdownMenu>
                 <DropdownMenuTrigger
                   onClick={(e) => e.stopPropagation()}
+                  aria-label={`Actions for ${name ?? "this workspace"}`}
                   className="text-muted-foreground hover:text-foreground -mr-1 flex size-7 shrink-0 items-center justify-center rounded-md"
                 >
                   <MoreVertical className="size-4" />

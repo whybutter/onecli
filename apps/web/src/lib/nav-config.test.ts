@@ -47,24 +47,17 @@ describe("org nav and the hosted gate", () => {
   });
 });
 
-describe("App Availability lives under Organization Settings", () => {
-  it("is a settings entry, not a top-level org nav entry", () => {
+describe("App Availability is deferred — hidden from every nav", () => {
+  it("has no settings sub-nav entry and no top-level org nav entry", () => {
     const settingsTitles = getSettingsSections("org-1")
       .flatMap((section) => section.items)
       .map((item) => item.title);
-    expect(settingsTitles).toContain("App Availability");
+    expect(settingsTitles).not.toContain("App Availability");
 
     const orgTitles = getNavItems("org-1", { entitled: true })
       .flat()
       .map((item) => item.title);
     expect(orgTitles).not.toContain("App Availability");
-  });
-
-  it("points at the settings URL", () => {
-    const item = getSettingsSections("org-1")
-      .flatMap((section) => section.items)
-      .find((entry) => entry.title === "App Availability");
-    expect(item?.url).toBe("/org/org-1/settings/app-availability");
   });
 });
 

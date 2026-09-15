@@ -35,7 +35,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@onecli/ui/components/select";
-import type { BudgetListRow } from "@/lib/api/budgets";
+import type { BudgetListRow, BudgetPeriod } from "@/lib/api/budgets";
+import { isBudgetPeriod } from "@/lib/api/budgets";
 import { useDeleteBudget, useUpdateBudget } from "@/hooks/use-budgets";
 
 export interface BudgetRowActionsProps {
@@ -46,8 +47,8 @@ export const BudgetRowActions = ({ budget }: BudgetRowActionsProps) => {
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [amount, setAmount] = useState((budget.limitCents / 100).toFixed(2));
-  const [period, setPeriod] = useState<"monthly" | "total">(
-    budget.period as "monthly" | "total",
+  const [period, setPeriod] = useState<BudgetPeriod>(
+    isBudgetPeriod(budget.period) ? budget.period : "monthly",
   );
 
   const update = useUpdateBudget();
@@ -110,7 +111,7 @@ export const BudgetRowActions = ({ budget }: BudgetRowActionsProps) => {
               <Label htmlFor="edit-period">Period</Label>
               <Select
                 value={period}
-                onValueChange={(v) => setPeriod(v as "monthly" | "total")}
+                onValueChange={(v) => isBudgetPeriod(v) && setPeriod(v)}
               >
                 <SelectTrigger id="edit-period">
                   <SelectValue />

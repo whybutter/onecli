@@ -65,7 +65,7 @@ export default async function WorkspaceSettingsPage({ params }: Props) {
     <div className="flex flex-1 flex-col gap-6">
       <PageHeader
         title="General"
-        description="Rename or delete this workspace. Billing and usage are in the sidebar under your organization."
+        description="Rename or delete this workspace. Usage is in the sidebar under your organization."
       />
       <RenameWorkspaceForm
         workspaceId={workspace.id}

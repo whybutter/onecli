@@ -12,7 +12,6 @@ import {
   ShieldCheck,
   Plug,
   Shield,
-  LayoutGrid,
   LayoutDashboard,
   Download,
   Activity,
@@ -203,13 +202,10 @@ export const getSettingsSections = (orgId?: string): SettingsNavSection[] => {
       items: [
         { title: "General", url: `${p}/settings/general`, icon: Building2 },
         { title: "Domains", url: `${p}/settings/domains`, icon: Globe },
-        // Deferred to a later phase; the page itself renders a placeholder
-        // until it ships (there is no license dial left to gate on).
-        {
-          title: "App Availability",
-          url: `${p}/settings/app-availability`,
-          icon: LayoutGrid,
-        },
+        // App Availability is deferred (v2 migration Decision 3) — the page
+        // itself still renders a placeholder if reached directly, but the
+        // nav entry is hidden rather than linking to a feature that isn't
+        // built yet.
         {
           title: "API Keys",
           url: `${p}/settings/org-api-keys`,

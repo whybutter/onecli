@@ -22,7 +22,8 @@ import {
   SelectValue,
 } from "@onecli/ui/components/select";
 import type { Secret } from "@/lib/api";
-import type { BudgetListRow } from "@/lib/api/budgets";
+import type { BudgetListRow, BudgetPeriod } from "@/lib/api/budgets";
+import { isBudgetPeriod } from "@/lib/api/budgets";
 import { useCreateBudget, useMeteredSecrets } from "@/hooks/use-budgets";
 
 export interface CreateBudgetDialogProps {
@@ -41,7 +42,7 @@ export const CreateBudgetDialog = ({ existing }: CreateBudgetDialogProps) => {
   const [open, setOpen] = useState(false);
   const [secretId, setSecretId] = useState("");
   const [amount, setAmount] = useState("");
-  const [period, setPeriod] = useState<"monthly" | "total">("monthly");
+  const [period, setPeriod] = useState<BudgetPeriod>("monthly");
 
   const { data: secrets = [], isLoading: secretsLoading } =
     useMeteredSecrets(open);
@@ -146,7 +147,7 @@ export const CreateBudgetDialog = ({ existing }: CreateBudgetDialogProps) => {
             <Label htmlFor="budget-period">Period</Label>
             <Select
               value={period}
-              onValueChange={(v) => setPeriod(v as "monthly" | "total")}
+              onValueChange={(v) => isBudgetPeriod(v) && setPeriod(v)}
             >
               <SelectTrigger id="budget-period">
                 <SelectValue />

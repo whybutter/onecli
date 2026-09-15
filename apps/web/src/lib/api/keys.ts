@@ -157,7 +157,13 @@ export const queryKeys = {
   // NOT org-scoped like the two above (risk 2: don't "fix" this to match).
   agentDefaults: {
     all: () => ["agent-defaults", ...scope()] as const,
-    list: () => [...queryKeys.agentDefaults.all(), "list"] as const,
+    // Keyed by the explicit workspaceId argument, like workspaceAccess.list
+    // — not derived from the URL alone, so a caller passing a workspaceId
+    // that doesn't match the URL-scoped `all()` prefix (or a background
+    // refetch racing a workspace switch) can't read/invalidate the wrong
+    // workspace's template.
+    list: (workspaceId: string) =>
+      [...queryKeys.agentDefaults.all(), workspaceId] as const,
   },
   workspaces: {
     all: () => ["workspaces", ...scope()] as const,
