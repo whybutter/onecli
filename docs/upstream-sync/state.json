@@ -1,21 +1,39 @@
 {
   "$comment": "Anchor for the recurring upstream review. See ./README.md and .agents/skills/upstream-sync/SKILL.md.",
   "upstream": "https://github.com/onecli/onecli.git",
-  "lastReviewedCommit": "84ccaf74ce6350f8925675457b48272c29f32c1a",
-  "lastReviewedTag": "v1.45.0",
-  "lastReviewedAt": "2026-08-05",
-  "forkBase": "v1.44.0",
-  "forkBaseCommit": "c1668eb1fa67a06072958a2aa5b9c709f7de0ccd",
-  "forkBranch": "open-edition/reconciled",
+  "lastReviewedCommit": "8ea47cd",
+  "lastReviewedTag": "v2.6.0",
+  "lastReviewedAt": "2026-09-14",
+  "forkBase": "v1.45.0",
+  "forkBaseCommit": "84ccaf74ce6350f8925675457b48272c29f32c1a",
+  "forkBranch": "main",
   "pendingAdoption": [
     {
-      "item": "v1.45.0 adoption",
-      "review": "reviews/2026-08-05-v1.45.0.md",
-      "status": "reviewed, not merged",
-      "blocker": "ee_apps::has_request_guard must return true for github-app/github/dropbox before the merge builds, or granular resource scoping silently stops injecting credentials"
+      "item": "v2 base decision",
+      "review": "reviews/2026-09-14-v2.6.0.md",
+      "status": "DECIDED 2026-09-14: build on v2; replace apps/web/src/ee, packages/api/src/ee, apps/gateway/crates/ee with clean-room fork implementations against the existing seams, trimmed to the fork's use case",
+      "blocker": "plan of record: docs/upstream-sync/v2-migration/plan.md (6 phases, ~40-60 engineer-days); open decisions listed there"
+    },
+    {
+      "item": "v2 security cherry-picks (407 untokened proxy, oc_ commit rule, approval 404 collapse, CORS #520, #541, #525, #559)",
+      "review": "reviews/2026-09-14-v2.6.0.md",
+      "status": "subsumed by the v2 rebase"
     }
   ],
   "reviews": [
+    {
+      "date": "2026-09-14",
+      "range": "v1.45.0..v2.6.0",
+      "doc": "reviews/2026-09-14-v2.6.0.md",
+      "commits": 36,
+      "conflicts": 225,
+      "decisions": {
+        "take": 7,
+        "takeWithAdaptation": 4,
+        "skip": 2,
+        "needsDecision": 3
+      }
+    },
     {
       "date": "2026-08-05",
       "range": "v1.44.0..v1.45.0",
