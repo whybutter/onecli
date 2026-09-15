@@ -593,3 +593,10 @@ Carried to Phase 1 (gateway) unless noted:
 - **Spec amendment, Dropbox `folders`:** key present with a non-empty raw array but zero usable entries (`{"folders":[42]}`) currently reads as "no guard". Amend `gateway-ee-behaviour.md` §1.8 to deny-all in that case and implement.
 - **GitHub picker (web, Phase 3):** validate that each selected repository's owner equals the installation account; the shared mint strips owners, so a cross-owner entry silently scopes to the installation owner's same-named repo.
 - **Tidy:** upstream `list_folder/continue` is pathless by design, so a cursor minted outside the gateway lists whatever it was minted for. Documented, not changed.
+
+From the WP3 review (API):
+
+- **Dead `!CAPS.rbac` arms** in free files (`middleware/auth.ts`, `services/workspace-access-check.ts`, `routes/org-skills.ts`, `routes/runners.ts`, `routes/org-channels.ts`, `apps/oauth-org.ts`, `channels/agent-channel-service.ts`, `slack/shared-install-service.ts`, web `lib/nav-config.ts`): now unreachable in every edition and all fail closed. Remove in a tidy PR after Phase 0 lands; each removal is a free-file edit to record.
+- **`organization-service` delete cascade** omits `OrganizationDomain`, `OrganizationSsoConnection`, `OrganizationScimToken`, `AppAvailabilityRule` (Restrict FKs). Unreachable until those tables get rows; add when domains land in Phase 2.
+- **Last-workspace guard** is a non-transactional count (upstream parity). Leave unless it bites.
+- **Environmental pg test failures** (cron, processes, due-work, ssh, conversation, home-sync, channels; ~41 cases) are byte-identical against untouched upstream 8ea47cd on this machine: lease/clock arms sensitive to local Postgres. Not a fork regression; worth a CI-vs-local note in `docs/development.md` later.
