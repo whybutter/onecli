@@ -71,8 +71,7 @@ export const mintClientCert = async (
 
   if (response.status === 400) {
     const body = await response.json().catch(() => null);
-    const message =
-      (body as { error?: string } | null)?.error ?? "invalid CSR";
+    const message = (body as { error?: string } | null)?.error ?? "invalid CSR";
     throw new ServiceError("BAD_REQUEST", message);
   }
   if (response.status === 503) {
