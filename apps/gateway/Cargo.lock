@@ -696,6 +696,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "binding"
+version = "0.0.0"
+dependencies = [
+ "db",
+ "time",
+ "tracing",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1198,6 +1207,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "time",
 ]
 
 [[package]]
@@ -1228,6 +1238,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 dependencies = [
  "powerfmt",
+ "serde_core",
 ]
 
 [[package]]
@@ -3514,6 +3525,7 @@ dependencies = [
  "sha2",
  "smallvec",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -3597,6 +3609,7 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.18",
+ "time",
  "tracing",
  "whoami",
 ]
@@ -3634,6 +3647,7 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.18",
+ "time",
  "tracing",
  "whoami",
 ]
@@ -3658,6 +3672,7 @@ dependencies = [
  "serde_urlencoded",
  "sqlx-core",
  "thiserror 2.0.18",
+ "time",
  "tracing",
  "url",
 ]
