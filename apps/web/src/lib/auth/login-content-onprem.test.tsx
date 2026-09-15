@@ -55,7 +55,11 @@ describe("self-hosted sign-in screen", () => {
   it("signs in with email and password", async () => {
     const user = userEvent.setup();
     render(
-      <OnpremLoginContent googleConfigured={false} emailConfigured={false} />,
+      <OnpremLoginContent
+        googleConfigured={false}
+        emailConfigured={false}
+        signupOpen
+      />,
     );
     await signIntoForm(user);
 
@@ -71,7 +75,11 @@ describe("self-hosted sign-in screen", () => {
     );
     const user = userEvent.setup();
     render(
-      <OnpremLoginContent googleConfigured={false} emailConfigured={false} />,
+      <OnpremLoginContent
+        googleConfigured={false}
+        emailConfigured={false}
+        signupOpen
+      />,
     );
     await signIntoForm(user);
 
@@ -86,7 +94,11 @@ describe("self-hosted sign-in screen", () => {
 
   it("cannot be submitted empty", () => {
     render(
-      <OnpremLoginContent googleConfigured={false} emailConfigured={false} />,
+      <OnpremLoginContent
+        googleConfigured={false}
+        emailConfigured={false}
+        signupOpen
+      />,
     );
     expect(
       screen.getByRole("button", { name: "Sign in" }).hasAttribute("disabled"),
@@ -96,28 +108,67 @@ describe("self-hosted sign-in screen", () => {
   it("offers Google only where it is configured", () => {
     // A password-only install is the normal shape, not a misconfiguration.
     render(
-      <OnpremLoginContent googleConfigured={false} emailConfigured={false} />,
+      <OnpremLoginContent
+        googleConfigured={false}
+        emailConfigured={false}
+        signupOpen
+      />,
     );
     expect(screen.queryByRole("button", { name: /Google/ })).toBeNull();
     expect(screen.getByPlaceholderText("Password")).toBeTruthy();
 
     cleanup();
-    render(<OnpremLoginContent googleConfigured emailConfigured={false} />);
+    render(
+      <OnpremLoginContent googleConfigured emailConfigured={false} signupOpen />,
+    );
     expect(screen.getByRole("button", { name: /Google/ })).toBeTruthy();
     expect(screen.getByPlaceholderText("Password")).toBeTruthy();
   });
 
   it("explains a refused social sign-in that redirected back here", () => {
     searchParams.set("error", "SIGNUP_BLOCKED_BY_UPGRADE");
-    render(<OnpremLoginContent googleConfigured emailConfigured={false} />);
+    render(
+      <OnpremLoginContent googleConfigured emailConfigured={false} signupOpen />,
+    );
     expect(screen.getByText(/finishing an upgrade/i)).toBeTruthy();
   });
 
-  it("offers the signup screen — registration is open", () => {
+  it("shows the invite-only copy for a refused social signup redirect", () => {
+    searchParams.set("error", "SIGNUP_REQUIRES_INVITATION");
     render(
-      <OnpremLoginContent googleConfigured={false} emailConfigured={false} />,
+      <OnpremLoginContent
+        googleConfigured={false}
+        emailConfigured={false}
+        signupOpen={false}
+      />,
+    );
+    expect(
+      screen.getByText(/only accepts new accounts by invitation/i),
+    ).toBeTruthy();
+  });
+
+  it("offers the signup screen when signupOpen is true (existing default assumption made explicit)", () => {
+    render(
+      <OnpremLoginContent
+        googleConfigured={false}
+        emailConfigured={false}
+        signupOpen
+      />,
     );
     const link = screen.getByRole("link", { name: "Create an account" });
     expect(link.getAttribute("href")).toBe("/auth/signup");
+  });
+
+  it("hides the signup link when signupOpen is false", () => {
+    render(
+      <OnpremLoginContent
+        googleConfigured={false}
+        emailConfigured={false}
+        signupOpen={false}
+      />,
+    );
+    expect(
+      screen.queryByRole("link", { name: "Create an account" }),
+    ).toBeNull();
   });
 });

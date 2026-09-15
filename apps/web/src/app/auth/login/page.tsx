@@ -1,5 +1,8 @@
 import { redirect } from "next/navigation";
-import { registrationState } from "@onecli/api/lib/registration";
+import {
+  registrationState,
+  REGISTRATION_MODE,
+} from "@onecli/api/lib/registration";
 import { isEmailConfigured } from "@onecli/api/services/email-service";
 import { logger } from "@onecli/api/lib/logger";
 import { GOOGLE_CLIENT_ID, IS_CLOUD } from "@/lib/env";
@@ -46,6 +49,10 @@ export default async function LoginPage() {
       // No mail provider means a reset link can never arrive, so the offer is
       // hidden rather than made and silently broken.
       emailConfigured={!IS_CLOUD && isEmailConfigured()}
+      // Cloud's own Cognito signup is unaffected either way; self-host hides
+      // the "Create an account" link when the registration policy is
+      // "invite" — the signup page would just show its closed state anyway.
+      signupOpen={IS_CLOUD || REGISTRATION_MODE === "open"}
     />
   );
 }
