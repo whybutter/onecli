@@ -274,3 +274,11 @@ Stack: this worktree, web :10354, api :10356, no gateway (the approvals bell's `
 | GitHub picker         | not exercised live (needs a GitHub App installation); covered by component tests                                                                           |
 
 Nits logged for the fix rounds: unlabeled icon-only buttons (workspace card actions, member row actions, two copy buttons on Install), "App Availability" still in the settings sub-nav, Groups subtitle mentions an identity provider.
+
+### Fix-round re-check (2026-09-15, orchestrator, after `3fa135f`)
+
+- Org rename → switcher: renamed the org on Org General, the sidebar switcher read the new name within the same page (no reload); renamed back, same result. Fixed by moving `useActiveOrg` onto a query keyed by `queryKeys.org.list()` that `useUpdateOrg` invalidates.
+- Workspace settings copy no longer mentions Billing; App Availability removed from the settings sub-nav; Groups subtitle no longer mentions an identity provider; aria-labels added on the workspace-card and member-row action buttons.
+- Still open (nits, not blocking): the two copy buttons on Install remain unlabeled.
+
+Final assembled gate after both fix rounds: `pnpm check` 30/30 tasks + 139 script tests; web 959 passed / 8 skipped; api 2361 passed / 859 skipped.
