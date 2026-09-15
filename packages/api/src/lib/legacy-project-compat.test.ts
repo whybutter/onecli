@@ -195,10 +195,13 @@ describe("the /v1/projects alias answers byte-identically to /v1/workspaces", ()
     expect(await fromAlias.text()).toBe(await fromCanonical.text());
   });
 
-  // Phase 2 of the v2 migration re-mounts the workspace-access router; until
-  // then both the alias and the canonical path 404 (the mirror table above
-  // still pins that they agree), so there is no "reach" to prove yet.
-  it.skip("reaches the EE access surface through the alias (never the router's 404)", async () => {
+  // Phase 2 (WP-A) of the v2 migration re-mounts the workspace-access
+  // router, so the alias now reaches a REAL handler rather than the
+  // router's blanket 404. This test's own db double carries none of the
+  // `workspaceAccess`/`group` models the handler reads, so the request
+  // still fails — just past the router boundary (a 500, not a 404) — which
+  // is exactly what "not the router's 404" is pinning.
+  it("reaches the EE access surface through the alias (never the router's 404)", async () => {
     const res = await app.request(`/v1/projects/${WORKSPACE}/access`, scoped);
     expect(res.status).not.toBe(404);
   });
