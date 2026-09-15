@@ -401,8 +401,8 @@ impl GatewayServer {
                 // extract an identity from — `None`/`false`, always. The
                 // mTLS listener (`crate::mtls::MtlsEntrypoint`) is the only
                 // caller that ever passes `Some`/`true`.
-                if let Err(e) = handle_connection(stream, peer_addr, state, router, None, false)
-                    .await
+                if let Err(e) =
+                    handle_connection(stream, peer_addr, state, router, None, false).await
                 {
                     warn!(peer = %peer_addr, error = ?e, "connection error");
                 }
@@ -1515,10 +1515,7 @@ mod tests {
         // Off/Log never warn, regardless of bind address — enforcement isn't
         // actually denying anything in those modes.
         for mode in [binding::BindingMode::Off, binding::BindingMode::Log] {
-            assert!(!plain_bind_bypasses_binding_enforcement(
-                mode,
-                non_loopback
-            ));
+            assert!(!plain_bind_bypasses_binding_enforcement(mode, non_loopback));
         }
     }
 

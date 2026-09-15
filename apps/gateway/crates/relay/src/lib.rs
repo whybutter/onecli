@@ -8,7 +8,7 @@
 //! port, opens exactly ONE mTLS connection to the remote gateway presenting
 //! the relay's OWN client certificate, and copies bytes between the two
 //! connections verbatim (`tokio::io::copy_bidirectional` — see
-//! [`tunnel::splice`]).
+//! `tunnel::splice`).
 //!
 //! It does NOT parse, rewrite, or even inspect the agent's CONNECT line or
 //! headers. That is the entire security property this crate exists to
@@ -22,9 +22,9 @@
 //!
 //! Consequently the relay holds NO MITM logic, NO database, NO crypto
 //! service, and NO policy. Its only moving parts are: enrollment
-//! ([`enroll`]) to obtain a client certificate without the private key ever
-//! leaving the process, renewal ([`renew`]) to replace that certificate
-//! before it expires, and the splice itself ([`tunnel`]).
+//! (`enroll`) to obtain a client certificate without the private key ever
+//! leaving the process, renewal (`renew`) to replace that certificate
+//! before it expires, and the splice itself (`tunnel`).
 //!
 //! # Trust
 //!
@@ -32,7 +32,7 @@
 //! `--gateway-server-ca` — supplied out of band by the operator, REQUIRED,
 //! and never derived from the enrollment response (that response's `ca_pem`
 //! is the CLIENT CA, a completely different trust anchor — see the
-//! `SECURITY` note on [`enroll::build_client_tls_config`]). Missing or
+//! `SECURITY` note on `enroll::build_client_tls_config`). Missing or
 //! unparseable input here is fail-closed: the relay refuses to start rather
 //! than fall back to an accept-any-server-cert verifier.
 

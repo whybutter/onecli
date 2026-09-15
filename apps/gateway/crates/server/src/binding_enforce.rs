@@ -191,10 +191,8 @@ mod tests {
             .await
             .expect("test ca");
         let policy_engine = std::sync::Arc::new(context::PolicyEngine::test_stub());
-        let vault_service = std::sync::Arc::new(vault::VaultService::new(
-            vec![],
-            policy_engine.pool.clone(),
-        ));
+        let vault_service =
+            std::sync::Arc::new(vault::VaultService::new(vec![], policy_engine.pool.clone()));
 
         GatewayState {
             ca: std::sync::Arc::new(ca),
@@ -258,7 +256,11 @@ mod tests {
         }
     }
 
-    async fn seed_binding_cache(state: &GatewayState, spiffe: &str, row: Option<&db::ClientHostRow>) {
+    async fn seed_binding_cache(
+        state: &GatewayState,
+        spiffe: &str,
+        row: Option<&db::ClientHostRow>,
+    ) {
         state
             .cache
             .set(
@@ -282,8 +284,15 @@ mod tests {
         // would hit the dead test DB and this test would hang/slow down
         // rather than return immediately.
         let id = binding_test_identity("spiffe://onecli/host/off-1");
-        let result =
-            enforce_binding(&state, true, Some(&id), Some("agent-1"), "workspace-A", None).await;
+        let result = enforce_binding(
+            &state,
+            true,
+            Some(&id),
+            Some("agent-1"),
+            "workspace-A",
+            None,
+        )
+        .await;
         assert!(result.is_none(), "Off must allow unconditionally");
     }
 
@@ -293,8 +302,15 @@ mod tests {
         let id = binding_test_identity("spiffe://onecli/host/plain-1");
         // on_mtls = false: must be exempt regardless of mode, unseeded cache,
         // or anything else — the plain listener never had a cert to bind.
-        let result =
-            enforce_binding(&state, false, Some(&id), Some("agent-1"), "workspace-A", None).await;
+        let result = enforce_binding(
+            &state,
+            false,
+            Some(&id),
+            Some("agent-1"),
+            "workspace-A",
+            None,
+        )
+        .await;
         assert!(
             result.is_none(),
             "plain-listener requests are always exempt"
@@ -335,10 +351,16 @@ mod tests {
         )
         .await;
         let id = binding_test_identity(spiffe);
-        let result =
-            enforce_binding(&state, true, Some(&id), Some("agent-1"), "workspace-A", None)
-                .await
-                .expect("mismatched tenant must be denied under Enforce");
+        let result = enforce_binding(
+            &state,
+            true,
+            Some(&id),
+            Some("agent-1"),
+            "workspace-A",
+            None,
+        )
+        .await
+        .expect("mismatched tenant must be denied under Enforce");
         assert_eq!(result.status(), StatusCode::FORBIDDEN);
     }
 
@@ -353,8 +375,15 @@ mod tests {
         )
         .await;
         let id = binding_test_identity(spiffe);
-        let result =
-            enforce_binding(&state, true, Some(&id), Some("agent-1"), "workspace-A", None).await;
+        let result = enforce_binding(
+            &state,
+            true,
+            Some(&id),
+            Some("agent-1"),
+            "workspace-A",
+            None,
+        )
+        .await;
         assert!(
             result.is_none(),
             "Log mode must allow (WouldDeny), never actually deny"
@@ -372,8 +401,15 @@ mod tests {
         )
         .await;
         let id = binding_test_identity(spiffe);
-        let result =
-            enforce_binding(&state, true, Some(&id), Some("agent-1"), "workspace-A", None).await;
+        let result = enforce_binding(
+            &state,
+            true,
+            Some(&id),
+            Some("agent-1"),
+            "workspace-A",
+            None,
+        )
+        .await;
         assert!(result.is_none());
     }
 
@@ -388,10 +424,16 @@ mod tests {
         )
         .await;
         let id = binding_test_identity(spiffe);
-        let result =
-            enforce_binding(&state, true, Some(&id), Some("agent-1"), "workspace-A", None)
-                .await
-                .expect("revoked host must be denied even with a matching workspace");
+        let result = enforce_binding(
+            &state,
+            true,
+            Some(&id),
+            Some("agent-1"),
+            "workspace-A",
+            None,
+        )
+        .await
+        .expect("revoked host must be denied even with a matching workspace");
         assert_eq!(result.status(), StatusCode::FORBIDDEN);
     }
 
@@ -401,10 +443,16 @@ mod tests {
     async fn enforce_binding_unparseable_identity_403s_under_enforce_not_exempt() {
         let state = binding_state(BindingMode::Enforce).await;
         let id = binding_test_unparseable_identity();
-        let result =
-            enforce_binding(&state, true, Some(&id), Some("agent-1"), "workspace-A", None)
-                .await
-                .expect("a verified mTLS cert with no usable identity must be denied");
+        let result = enforce_binding(
+            &state,
+            true,
+            Some(&id),
+            Some("agent-1"),
+            "workspace-A",
+            None,
+        )
+        .await
+        .expect("a verified mTLS cert with no usable identity must be denied");
         assert_eq!(result.status(), StatusCode::FORBIDDEN);
     }
 
@@ -416,10 +464,16 @@ mod tests {
     async fn enforce_binding_db_error_502s_under_enforce_not_403() {
         let state = binding_state(BindingMode::Enforce).await;
         let id = binding_test_identity("spiffe://onecli/host/db-error-1");
-        let result =
-            enforce_binding(&state, true, Some(&id), Some("agent-1"), "workspace-A", None)
-                .await
-                .expect("a lookup failure must fail closed (deny), not silently allow");
+        let result = enforce_binding(
+            &state,
+            true,
+            Some(&id),
+            Some("agent-1"),
+            "workspace-A",
+            None,
+        )
+        .await
+        .expect("a lookup failure must fail closed (deny), not silently allow");
         assert_eq!(
             result.status(),
             StatusCode::BAD_GATEWAY,

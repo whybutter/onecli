@@ -157,7 +157,9 @@ pub async fn attempt_handshake(
     let client = async move {
         let stream = TcpStream::connect(addr).await?;
         let name = ServerName::try_from("localhost").expect("server name");
-        TlsConnector::from(client_config).connect(name, stream).await
+        TlsConnector::from(client_config)
+            .connect(name, stream)
+            .await
     };
 
     let (server_result, _client_result) = tokio::join!(server, client);

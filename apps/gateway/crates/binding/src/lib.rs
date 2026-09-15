@@ -297,7 +297,14 @@ mod tests {
     fn mtls_with_no_identity_is_denied_not_exempt() {
         // Subtlety #1: on_mtls=true but identity=None must DENY, not be
         // treated as if it came in on the plain listener.
-        let decision = evaluate(BindingMode::Enforce, true, None, Ok(None), "workspace-A", None);
+        let decision = evaluate(
+            BindingMode::Enforce,
+            true,
+            None,
+            Ok(None),
+            "workspace-A",
+            None,
+        );
         assert_eq!(
             decision,
             BindingDecision::Deny {

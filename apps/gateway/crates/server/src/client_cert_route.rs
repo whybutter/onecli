@@ -547,7 +547,12 @@ mod tests {
         assert!(!parsed["serial_hex"].as_str().unwrap().is_empty());
         assert!(parsed["not_after_unix"].as_i64().unwrap() > 0);
         // No key field anywhere in the response.
-        let keys: Vec<&str> = parsed.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        let keys: Vec<&str> = parsed
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
         assert_eq!(
             {
                 let mut k = keys.clone();
