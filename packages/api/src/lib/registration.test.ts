@@ -28,6 +28,20 @@ const state = {
   invitations: [] as Invitation[],
 };
 
+/**
+ * A faithful-enough model of Postgres `ILIKE` (what Prisma's
+ * `mode: "insensitive"` compiles to): `_` matches any single character, `%`
+ * matches any run of characters, case-insensitively. The production code
+ * under test uses this as a PRE-filter only — see `assertRegistrationAllowed`
+ * — but the mock has to actually behave like ILIKE, or a test asserting the
+ * strict post-check does anything would be vacuous.
+ */
+const ilikeMatch = (pattern: string, value: string): boolean => {
+  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regexBody = escaped.replace(/%/g, ".*").replace(/_/g, ".");
+  return new RegExp(`^${regexBody}$`, "i").test(value);
+};
+
 const prisma = {
   user: {
     findMany: async ({ take }: { take: number }) => state.users.slice(0, take),
@@ -42,7 +56,7 @@ const prisma = {
       state.accountsByUser[where.userId] ?? 0,
   },
   invitation: {
-    findFirst: async ({
+    findMany: async ({
       where,
     }: {
       where: {
@@ -50,15 +64,15 @@ const prisma = {
         status: string;
         expiresAt: { gt: Date };
       };
-    }) => {
-      const match = state.invitations.find(
-        (i) =>
-          i.email.toLowerCase() === where.email.equals.toLowerCase() &&
-          i.status === where.status &&
-          i.expiresAt > where.expiresAt.gt,
-      );
-      return match ? { id: "inv-1" } : null;
-    },
+    }) =>
+      state.invitations
+        .filter(
+          (i) =>
+            i.status === where.status &&
+            i.expiresAt > where.expiresAt.gt &&
+            ilikeMatch(where.email.equals, i.email),
+        )
+        .map((i) => ({ email: i.email })),
   },
 } as unknown as Parameters<typeof registrationState>[0];
 
@@ -341,6 +355,34 @@ describe("assertRegistrationAllowed", () => {
 
     await expect(
       assertRegistrationAllowed("stranger@example.test", prisma),
+    ).rejects.toMatchObject({
+      body: { code: SIGNUP_REQUIRES_INVITATION },
+    });
+  });
+
+  it("in invite mode, a wildcard-shaped signup email does not admit via a same-length invitation it ILIKE-matches", async () => {
+    // The pre-filter is a real ILIKE (Prisma's `mode: "insensitive"`), and
+    // `_` is both a legal email character AND a single-character wildcard: a
+    // signup for "_____@corp.example" ILIKE-matches ANY 5-character local
+    // part, including a genuine pending invitation for "alice@corp.example".
+    // The pre-filter is allowed to return that row as a candidate — the
+    // post-check must still refuse, because the literal strings differ.
+    state.users = [realUser(1)];
+    state.invitations = [
+      {
+        email: "alice@corp.example",
+        status: "pending",
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    ];
+
+    // Sanity check on the mock itself: the ILIKE pre-filter really does
+    // treat this as a match, so the test is exercising the post-check and
+    // not merely a mock that never returns a candidate.
+    expect(ilikeMatch("_____@corp.example", "alice@corp.example")).toBe(true);
+
+    await expect(
+      assertRegistrationAllowed("_____@corp.example", prisma),
     ).rejects.toMatchObject({
       body: { code: SIGNUP_REQUIRES_INVITATION },
     });

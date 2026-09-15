@@ -47,6 +47,13 @@ const OWNER_EMAIL = `inviter-${randomUUID()}@example.invalid`;
 const UNINVITED_EMAIL = `uninvited-${randomUUID()}@example.invalid`;
 const OPEN_MODE_EMAIL = `open-mode-${randomUUID()}@example.invalid`;
 const INVITED_EMAIL = `invited-${randomUUID()}@example.invalid`;
+// Same LENGTH local part as INVITED_EMAIL, replaced entirely with `_` — a
+// legal email character that is ALSO Postgres ILIKE's single-character
+// wildcard. If the invite gate ever regresses to deciding on the raw
+// `mode: "insensitive"` match instead of a strict post-check, this
+// ILIKE-matches INVITED_EMAIL's pending invitation and gets an account it
+// was never invited to.
+const WILDCARD_INVITED_EMAIL = `${"_".repeat(INVITED_EMAIL.indexOf("@"))}${INVITED_EMAIL.slice(INVITED_EMAIL.indexOf("@"))}`;
 const PASSWORD = "correct horse battery staple";
 
 const seeded: string[] = [];
@@ -103,6 +110,7 @@ describe.skipIf(!PROOF_URL)(
         UNINVITED_EMAIL,
         OPEN_MODE_EMAIL,
         INVITED_EMAIL,
+        WILDCARD_INVITED_EMAIL,
       ];
       const users = await db.user.findMany({
         where: { email: { in: emails } },
@@ -149,35 +157,74 @@ describe.skipIf(!PROOF_URL)(
       ).toBeNull();
     });
 
-    it("(ONECLI_REGISTRATION=open) accepts a sign-up on an instance that already has accounts", async () => {
-      vi.stubEnv("ONECLI_REGISTRATION", "open");
-      vi.resetModules();
-      const { createOnpremAuth: createOpenModeAuth } =
-        await import("./better-auth");
-
-      const auth = createOpenModeAuth({
+    it("(default: invite) an underscore-wildcard email the same length as a real invitation is still refused, and creates nothing", async () => {
+      // Regression for the ILIKE-wildcard bug: `mode: "insensitive"` compiles
+      // to Postgres `ILIKE`, and `_` matches any single character. Signing up
+      // as WILDCARD_INVITED_EMAIL must NOT be treated as holding
+      // INVITED_EMAIL's pending invitation just because it ILIKE-matches it.
+      const auth = createOnpremAuth({
         secret: SECRET,
         baseURL: BASE_URL,
         prisma: withoutLegacyLocalRow(db),
       });
 
       const response = await auth.api.signUpEmail({
-        body: { email: OPEN_MODE_EMAIL, password: PASSWORD, name: "Newcomer" },
+        body: {
+          email: WILDCARD_INVITED_EMAIL,
+          password: PASSWORD,
+          name: "Wildcard",
+        },
         asResponse: true,
       });
 
-      expect(response.status).toBe(200);
-
-      const created = await db.user.findUniqueOrThrow({
-        where: { email: OPEN_MODE_EMAIL },
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({
+        code: SIGNUP_REQUIRES_INVITATION,
       });
-      // The identity every other service resolves users by is stamped in the
-      // same creation hook — sign-up succeeding is not enough, the account
-      // has to be resolvable by the API middleware and the gateway.
-      expect(created.externalAuthId).toMatch(/^ba:/);
+      expect(
+        await db.user.findUnique({ where: { email: WILDCARD_INVITED_EMAIL } }),
+      ).toBeNull();
+    });
 
-      vi.unstubAllEnvs();
+    it("(ONECLI_REGISTRATION=open) accepts a sign-up on an instance that already has accounts", async () => {
+      vi.stubEnv("ONECLI_REGISTRATION", "open");
       vi.resetModules();
+      try {
+        const { createOnpremAuth: createOpenModeAuth } =
+          await import("./better-auth");
+
+        const auth = createOpenModeAuth({
+          secret: SECRET,
+          baseURL: BASE_URL,
+          prisma: withoutLegacyLocalRow(db),
+        });
+
+        const response = await auth.api.signUpEmail({
+          body: {
+            email: OPEN_MODE_EMAIL,
+            password: PASSWORD,
+            name: "Newcomer",
+          },
+          asResponse: true,
+        });
+
+        expect(response.status).toBe(200);
+
+        const created = await db.user.findUniqueOrThrow({
+          where: { email: OPEN_MODE_EMAIL },
+        });
+        // The identity every other service resolves users by is stamped in
+        // the same creation hook — sign-up succeeding is not enough, the
+        // account has to be resolvable by the API middleware and the
+        // gateway.
+        expect(created.externalAuthId).toMatch(/^ba:/);
+      } finally {
+        // In a `finally`, not the happy path's tail: a failed assertion above
+        // must not leave ONECLI_REGISTRATION=open stubbed for every test that
+        // runs after this one in the same worker.
+        vi.unstubAllEnvs();
+        vi.resetModules();
+      }
     });
 
     it("(default: invite) accepts a sign-up for an email holding a real, pending invitation", async () => {
