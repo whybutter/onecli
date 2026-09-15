@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, UsersRound, Eye, Lock, MoreVertical } from "lucide-react";
+import { Plus, UsersRound, MoreVertical } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -10,14 +10,8 @@ import {
   TableHeader,
   TableRow,
 } from "@onecli/ui/components/table";
-import { Badge } from "@onecli/ui/components/badge";
 import { Button } from "@onecli/ui/components/button";
 import { Skeleton } from "@onecli/ui/components/skeleton";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@onecli/ui/components/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,7 +48,7 @@ export const GroupList = () => {
         <div>
           <h2 className="text-lg font-semibold">Member groups</h2>
           <p className="text-muted-foreground text-sm">
-            Managed here or synced from your identity provider.
+            Organize members into groups for group-level access.
           </p>
         </div>
         <Button size="sm" onClick={() => setCreateOpen(true)}>
@@ -88,75 +82,52 @@ export const GroupList = () => {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((group) => {
-                // `source` is read defensively — nothing mints anything but
-                // "manual" today, but this must not assume that forever.
-                const isScim = group.source === "scim";
-                return (
-                  <TableRow key={group.id} className="hover:bg-transparent">
-                    <TableCell className="max-w-xs truncate font-medium">
-                      <span className="flex items-center gap-2">
-                        <span className="truncate">{group.name}</span>
-                        {isScim && (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Badge variant="outline" className="gap-1">
-                                <Lock className="size-3" />
-                                IdP
-                              </Badge>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              Managed by your identity provider. Membership and
-                              name sync from the IdP
-                            </TooltipContent>
-                          </Tooltip>
-                        )}
-                      </span>
-                    </TableCell>
-                    <TableCell className="tabular-nums">
-                      {group.memberCount}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => setMembersTarget(group)}
-                        >
-                          {isScim ? <Eye /> : <UsersRound />}
-                          {isScim ? "View members" : "Manage members"}
-                        </Button>
-                        {!isScim && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon-sm"
-                                aria-label={`Actions for ${group.name}`}
-                              >
-                                <MoreVertical className="size-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => setRenameTarget(group)}
-                              >
-                                Rename
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                variant="destructive"
-                                onClick={() => setDeleteTarget(group)}
-                              >
-                                Delete
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
+              {rows.map((group) => (
+                <TableRow key={group.id} className="hover:bg-transparent">
+                  <TableCell className="max-w-xs truncate font-medium">
+                    {group.name}
+                  </TableCell>
+                  <TableCell className="tabular-nums">
+                    {group.memberCount}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => setMembersTarget(group)}
+                      >
+                        <UsersRound />
+                        Manage members
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Actions for ${group.name}`}
+                          >
+                            <MoreVertical className="size-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={() => setRenameTarget(group)}
+                          >
+                            Rename
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onClick={() => setDeleteTarget(group)}
+                          >
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
             </TableBody>
           </Table>
         )}
