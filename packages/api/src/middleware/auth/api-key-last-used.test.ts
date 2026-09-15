@@ -82,14 +82,11 @@ vi.mock("@onecli/db", () => ({
     },
     organizationMember: {
       findUnique: async () => state.member,
-      findFirst: async () =>
-        state.member ? { organizationId: ORG } : null,
+      findFirst: async () => (state.member ? { organizationId: ORG } : null),
     },
     workspace: {
       findUnique: async ({ where }: { where: { id?: string } }) =>
-        where.id === WORKSPACE
-          ? { id: WORKSPACE, organizationId: ORG }
-          : null,
+        where.id === WORKSPACE ? { id: WORKSPACE, organizationId: ORG } : null,
       findFirst: async ({ where }: { where?: { id?: string } }) =>
         where?.id === undefined || where.id === WORKSPACE
           ? { id: WORKSPACE, organizationId: ORG }
@@ -113,9 +110,7 @@ vi.mock("../../lib/logger", () => {
 });
 
 const { createApiApp } = await import("../../app");
-const { getUserRole } = await import(
-  "../../ee/services/authorization-service"
-);
+const { getUserRole } = await import("../../ee/services/authorization-service");
 const { initStrictApiKeyAuth } = await import("../../providers");
 
 const app = createApiApp(
@@ -242,9 +237,8 @@ describe("the throttle keeps the write off the per-request path", () => {
     await app.request("/v1/user", bearer(WORKSPACE_KEY));
     expect(updateMany).toHaveBeenCalledTimes(1);
 
-    const { API_KEY_LAST_USED_THROTTLE_MS } = await import(
-      "../../services/api-key-service"
-    );
+    const { API_KEY_LAST_USED_THROTTLE_MS } =
+      await import("../../services/api-key-service");
     state.lastUsedAt[WORKSPACE_KEY_ID] = new Date(
       Date.now() - API_KEY_LAST_USED_THROTTLE_MS - 1000,
     );

@@ -65,8 +65,7 @@ const requireConnectionInPool = async (
       metadata: true,
     },
   });
-  if (!connection)
-    throw new ServiceError("NOT_FOUND", "Connection not found.");
+  if (!connection) throw new ServiceError("NOT_FOUND", "Connection not found.");
   return connection;
 };
 

@@ -285,20 +285,20 @@ model Workspace {
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 
-  createdByUser    User?             @relation("WorkspaceCreator", fields: [createdByUserId], references: [id])
-  organization     Organization      @relation(fields: [organizationId], references: [id])
-  apiKeys          ApiKey[]
-  agents           Agent[]
-  secrets          Secret[]
-  policyRulesV2    PolicyRuleV2[]
-  auditLogs        AuditLog[]
-  vaultConnections VaultConnection[]
-  onboardingSurvey OnboardingSurvey?
-  appConnections   AppConnection[]
-  appConfigs       AppConfig[]
-  budgets          Budget[] // cloud-only: per-secret spend budgets for this workspace (inert in OSS)
-  accessBindings   WorkspaceAccess[]
-  skills           Skill[]
+  createdByUser           User?                             @relation("WorkspaceCreator", fields: [createdByUserId], references: [id])
+  organization            Organization                      @relation(fields: [organizationId], references: [id])
+  apiKeys                 ApiKey[]
+  agents                  Agent[]
+  secrets                 Secret[]
+  policyRulesV2           PolicyRuleV2[]
+  auditLogs               AuditLog[]
+  vaultConnections        VaultConnection[]
+  onboardingSurvey        OnboardingSurvey?
+  appConnections          AppConnection[]
+  appConfigs              AppConfig[]
+  budgets                 Budget[] // cloud-only: per-secret spend budgets for this workspace (inert in OSS)
+  accessBindings          WorkspaceAccess[]
+  skills                  Skill[]
   agentDefaultConnections WorkspaceAgentDefaultConnection[]
 
   @@unique([organizationId, slug])
@@ -333,63 +333,63 @@ model User {
   createdAt             DateTime  @default(now()) @map("created_at")
   updatedAt             DateTime  @updatedAt @map("updated_at")
 
-  organizationMemberships       OrganizationMember[]
-  sentInvitations               Invitation[]                  @relation("InvitationCreator")
-  apiKeys                       ApiKey[]
-  auditLogs                     AuditLog[]
-  createdWorkspaces             Workspace[]                   @relation("WorkspaceCreator")
-  onboardingSurveys             OnboardingSurvey[]
-  createdDomains                OrganizationDomain[]          @relation("OrganizationDomainCreator")
-  createdSsoConnections         OrganizationSsoConnection[]   @relation("OrganizationSsoConnectionCreator")
-  createdScimTokens             OrganizationScimToken[]       @relation("OrganizationScimTokenCreator")
-  groupMemberships              GroupMember[]                 @relation("GroupMemberUser")
-  createdGroupMembers           GroupMember[]                 @relation("GroupMemberCreator")
-  workspaceAccess               WorkspaceAccess[]             @relation("WorkspaceAccessUser")
-  createdWorkspaceAccess        WorkspaceAccess[]             @relation("WorkspaceAccessCreator")
-  createdPolicyRulesV2          PolicyRuleV2[]                @relation("PolicyRuleV2Creator")
-  policyRuleIdentities          PolicyRuleIdentity[]          @relation("PolicyRuleIdentityUser")
-  appAvailabilityRuleIdentities AppAvailabilityRuleIdentity[] @relation("AppAvailabilityRuleIdentityUser")
-  createdAppAvailabilityRules   AppAvailabilityRule[]         @relation("AppAvailabilityRuleCreator")
-  directConversations           Conversation[]                @relation("ConversationOwner")
-  authoredTurns                 Turn[]                        @relation("TurnAuthor")
-  uploadedAttachments           ConversationAttachment[]      @relation("AttachmentUploader")
-  createdCrons                  AgentCron[]                   @relation("CronCreator")
-  channelUserLinks              ChannelUserLink[]             @relation("ChannelUserLinkUser")
-  decidedReachGrants            AgentReachGrant[]             @relation("ReachGrantDecider")
-  decidedAgentContacts          AgentContact[]                @relation("AgentContactDecider")
-  createdChannelIntegrations    ChannelIntegration[]          @relation("ChannelIntegrationCreator")
-  createdChannelInstallations   ChannelInstallation[]         @relation("ChannelInstallationCreator")
-  createdAgentChannels          AgentChannel[]                @relation("AgentChannelCreator")
-  memoryRevisionsAuthored       AgentMemoryRevision[]         @relation("MemoryRevisionAuthor")
-  memoryRedactions              AgentMemoryRevision[]         @relation("MemoryRevisionRedactor")
-  skillsCreated                 Skill[]                       @relation("SkillCreator")
-  processesCreated              SandboxProcess[]              @relation("ProcessCreator")
-  watchesCreated                ProcessWatch[]                @relation("WatchCreator")
-  sessions                      Session[]
-  accounts                      Account[]
-  sshKeys                       UserSshKey[]
-  provisionedAs                 UserProvision?                @relation("ProvisionedUser")
-  createdProvisions             UserProvision[]               @relation("ProvisionCreator")
+  organizationMemberships        OrganizationMember[]
+  sentInvitations                Invitation[]                      @relation("InvitationCreator")
+  apiKeys                        ApiKey[]
+  auditLogs                      AuditLog[]
+  createdWorkspaces              Workspace[]                       @relation("WorkspaceCreator")
+  onboardingSurveys              OnboardingSurvey[]
+  createdDomains                 OrganizationDomain[]              @relation("OrganizationDomainCreator")
+  createdSsoConnections          OrganizationSsoConnection[]       @relation("OrganizationSsoConnectionCreator")
+  createdScimTokens              OrganizationScimToken[]           @relation("OrganizationScimTokenCreator")
+  groupMemberships               GroupMember[]                     @relation("GroupMemberUser")
+  createdGroupMembers            GroupMember[]                     @relation("GroupMemberCreator")
+  workspaceAccess                WorkspaceAccess[]                 @relation("WorkspaceAccessUser")
+  createdWorkspaceAccess         WorkspaceAccess[]                 @relation("WorkspaceAccessCreator")
+  createdPolicyRulesV2           PolicyRuleV2[]                    @relation("PolicyRuleV2Creator")
+  policyRuleIdentities           PolicyRuleIdentity[]              @relation("PolicyRuleIdentityUser")
+  appAvailabilityRuleIdentities  AppAvailabilityRuleIdentity[]     @relation("AppAvailabilityRuleIdentityUser")
+  createdAppAvailabilityRules    AppAvailabilityRule[]             @relation("AppAvailabilityRuleCreator")
+  directConversations            Conversation[]                    @relation("ConversationOwner")
+  authoredTurns                  Turn[]                            @relation("TurnAuthor")
+  uploadedAttachments            ConversationAttachment[]          @relation("AttachmentUploader")
+  createdCrons                   AgentCron[]                       @relation("CronCreator")
+  channelUserLinks               ChannelUserLink[]                 @relation("ChannelUserLinkUser")
+  decidedReachGrants             AgentReachGrant[]                 @relation("ReachGrantDecider")
+  decidedAgentContacts           AgentContact[]                    @relation("AgentContactDecider")
+  createdChannelIntegrations     ChannelIntegration[]              @relation("ChannelIntegrationCreator")
+  createdChannelInstallations    ChannelInstallation[]             @relation("ChannelInstallationCreator")
+  createdAgentChannels           AgentChannel[]                    @relation("AgentChannelCreator")
+  memoryRevisionsAuthored        AgentMemoryRevision[]             @relation("MemoryRevisionAuthor")
+  memoryRedactions               AgentMemoryRevision[]             @relation("MemoryRevisionRedactor")
+  skillsCreated                  Skill[]                           @relation("SkillCreator")
+  processesCreated               SandboxProcess[]                  @relation("ProcessCreator")
+  watchesCreated                 ProcessWatch[]                    @relation("WatchCreator")
+  sessions                       Session[]
+  accounts                       Account[]
+  sshKeys                        UserSshKey[]
+  provisionedAs                  UserProvision?                    @relation("ProvisionedUser")
+  createdProvisions              UserProvision[]                   @relation("ProvisionCreator")
   createdAgentDefaultConnections WorkspaceAgentDefaultConnection[] @relation("WorkspaceAgentDefaultConnectionCreator")
 
   @@map("users")
 }
 
 model ApiKey {
-  id             String   @id @default(uuid())
-  scope          String   @default("workspace") // "workspace" | "organization"
-  workspaceId    String?  @map("workspace_id")
-  organizationId String?  @map("organization_id")
-  userId         String   @map("user_id")
-  userEmail      String   @map("user_email")
-  key            String   @unique // "oc_..." or "oc_org_..." prefix
+  id             String    @id @default(uuid())
+  scope          String    @default("workspace") // "workspace" | "organization"
+  workspaceId    String?   @map("workspace_id")
+  organizationId String?   @map("organization_id")
+  userId         String    @map("user_id")
+  userEmail      String    @map("user_email")
+  key            String    @unique // "oc_..." or "oc_org_..." prefix
   name           String?
   // "user" = a person's own key (the CLI/dashboard key — at most one per
   // user+scope, which regenerate/ensure rely on) | "service" = minted by the
   // platform for a machine consumer (e.g. a channel presence's approvals
   // key). Service keys are invisible to the personal-key flows: regenerate,
   // ensure, and the key-listing UI all filter kind "user".
-  kind           String   @default("user") // "user" | "service"
+  kind           String    @default("user") // "user" | "service"
   // Throttled stamp of the key's last successful authentication
   // (`recordApiKeyUse`, api-key-service.ts) — null until first use. Written
   // by both api-key auth branches (workspace and org) after the role/access
@@ -397,8 +397,8 @@ model ApiKey {
   // can never credit the new secret with the old one's traffic. The gateway
   // stamp is a separate, later integration step (phase2-plan risk 8).
   lastUsedAt     DateTime? @map("last_used_at")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   user          User           @relation(fields: [userId], references: [id])
   workspace     Workspace?     @relation(fields: [workspaceId], references: [id])
@@ -1937,26 +1937,26 @@ model OnboardingSurvey {
 // ── App connections ──────────────────────────────────────────────────────
 
 model AppConnection {
-  id                String             @id @default(uuid())
-  scope             String             @default("workspace") // "workspace" | "organization"
-  workspaceId       String?            @map("workspace_id")
-  organizationId    String?            @map("organization_id")
+  id                      String                            @id @default(uuid())
+  scope                   String                            @default("workspace") // "workspace" | "organization"
+  workspaceId             String?                           @map("workspace_id")
+  organizationId          String?                           @map("organization_id")
   // The AppConfig whose credentials minted this connection (OAuth refresh
   // tokens are bound to that client). Null = platform/env credentials, a
   // connection method that needs no config, or minted before this link.
-  appConfigId       String?            @map("app_config_id")
-  provider          String // "github", "gmail", "google-calendar", "google-drive", etc.
-  label             String?            @map("label") // auto-populated from metadata (email/username)
-  status            String             @default("connected")
-  credentials       String?            @map("credentials") // encrypted JSON (access_token, refresh_token, etc.)
-  scopes            String[]           @default([])
-  metadata          Json? // non-secret info (username, org, email)
-  connectedAt       DateTime           @default(now()) @map("connected_at")
-  updatedAt         DateTime           @updatedAt @map("updated_at")
-  workspace         Workspace?         @relation(fields: [workspaceId], references: [id])
-  organization      Organization?      @relation(fields: [organizationId], references: [id])
-  appConfig         AppConfig?         @relation(fields: [appConfigId], references: [id], onDelete: SetNull)
-  policyRuleTargets PolicyRuleTarget[]
+  appConfigId             String?                           @map("app_config_id")
+  provider                String // "github", "gmail", "google-calendar", "google-drive", etc.
+  label                   String?                           @map("label") // auto-populated from metadata (email/username)
+  status                  String                            @default("connected")
+  credentials             String?                           @map("credentials") // encrypted JSON (access_token, refresh_token, etc.)
+  scopes                  String[]                          @default([])
+  metadata                Json? // non-secret info (username, org, email)
+  connectedAt             DateTime                          @default(now()) @map("connected_at")
+  updatedAt               DateTime                          @updatedAt @map("updated_at")
+  workspace               Workspace?                        @relation(fields: [workspaceId], references: [id])
+  organization            Organization?                     @relation(fields: [organizationId], references: [id])
+  appConfig               AppConfig?                        @relation(fields: [appConfigId], references: [id], onDelete: SetNull)
+  policyRuleTargets       PolicyRuleTarget[]
   agentDefaultConnections WorkspaceAgentDefaultConnection[]
 
   @@index([workspaceId, provider])

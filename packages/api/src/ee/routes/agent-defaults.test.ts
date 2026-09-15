@@ -43,6 +43,13 @@ vi.mock("@onecli/db", () => ({
         where.id === WORKSPACE
           ? { id: WORKSPACE, organizationId: "org-1" }
           : null,
+      // requireWorkspaceManagement's own pre-check (WP-A's fix round): reads
+      // the workspace's real org and 404s on a mismatch with the caller's
+      // CURRENT org context, before any manage/access predicate runs.
+      findUnique: async ({ where }: { where: { id: string } }) =>
+        where.id === WORKSPACE
+          ? { id: WORKSPACE, organizationId: "org-1" }
+          : null,
     },
     workspaceAccess: { findFirst: async () => null },
     auditLog: { create: async () => ({}) },

@@ -11,9 +11,6 @@ export const eeResourceHooks: ResourceHooks = {
   beforeCreateAgent: async () => {},
   beforeCreateSecret: async () => {},
   afterCreateAgent: async (organizationId, workspaceId, agentId) => {
-    await applyWorkspaceAgentDefaults(
-      { workspaceId, organizationId },
-      agentId,
-    );
+    await applyWorkspaceAgentDefaults({ workspaceId, organizationId }, agentId);
   },
 };

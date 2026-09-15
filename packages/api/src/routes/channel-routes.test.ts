@@ -779,19 +779,16 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
       kind: "decided",
       status: "executed",
     });
-    const res = await app.request(
-      "/v1/channel-adapter/action-decision",
-      {
-        method: "POST",
-        headers: { ...CHA_AUTH, "content-type": "application/json" },
-        body: JSON.stringify({
-          presenceId: "pr-1",
-          approvalId: "act-1",
-          decision: "approve",
-          clickerExternalUserId: "U1",
-        }),
-      },
-    );
+    const res = await app.request("/v1/channel-adapter/action-decision", {
+      method: "POST",
+      headers: { ...CHA_AUTH, "content-type": "application/json" },
+      body: JSON.stringify({
+        presenceId: "pr-1",
+        approvalId: "act-1",
+        decision: "approve",
+        clickerExternalUserId: "U1",
+      }),
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ kind: "decided", status: "executed" });
     expect(services.decideActionApprovalFromChannel).toHaveBeenCalledWith({
@@ -861,10 +858,10 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
       rotated: 2,
       failed: 1,
     });
-    const res = await app.request(
-      "/v1/channel-adapter/rotate-integrations",
-      { method: "POST", headers: CHA_AUTH },
-    );
+    const res = await app.request("/v1/channel-adapter/rotate-integrations", {
+      method: "POST",
+      headers: CHA_AUTH,
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ rotated: 2, failed: 1 });
     expect(services.rotateStaleIntegrations).toHaveBeenCalledTimes(1);
@@ -885,10 +882,10 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
       { authorization: "Bearer cha_never-registered" },
     ];
     for (const headers of attempts) {
-      const res = await app.request(
-        "/v1/channel-adapter/rotate-integrations",
-        { method: "POST", headers },
-      );
+      const res = await app.request("/v1/channel-adapter/rotate-integrations", {
+        method: "POST",
+        headers,
+      });
       expect(res.status).toBe(401);
     }
     expect(services.rotateStaleIntegrations).not.toHaveBeenCalled();
@@ -998,10 +995,9 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
         createdAt: new Date("2026-08-06T12:00:00.000Z"),
       },
     ]);
-    const res = await app.request(
-      "/v1/channel-adapter/prompts/unsettled",
-      { headers: CHA_AUTH },
-    );
+    const res = await app.request("/v1/channel-adapter/prompts/unsettled", {
+      headers: CHA_AUTH,
+    });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       prompts: { approvalId: string; expiresAt: string | null }[];
@@ -1078,27 +1074,21 @@ describe("/v1/agents/:agentId/channels", () => {
     services.createPresence.mockRejectedValueOnce(
       new ServiceError("UNPROCESSABLE", "Socket Mode isn't available"),
     );
-    const unavailable = await app.request(
-      "/v1/agents/ag-1/channels/slack",
-      {
-        method: "POST",
-        headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ transport: "socket" }),
-      },
-    );
+    const unavailable = await app.request("/v1/agents/ag-1/channels/slack", {
+      method: "POST",
+      headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ transport: "socket" }),
+    });
     expect(unavailable.status).toBe(422);
 
     services.createPresence.mockRejectedValueOnce(
       new ServiceError("CONFLICT", "Setup already started"),
     );
-    const mismatch = await app.request(
-      "/v1/agents/ag-1/channels/slack",
-      {
-        method: "POST",
-        headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ transport: "events" }),
-      },
-    );
+    const mismatch = await app.request("/v1/agents/ag-1/channels/slack", {
+      method: "POST",
+      headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ transport: "events" }),
+    });
     expect(mismatch.status).toBe(409);
   });
 
@@ -1134,19 +1124,16 @@ describe("/v1/agents/:agentId/channels", () => {
       status: "active",
       transport: "socket",
     });
-    const res = await app.request(
-      "/v1/agents/ag-1/channels/slack/complete",
-      {
-        method: "POST",
-        headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({
-          botToken: "xoxb-1",
-          appToken: "xapp-1",
-          appId: "A100",
-          transport: "socket",
-        }),
-      },
-    );
+    const res = await app.request("/v1/agents/ag-1/channels/slack/complete", {
+      method: "POST",
+      headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({
+        botToken: "xoxb-1",
+        appToken: "xapp-1",
+        appId: "A100",
+        transport: "socket",
+      }),
+    });
     expect(res.status).toBe(200);
     expect(services.completePresence).toHaveBeenCalledWith(
       "p1",
@@ -1184,14 +1171,11 @@ describe("/v1/agents/:agentId/channels", () => {
   });
 
   it("rejects a malformed complete body with 422", async () => {
-    const res = await app.request(
-      "/v1/agents/ag-1/channels/slack/complete",
-      {
-        method: "POST",
-        headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ appToken: "xapp-only" }),
-      },
-    );
+    const res = await app.request("/v1/agents/ag-1/channels/slack/complete", {
+      method: "POST",
+      headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ appToken: "xapp-only" }),
+    });
     expect(res.status).toBe(422);
     expect(services.completePresence).not.toHaveBeenCalled();
   });

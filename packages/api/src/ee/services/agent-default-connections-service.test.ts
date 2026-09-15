@@ -102,7 +102,8 @@ vi.mock("@onecli/db", () => ({
       }) => {
         const { workspaceId, connectionId } = where.workspaceId_connectionId;
         const existing = store.defaults.find(
-          (d) => d.workspaceId === workspaceId && d.connectionId === connectionId,
+          (d) =>
+            d.workspaceId === workspaceId && d.connectionId === connectionId,
         );
         if (existing) {
           Object.assign(existing, update);

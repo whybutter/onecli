@@ -53,9 +53,7 @@ vi.mock("@onecli/db", () => ({
       // The role resolver's read (and renameOrganization's own re-check):
       // active at `state.role`, or no row once departed.
       findUnique: async () =>
-        state.membershipActive
-          ? { role: state.role, status: "active" }
-          : null,
+        state.membershipActive ? { role: state.role, status: "active" } : null,
     },
     organization: {
       findUnique: async ({ where }: { where: { id: string } }) => {

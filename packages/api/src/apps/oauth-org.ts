@@ -50,7 +50,10 @@ const requireOrgDoor = async (
     );
   }
   const role = membership.role as keyof typeof ROLE_HIERARCHY;
-  if (!(role in ROLE_HIERARCHY) || ROLE_HIERARCHY[role] < ROLE_HIERARCHY.admin) {
+  if (
+    !(role in ROLE_HIERARCHY) ||
+    ROLE_HIERARCHY[role] < ROLE_HIERARCHY.admin
+  ) {
     return Response.json(
       { error: "Insufficient permissions" },
       { status: 403 },

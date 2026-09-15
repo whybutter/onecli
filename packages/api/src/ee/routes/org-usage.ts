@@ -2,7 +2,10 @@ import { Hono } from "hono";
 import type { ApiEnv } from "../../types";
 import { auth } from "../../middleware/auth";
 import { ServiceError } from "../../services/errors";
-import { getOrganizationUsage, type UsageSummary } from "../services/usage-service";
+import {
+  getOrganizationUsage,
+  type UsageSummary,
+} from "../services/usage-service";
 
 /**
  * `/v1/org/usage` — recorded gateway request volume for the org, split by

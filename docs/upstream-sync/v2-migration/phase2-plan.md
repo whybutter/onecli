@@ -50,16 +50,16 @@ Free files: `validations/policy-rule.ts` (widen `ruleConditionSchema` to `target
 
 ## HTTP contracts (all under `/v1`)
 
-| Router | Routes | Auth | Response types (`apps/web/src/lib/api/types.ts`) |
-| --- | --- | --- | --- |
-| `/org/members` | GET `/` (limit, cursor, q, status); GET `/:userId/groups`; POST `/` `{email, name?}`; DELETE `/:userId`; PATCH `/:userId` exactly one of `{status}` / `{ssoExempt}` | admin | `DirectoryPage<OrgMemberListRow>`, `DirectoryPage<GroupRow>`, `OrgMemberRow`, `UpdateOrgMemberInput` |
-| `/workspaces/:id/access` | GET `/`; PUT `/` full replace | read + `requireWorkspaceManagement` | `WorkspaceAccessBindings`, `SetWorkspaceAccessInput`, `{added, removed, roleChanged}` |
-| `/org/groups` | GET, POST `/`; GET, PATCH, DELETE `/:groupId`; GET, PUT `/:groupId/members`; PUT, DELETE `/:groupId/members/:userId` | admin | `DirectoryPage<GroupRow>`, `GroupRow`, `DirectoryPage<GroupMemberRow>`, `{added, removed}` |
-| `/org/domains` | GET, POST `/`; POST `/:domainId/verify`; DELETE `/:domainId` | admin | `OrgDomain` |
-| `/org/usage` | GET `/` | member, org-scoped credential | `{periodStart, periodEnd, requests, integrationCalls, agents[]}` (from the fork's page) |
-| `/workspaces/:id/agent-defaults` | GET `/`; PUT, DELETE `/connections/:connectionId` | `requireWorkspaceManagement` | `WorkspaceAgentDefault[]` (renamed from the fork) |
-| `PATCH /org` | `{name}` | owner | the existing GET `/org` shape |
-| `/org/budgets` | GET, POST `/`; PATCH, DELETE `/:id` | admin, org-scoped credential | `BudgetListRow[]` (from the fork's hook) |
+| Router                           | Routes                                                                                                                                                              | Auth                                | Response types (`apps/web/src/lib/api/types.ts`)                                                     |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `/org/members`                   | GET `/` (limit, cursor, q, status); GET `/:userId/groups`; POST `/` `{email, name?}`; DELETE `/:userId`; PATCH `/:userId` exactly one of `{status}` / `{ssoExempt}` | admin                               | `DirectoryPage<OrgMemberListRow>`, `DirectoryPage<GroupRow>`, `OrgMemberRow`, `UpdateOrgMemberInput` |
+| `/workspaces/:id/access`         | GET `/`; PUT `/` full replace                                                                                                                                       | read + `requireWorkspaceManagement` | `WorkspaceAccessBindings`, `SetWorkspaceAccessInput`, `{added, removed, roleChanged}`                |
+| `/org/groups`                    | GET, POST `/`; GET, PATCH, DELETE `/:groupId`; GET, PUT `/:groupId/members`; PUT, DELETE `/:groupId/members/:userId`                                                | admin                               | `DirectoryPage<GroupRow>`, `GroupRow`, `DirectoryPage<GroupMemberRow>`, `{added, removed}`           |
+| `/org/domains`                   | GET, POST `/`; POST `/:domainId/verify`; DELETE `/:domainId`                                                                                                        | admin                               | `OrgDomain`                                                                                          |
+| `/org/usage`                     | GET `/`                                                                                                                                                             | member, org-scoped credential       | `{periodStart, periodEnd, requests, integrationCalls, agents[]}` (from the fork's page)              |
+| `/workspaces/:id/agent-defaults` | GET `/`; PUT, DELETE `/connections/:connectionId`                                                                                                                   | `requireWorkspaceManagement`        | `WorkspaceAgentDefault[]` (renamed from the fork)                                                    |
+| `PATCH /org`                     | `{name}`                                                                                                                                                            | owner                               | the existing GET `/org` shape                                                                        |
+| `/org/budgets`                   | GET, POST `/`; PATCH, DELETE `/:id`                                                                                                                                 | admin, org-scoped credential        | `BudgetListRow[]` (from the fork's hook)                                                             |
 
 Errors per Appendix B; cross-org ids are 404. Audit events per Appendix A: MEMBER create/update/delete, WORKSPACE update (workspace-scoped), GROUP create/update/delete, DOMAIN create/verify/delete, ORGANIZATION update, GRANT update/delete, BUDGET create/update/delete.
 
