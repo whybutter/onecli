@@ -119,7 +119,11 @@ describe("self-hosted sign-in screen", () => {
 
     cleanup();
     render(
-      <OnpremLoginContent googleConfigured emailConfigured={false} signupOpen />,
+      <OnpremLoginContent
+        googleConfigured
+        emailConfigured={false}
+        signupOpen
+      />,
     );
     expect(screen.getByRole("button", { name: /Google/ })).toBeTruthy();
     expect(screen.getByPlaceholderText("Password")).toBeTruthy();
@@ -128,7 +132,11 @@ describe("self-hosted sign-in screen", () => {
   it("explains a refused social sign-in that redirected back here", () => {
     searchParams.set("error", "SIGNUP_BLOCKED_BY_UPGRADE");
     render(
-      <OnpremLoginContent googleConfigured emailConfigured={false} signupOpen />,
+      <OnpremLoginContent
+        googleConfigured
+        emailConfigured={false}
+        signupOpen
+      />,
     );
     expect(screen.getByText(/finishing an upgrade/i)).toBeTruthy();
   });

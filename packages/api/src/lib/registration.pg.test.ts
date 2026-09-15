@@ -152,9 +152,8 @@ describe.skipIf(!PROOF_URL)(
     it("(ONECLI_REGISTRATION=open) accepts a sign-up on an instance that already has accounts", async () => {
       vi.stubEnv("ONECLI_REGISTRATION", "open");
       vi.resetModules();
-      const { createOnpremAuth: createOpenModeAuth } = await import(
-        "./better-auth"
-      );
+      const { createOnpremAuth: createOpenModeAuth } =
+        await import("./better-auth");
 
       const auth = createOpenModeAuth({
         secret: SECRET,

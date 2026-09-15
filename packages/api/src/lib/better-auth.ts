@@ -23,7 +23,10 @@ import {
   resolveOriginsFromEnv,
 } from "./public-origins";
 import { resolveCookieDomain } from "./cookie-domain";
-import { assertRegistrationAllowed, assertUpgradeWindowClear } from "./registration";
+import {
+  assertRegistrationAllowed,
+  assertUpgradeWindowClear,
+} from "./registration";
 import { sendPasswordResetEmail } from "../services/password-reset-email";
 
 /**

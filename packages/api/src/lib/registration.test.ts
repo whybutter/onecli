@@ -237,9 +237,7 @@ describe("assertUpgradeWindowClear", () => {
       await assertRegistrationAllowed(email, prisma);
     };
 
-    await expect(
-      runHookOrder("stranger@example.test"),
-    ).rejects.toMatchObject({
+    await expect(runHookOrder("stranger@example.test")).rejects.toMatchObject({
       body: { code: SIGNUP_BLOCKED_BY_UPGRADE },
     });
   });

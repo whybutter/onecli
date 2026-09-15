@@ -209,10 +209,10 @@ describe("self-hosted sign-up screen", () => {
 
   it("shows the invite-only message and no form when closed", () => {
     renderScreen({ closed: true });
+    expect(screen.getByRole("heading", { name: "Invite only" })).toBeTruthy();
     expect(
-      screen.getByRole("heading", { name: "Invite only" }),
+      screen.getByText(/only accepts new accounts by invitation/i),
     ).toBeTruthy();
-    expect(screen.getByText(/only accepts new accounts by invitation/i)).toBeTruthy();
     expect(screen.queryByPlaceholderText("Name")).toBeNull();
     expect(screen.queryByPlaceholderText("Email")).toBeNull();
     expect(screen.queryByPlaceholderText("Password")).toBeNull();
