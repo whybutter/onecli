@@ -90,3 +90,17 @@ Accepted with these decisions:
 4. **Dropbox folder browser** is not planned; the picker in Phase 3 can be GitHub-only first.
 5. **Free-file conflict surface for Phase 2:** `lib/legacy-project-compat.test.ts`, `services/api-key-service.ts`, `middleware/auth/api-key.ts`, `routes/user.ts`, `routes/org.ts`, `routes/agents.ts` (one argument), `providers/hooks/resource-hooks.ts`, `services/agent-service.ts`, `validations/policy-rule.ts`, new `validations/condition-syntax.ts`, `packages/db/prisma/schema.prisma`, two migrations, and the ten tidy files. Record the final list here when the phase closes.
 6. **Merge order into `phase2/api`:** WP-A, then WP-B, then WP-C; the `ee/index.ts` mounts are resolved as pure insertions.
+
+## Phase close-out (2026-09-15)
+
+**Deliberate wire deviations from `apps/web/src/lib/api/types.ts` (vetting note 1):**
+
+- `WorkspaceAgentDefault.scope` is `"workspace" | "organization"` (the fork's type said `"project"`). Phase 3 updates the web type when it ports the settings card.
+- `GET /v1/user/api-key` now returns `{ apiKey, lastUsedAt }` (additive).
+- `POST /v1/org/members` answers an `OrgMemberListRow` (with `ssoExempt: false`), not a separate created-row type.
+- Domain claim cap (25 per org) answers 400, not 409; verification is audited only on the unverified → verified transition; DNS timeouts answer 400 "DNS lookup failed, try again".
+- Members, groups, domains, usage, budgets and org rename require an org-scoped credential (403 for a workspace-scoped key), per the review decision on Phase 0's weakening relative to the fork.
+
+**Free-file conflict surface, final (vetting note 5):** `middleware/auth.ts`, `middleware/auth/api-key.ts`, `services/api-key-service.ts`, `services/agent-service.ts`, `routes/{user,org,agents}.ts`, `providers/hooks/resource-hooks.ts`, `providers/access-checker.ts`, `validations/policy-rule.ts`, new `validations/{condition-syntax,org}.ts`, `lib/legacy-project-compat.test.ts`, the tidy files (`apps/oauth-org.ts`, `routes/{org-skills,runners,org-channels}.ts`, `services/workspace-access-check.ts`, `services/channels/agent-channel-service.ts`, `services/channels/providers/slack/shared-install-service.ts`) and their tests (`middleware/auth.test.ts`, `services/workspace-access-check.test.ts`, `routes/channel-routes.test.ts`, `routes/org-apps.test.ts`, `routes/org.test.ts`, `services/agent-service.test.ts`, `routes/agents.test.ts`), `packages/db/prisma/schema.prisma`, migrations `20260915120000_add_api_key_last_used_at` and `20260915120100_add_workspace_agent_default_connections`, `apps/web/src/lib/actions/resolve-user.ts`, `apps/web/src/lib/components/condition-builder.tsx`. `apps/web/src/lib/nav-config.ts` was deliberately not tidied: its `CAPS.rbac` is the live client-side capability flag, not entitlement.
+
+**Follow-ups carried:** gateway-side `api_keys.last_used_at` stamp in the free `db` crate (keep the 15-minute throttle in lockstep with `API_KEY_LAST_USED_THROTTLE_MS`); OpenAI budgets stored but unenforced until the gateway meter; `invalidateGatewayCacheForOrg` flushes per workspace key, so a workspace with no API key is not flushed (pre-existing); Phase 3 replaces the web's duplicated response types with imports from `@onecli/api`.
