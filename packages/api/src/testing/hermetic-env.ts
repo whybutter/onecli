@@ -54,8 +54,6 @@
  * or deliberately preserved — a new env read fails the suite until placed.
  */
 export const AMBIENT_HAZARD_VARS: readonly string[] = [
-  // Entitlement — flips CAPS.rbac at module load on onprem
-  "ENTERPRISE_ENABLED",
   // Platform trial credit — presence flips container-config advertisement
   "PLATFORM_ANTHROPIC_API_KEY",
   // Secrets

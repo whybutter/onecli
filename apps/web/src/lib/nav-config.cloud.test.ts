@@ -11,7 +11,6 @@ import { describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   process.env.NEXT_PUBLIC_EDITION = "cloud";
   delete process.env.EDITION;
-  delete process.env.ENTERPRISE_ENABLED;
 });
 
 const { getNavItems } = await import("./nav-config");
