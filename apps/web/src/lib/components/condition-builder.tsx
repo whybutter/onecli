@@ -24,7 +24,11 @@ export const ConditionBuilder = ({
   const first = conditions[0];
   const hasCondition =
     first?.target === "body" && first.operator === "contains";
-  const currentValue = hasCondition ? first.value : "";
+  // `value` is optional on the widened `RuleCondition` shape (header `exists`
+  // needs none); this builder only ever authors body+contains, which always
+  // carries one, so default it to "" purely to keep useState's type a plain
+  // string.
+  const currentValue = hasCondition ? (first.value ?? "") : "";
 
   const [enabled, setEnabled] = useState(hasCondition);
   const [value, setValue] = useState(currentValue);

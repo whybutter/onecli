@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The access law (api-ee-behaviour §2.3), Phase 0: direct bindings only.
+// The access law (api-ee-behaviour §2.3): direct AND group bindings.
 // A hand-rolled @onecli/db double records every binding read so the ORDER
 // invariant of the checker (role first, bindings never consulted for a
 // non-member or an admin) is provable, not assumed.
@@ -12,18 +12,40 @@ interface MemberRow {
   status: string;
 }
 
+/** A `workspace_access` row: exactly one of `userId`/`groupId` is set. */
 interface BindingRow {
   workspaceId: string;
-  userId: string;
+  userId?: string;
+  groupId?: string;
   role: string;
+}
+
+interface GroupRow {
+  id: string;
+  organizationId: string;
+}
+
+interface GroupMemberRow {
+  groupId: string;
+  userId: string;
 }
 
 const store = vi.hoisted(() => ({
   members: [] as MemberRow[],
   bindings: [] as BindingRow[],
+  groups: [] as GroupRow[],
+  groupMembers: [] as GroupMemberRow[],
   workspaces: [] as { id: string; organizationId: string }[],
   bindingReads: 0,
 }));
+
+interface WorkspaceAccessWhere {
+  workspaceId: string;
+  userId?: string;
+  role?: string;
+  groupId?: { not: null };
+  group?: { organizationId: string; members: { some: { userId: string } } };
+}
 
 vi.mock("@onecli/db", () => ({
   Prisma: {},
@@ -45,19 +67,37 @@ vi.mock("@onecli/db", () => ({
       },
     },
     workspaceAccess: {
-      findFirst: async ({
-        where,
-      }: {
-        where: { workspaceId: string; userId: string; role?: string };
-      }) => {
+      findFirst: async ({ where }: { where: WorkspaceAccessWhere }) => {
         store.bindingReads += 1;
-        const row = store.bindings.find(
-          (b) =>
-            b.workspaceId === where.workspaceId &&
-            b.userId === where.userId &&
-            (where.role === undefined || b.role === where.role),
-        );
-        return row ? { id: `${row.workspaceId}:${row.userId}` } : null;
+        const row = store.bindings.find((b) => {
+          if (b.workspaceId !== where.workspaceId) return false;
+          // Direct-binding shape: `{ workspaceId, userId[, role] }`.
+          if (where.userId !== undefined) {
+            return (
+              b.userId === where.userId &&
+              (where.role === undefined || b.role === where.role)
+            );
+          }
+          // Group-binding shape: `{ workspaceId, groupId: { not: null },
+          // group: { organizationId, members: { some: { userId } } } }`.
+          if (where.groupId !== undefined && b.groupId) {
+            const group = store.groups.find((g) => g.id === b.groupId);
+            if (
+              !group ||
+              group.organizationId !== where.group?.organizationId
+            ) {
+              return false;
+            }
+            const targetUserId = where.group.members.some.userId;
+            return store.groupMembers.some(
+              (gm) => gm.groupId === b.groupId && gm.userId === targetUserId,
+            );
+          }
+          return false;
+        });
+        return row
+          ? { id: `${row.workspaceId}:${row.userId ?? row.groupId}` }
+          : null;
       },
     },
     workspace: {
@@ -202,13 +242,26 @@ describe("requireRole", () => {
 });
 
 describe("visibleWorkspacesWhere", () => {
-  it("gives admins the whole org and members their bindings", () => {
+  it("gives admins the whole org and members their direct-or-group bindings", () => {
     expect(visibleWorkspacesWhere("u", ORG, "admin")).toEqual({
       organizationId: ORG,
     });
     expect(visibleWorkspacesWhere("u", ORG, "member")).toEqual({
       organizationId: ORG,
-      accessBindings: { some: { userId: "u" } },
+      accessBindings: {
+        some: {
+          OR: [
+            { userId: "u" },
+            {
+              groupId: { not: null },
+              group: {
+                organizationId: ORG,
+                members: { some: { userId: "u" } },
+              },
+            },
+          ],
+        },
+      },
     });
     expect(canManageAllWorkspaces(null)).toBe(false);
   });
@@ -327,13 +380,16 @@ describe("eeWorkspaceAccessChecker (the shared-predicate slot)", () => {
   });
 
   it("admits a member iff they hold a binding", async () => {
+    // "bound" short-circuits on the direct-binding read (1); "plain" misses
+    // the direct read and falls through to the group-arm read too (2) —
+    // three binding reads total, never a shortcut that skips the group arm.
     await expect(
       eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("bound", ref),
     ).resolves.toBe(true);
     await expect(
       eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("plain", ref),
     ).resolves.toBe(false);
-    expect(store.bindingReads).toBe(2);
+    expect(store.bindingReads).toBe(3);
   });
 
   it("userIsOrgAdmin: owner and admin pass, member and suspended admin fail", async () => {
@@ -348,6 +404,78 @@ describe("eeWorkspaceAccessChecker (the shared-predicate slot)", () => {
     ).resolves.toBe(false);
     await expect(
       eeWorkspaceAccessChecker.userIsOrgAdmin("suspended", ORG),
+    ).resolves.toBe(false);
+  });
+});
+
+describe("the GROUP arm (risk 1: never wider than 'a group bound to THIS workspace')", () => {
+  const GROUP = "grp-1";
+  const OTHER_GROUP = "grp-2";
+
+  beforeEach(() => {
+    store.groups = [
+      { id: GROUP, organizationId: ORG },
+      { id: OTHER_GROUP, organizationId: OTHER_ORG },
+    ];
+    store.groupMembers = [{ groupId: GROUP, userId: "grouped" }];
+    store.members.push(member("grouped", "member"));
+    // GROUP is bound to WS only — not to SIBLING_WS.
+    store.bindings.push({ workspaceId: WS, groupId: GROUP, role: "member" });
+  });
+
+  it("a bound group's member can USE the workspace", async () => {
+    await expect(canAccessWorkspace("grouped", WS)).resolves.toBe(true);
+    await expect(
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("grouped", {
+        id: WS,
+        organizationId: ORG,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("a bound group's member can NEVER manage the workspace — group bindings are use-only", async () => {
+    await expect(canManageWorkspace("grouped", WS)).resolves.toBe(false);
+  });
+
+  it("membership in the group grants nothing on a sibling workspace the group is not bound to", async () => {
+    await expect(canAccessWorkspace("grouped", SIBLING_WS)).resolves.toBe(
+      false,
+    );
+  });
+
+  it("a group bound in another org never leaks in, even if the row somehow named it", async () => {
+    // Simulate a data anomaly: a workspace_access row for WS (org ORG)
+    // pointing at a group that actually belongs to OTHER_ORG.
+    store.bindings.push({
+      workspaceId: WS,
+      groupId: OTHER_GROUP,
+      role: "member",
+    });
+    store.groupMembers.push({ groupId: OTHER_GROUP, userId: "cross-org" });
+    store.members.push(member("cross-org", "member"));
+    await expect(canAccessWorkspace("cross-org", WS)).resolves.toBe(false);
+  });
+
+  it("an org member outside the group gets nothing from the group's binding", async () => {
+    // "plain" is a member of ORG but not of GROUP — the group's binding on
+    // WS must not widen into "any org member".
+    await expect(canAccessWorkspace("plain", WS)).resolves.toBe(false);
+  });
+
+  it("a suspended member is denied through a STALE group binding too", async () => {
+    // Mirrors the direct-binding case above ("suspended" + a stale owner
+    // binding): membership in GROUP does not rescue a suspended user —
+    // `getUserRole` is the choke point for both binding kinds.
+    store.members.push(member("grouped-suspended", "member", "suspended"));
+    store.groupMembers.push({ groupId: GROUP, userId: "grouped-suspended" });
+    await expect(canAccessWorkspace("grouped-suspended", WS)).resolves.toBe(
+      false,
+    );
+    await expect(
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("grouped-suspended", {
+        id: WS,
+        organizationId: ORG,
+      }),
     ).resolves.toBe(false);
   });
 });

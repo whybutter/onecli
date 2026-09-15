@@ -57,6 +57,7 @@ vi.mock("@onecli/db", () => ({
         { id: WORKSPACE, name: "Workspace One", organizationId: ORG },
       ],
     },
+    workspaceAccess: { findMany: async () => [] },
     agent: { findMany: async () => [], findFirst: async () => null },
     requestLog: { groupBy: async () => [] },
     appConnection: { findMany: async () => [], findFirst: async () => null },
@@ -195,12 +196,15 @@ describe("the /v1/projects alias answers byte-identically to /v1/workspaces", ()
     expect(await fromAlias.text()).toBe(await fromCanonical.text());
   });
 
-  // Phase 2 of the v2 migration re-mounts the workspace-access router; until
-  // then both the alias and the canonical path 404 (the mirror table above
-  // still pins that they agree), so there is no "reach" to prove yet.
-  it.skip("reaches the EE access surface through the alias (never the router's 404)", async () => {
+  // Phase 2 (WP-A) of the v2 migration re-mounts the workspace-access
+  // router, so the alias now reaches a REAL handler rather than the
+  // router's blanket 404: the org key's admin can manage WORKSPACE (its
+  // fixture org matches), and an empty `workspaceAccess` table is a
+  // perfectly normal (if freshly-created) workspace, not an error.
+  it("reaches the EE access surface through the alias (never the router's 404)", async () => {
     const res = await app.request(`/v1/projects/${WORKSPACE}/access`, scoped);
-    expect(res.status).not.toBe(404);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ users: [], groups: [] });
   });
 
   it("marks every aliased response deprecated", async () => {
