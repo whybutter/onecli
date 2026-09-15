@@ -11,6 +11,7 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 approval = { path = "../approval" }
 apps = { path = "../apps" }
+binding = { path = "../binding" }
 ca = { path = "../ca" }
 cache = { path = "../cache" }
 client-ca = { path = "../client-ca" }
@@ -41,5 +42,6 @@ crypto = { path = "../crypto" }
 rcgen = { workspace = true }
 sqlx = { workspace = true }
 tempfile = { workspace = true }
+time = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }
 x509-parser = { workspace = true }
