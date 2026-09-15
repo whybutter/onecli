@@ -61,9 +61,15 @@ export interface GeneratedLeaf {
 
 /**
  * A throwaway server cert, self-signed for `127.0.0.1` — the mTLS listener's
- * own TLS identity. Tests connect with `rejectUnauthorized: false`: server
- * identity is not what this suite verifies, client-certificate enforcement
- * is.
+ * own TLS identity. `mtls.test.ts`/`binding.test.ts` connect with
+ * `rejectUnauthorized: false` (server identity is not what those suites
+ * verify, client-certificate enforcement is), but `relay.test.ts` dials the
+ * real gateway with a real rustls/webpki client and DOES verify this cert,
+ * which is why it carries an explicit `serverAuth` EKU and
+ * `basicConstraints=CA:FALSE`: modern OpenSSL's `req -x509` defaults a
+ * self-signed cert to `CA:TRUE` even with no `-addext basicConstraints` at
+ * all, and webpki flatly refuses to verify a leaf whose basic constraints
+ * say `CA:TRUE` (`CaUsedAsEndEntity`).
  */
 export const generateServerCert = (dir: string): GeneratedLeaf => {
   const keyPath = join(dir, "server-key.pem");
@@ -86,6 +92,10 @@ export const generateServerCert = (dir: string): GeneratedLeaf => {
     "/CN=127.0.0.1",
     "-addext",
     "subjectAltName=IP:127.0.0.1",
+    "-addext",
+    "extendedKeyUsage=serverAuth",
+    "-addext",
+    "basicConstraints=critical,CA:FALSE",
   ]);
   return {
     certPath,

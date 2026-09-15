@@ -2,7 +2,10 @@ import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { connect as netConnect, createServer as createTcpServer } from "node:net";
+import {
+  connect as netConnect,
+  createServer as createTcpServer,
+} from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,7 +13,12 @@ import { describe, expect } from "vitest";
 
 import { gatewayBinary } from "../src/binary.js";
 import type { GatewayHandle } from "../src/gateway.js";
-import { generateCa, newTempDir, type GeneratedCa } from "../src/mtlsPki.js";
+import {
+  generateCa,
+  generateServerCert,
+  newTempDir,
+  type GeneratedCa,
+} from "../src/mtlsPki.js";
 import { throughProxy } from "../src/proxy.js";
 import { scenario } from "../src/scenario.js";
 
@@ -50,7 +58,11 @@ interface SignedLeaf {
  * every identity field (the SPIFFE URI SAN here) is server-assigned, never
  * read from the CSR itself.
  */
-const signCsr = (ca: GeneratedCa, csrPem: string, hostId: string): SignedLeaf => {
+const signCsr = (
+  ca: GeneratedCa,
+  csrPem: string,
+  hostId: string,
+): SignedLeaf => {
   const dir = mkdtempSync(join(tmpdir(), "onecli-relay-e2e-sign-"));
   try {
     const csrPath = join(dir, "csr.pem");
@@ -101,57 +113,6 @@ const signCsr = (ca: GeneratedCa, csrPem: string, hostId: string): SignedLeaf =>
   }
 };
 
-interface RelayServerCert {
-  readonly certPath: string;
-  readonly keyPath: string;
-}
-
-/**
- * A throwaway self-signed server cert for the real gateway's own mTLS
- * listener identity, trusted directly by the relay via `--gateway-server-ca`
- * (the relay dials it as its OWN trust anchor -- no CA chain involved).
- *
- * Deliberately NOT `mtlsPki.ts`'s `generateServerCert`: that helper's
- * consumer (`mtls.test.ts`) verifies the CLIENT side of the handshake with
- * Node's `tls` module using `rejectUnauthorized: false`, so two things it
- * never needed bite a real rustls/webpki verifier (the relay's):
- *
- *  - an explicit `serverAuth` `extendedKeyUsage`;
- *  - `basicConstraints=CA:FALSE` -- modern OpenSSL's `req -x509` default is
- *    `CA:TRUE` even with no `-addext basicConstraints` at all, and webpki
- *    flatly refuses to verify a leaf whose basic constraints say `CA:TRUE`
- *    (`CaUsedAsEndEntity`), which is exactly what a bare `mtlsPki.ts`-style
- *    self-signed cert would trip here.
- */
-const generateRelayServerCert = (dir: string): RelayServerCert => {
-  const keyPath = join(dir, "relay-server-key.pem");
-  const certPath = join(dir, "relay-server-cert.pem");
-  opensslQuiet([
-    "req",
-    "-x509",
-    "-newkey",
-    "ec",
-    "-pkeyopt",
-    "ec_paramgen_curve:P-256",
-    "-nodes",
-    "-keyout",
-    keyPath,
-    "-out",
-    certPath,
-    "-days",
-    "1",
-    "-subj",
-    "/CN=127.0.0.1",
-    "-addext",
-    "subjectAltName=IP:127.0.0.1",
-    "-addext",
-    "extendedKeyUsage=serverAuth",
-    "-addext",
-    "basicConstraints=critical,CA:FALSE",
-  ]);
-  return { certPath, keyPath };
-};
-
 interface FakeEnrollApi {
   readonly url: string;
   close(): Promise<void>;
@@ -174,7 +135,9 @@ const startFakeEnrollApi = (clientCa: GeneratedCa): Promise<FakeEnrollApi> => {
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
       try {
-        const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const parsed: unknown = JSON.parse(
+          Buffer.concat(chunks).toString("utf8"),
+        );
         const body = parsed as { csrPem?: string; hostId?: string };
         if (typeof body.csrPem !== "string") {
           res.writeHead(400).end("missing csrPem");
@@ -204,7 +167,9 @@ const startFakeEnrollApi = (clientCa: GeneratedCa): Promise<FakeEnrollApi> => {
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       if (address === null || typeof address === "string") {
-        throw new Error("fake enroll API could not determine its bound address");
+        throw new Error(
+          "fake enroll API could not determine its bound address",
+        );
       }
       resolve({
         url: `http://127.0.0.1:${String(address.port)}`,
@@ -250,7 +215,10 @@ interface LogLine {
 
 interface RelayProcess {
   logs(): string;
-  waitForLine(needle: string, timeoutMs?: number): Promise<Record<string, unknown>>;
+  waitForLine(
+    needle: string,
+    timeoutMs?: number,
+  ): Promise<Record<string, unknown>>;
   waitForExit(
     timeoutMs?: number,
   ): Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
@@ -336,7 +304,9 @@ const spawnRelay = (options: RelayOptions): RelayProcess => {
   child.stdout.on("data", push);
   child.stderr.on("data", push);
 
-  let exited: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+  let exited:
+    | { code: number | null; signal: NodeJS.Signals | null }
+    | undefined;
   const exitWaiters = new Set<
     (result: { code: number | null; signal: NodeJS.Signals | null }) => void
   >();
@@ -351,7 +321,9 @@ const spawnRelay = (options: RelayOptions): RelayProcess => {
     waitForLine: (needle, timeoutMs = 10_000) =>
       new Promise((resolve, reject) => {
         const match = messageIncludes(needle);
-        const existing = lines.find((l) => l.parsed !== null && match(l.parsed));
+        const existing = lines.find(
+          (l) => l.parsed !== null && match(l.parsed),
+        );
         if (existing?.parsed) {
           resolve(existing.parsed);
           return;
@@ -405,11 +377,15 @@ const relayBoundPort = async (relay: RelayProcess): Promise<number> => {
   const line = await relay.waitForLine("relay listening");
   const addr = line["addr"];
   if (typeof addr !== "string") {
-    throw new Error(`relay listening line missing a usable addr: ${JSON.stringify(line)}`);
+    throw new Error(
+      `relay listening line missing a usable addr: ${JSON.stringify(line)}`,
+    );
   }
   const port = Number.parseInt(addr.split(":").pop() ?? "", 10);
   if (!Number.isInteger(port) || port <= 0) {
-    throw new Error(`could not parse a port out of the relay's bound address ${addr}`);
+    throw new Error(
+      `could not parse a port out of the relay's bound address ${addr}`,
+    );
   }
   return port;
 };
@@ -450,7 +426,7 @@ describe("relay subcommand", () => {
       let relay: RelayProcess | undefined;
       try {
         const clientCa = generateCa(dir, "Relay E2E Client CA");
-        const serverCert = generateRelayServerCert(dir);
+        const serverCert = generateServerCert(dir);
         fakeApi = await startFakeEnrollApi(clientCa);
 
         const upstream = await cx.upstream();
@@ -483,10 +459,13 @@ describe("relay subcommand", () => {
         });
         const relayPort = await relayBoundPort(relay);
 
-        const res = await throughProxy(`http://127.0.0.1:${String(relayPort)}`, {
-          url: upstream.url("/v1/models"),
-          token: cx.ids.agentToken,
-        });
+        const res = await throughProxy(
+          `http://127.0.0.1:${String(relayPort)}`,
+          {
+            url: upstream.url("/v1/models"),
+            token: cx.ids.agentToken,
+          },
+        );
 
         expect(res.status).toBe(200);
         const [seen] = await upstream.waitForRequests(1);
@@ -564,7 +543,7 @@ describe("relay subcommand", () => {
       let relay: RelayProcess | undefined;
       try {
         const clientCa = generateCa(dir, "Relay E2E Client CA");
-        const serverCert = generateRelayServerCert(dir);
+        const serverCert = generateServerCert(dir);
         // A trust anchor the relay is given that does NOT match the real
         // gateway's server certificate above.
         const wrongServerCa = generateCa(dir, "Relay E2E Wrong Server CA");
