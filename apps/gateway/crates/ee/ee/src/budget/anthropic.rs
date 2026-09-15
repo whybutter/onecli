@@ -123,6 +123,19 @@ impl UsageAccumulator for SseAccumulator {
     }
 
     fn finish(&mut self) -> i64 {
+        // A stream that ends right after its final event, with no trailing
+        // `\n` (the connection simply closes), would otherwise leave that
+        // event sitting unprocessed in `line_buf` and lose its usage — most
+        // commonly the very `message_delta` carrying `output_tokens`. `feed`
+        // already enforces the cap, so whatever remains here is safe to
+        // process as-is.
+        if !self.line_buf.is_empty() {
+            let mut line = std::mem::take(&mut self.line_buf);
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            self.process_line(&line);
+        }
         cost_nanos(&self.usage)
     }
 }
@@ -241,6 +254,38 @@ mod tests {
         let mut acc = SseAccumulator::default();
         acc.feed(&vec![b'x'; MAX_SSE_LINE_BYTES + 1]);
         assert!(acc.line_buf.is_empty());
+    }
+
+    #[test]
+    fn sse_accumulator_accepts_data_with_no_space_after_the_colon() {
+        let mut acc = SseAccumulator::default();
+        acc.feed(
+            br#"data:{"type":"message_start","message":{"model":"claude-haiku-4","usage":{"input_tokens":7}}}"#,
+        );
+        acc.feed(b"\n");
+        assert_eq!(acc.usage.input, 7);
+    }
+
+    #[test]
+    fn sse_accumulator_strips_a_trailing_carriage_return() {
+        let mut acc = SseAccumulator::default();
+        acc.feed(
+            b"data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-haiku-4\",\"usage\":{\"input_tokens\":9}}}\r\n",
+        );
+        assert_eq!(acc.usage.input, 9);
+    }
+
+    #[test]
+    fn stream_ending_mid_line_still_prices_the_last_event() {
+        let mut acc = SseAccumulator::default();
+        acc.feed(
+            br#"data: {"type":"message_start","message":{"model":"claude-opus-4-1","usage":{"input_tokens":1000}}}"#,
+        );
+        acc.feed(b"\n");
+        // The stream simply ends here — no trailing '\n' after the final
+        // event — the way a real connection close would arrive.
+        acc.feed(br#"data: {"type":"message_delta","usage":{"output_tokens":100}}"#);
+        assert_eq!(acc.finish(), 7_500_000); // opus: 1000 in + 100 out.
     }
 
     #[test]
