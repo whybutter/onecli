@@ -19,3 +19,6 @@ pub mod platform_llm;
 pub mod principals;
 pub mod rbac;
 pub mod response;
+
+#[cfg(test)]
+mod test_support;

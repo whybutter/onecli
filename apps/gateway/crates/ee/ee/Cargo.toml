@@ -32,3 +32,13 @@ serde_json = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+# Test-only back-edge (Risk: policy-engine depends on ee in production, so
+# this must never appear under [dependencies]): the licensed principal CTE's
+# parity test compares `find_principal_set` against the free twin
+# `policy_engine::find_direct_user_principals` (re-exported `#[doc(hidden)]`
+# for exactly this purpose — see `policy-engine/src/lib.rs`). Dev-dependency
+# cycles are fine in Cargo; only a normal-dependency cycle would not build.
+[dev-dependencies]
+policy-engine = { path = "../../policy-engine" }
+uuid = { workspace = true }

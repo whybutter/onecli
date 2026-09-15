@@ -1315,6 +1315,7 @@ dependencies = [
  "http-body-util",
  "hyper 1.8.1",
  "inject",
+ "policy-engine",
  "reqwest",
  "serde",
  "serde_json",
@@ -1323,6 +1324,7 @@ dependencies = [
  "telemetry",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
