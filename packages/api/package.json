@@ -25,8 +25,7 @@
     "lint": "eslint --max-warnings 0",
     "lint:fix": "eslint --fix --max-warnings 0",
     "test": "vitest run",
-    "test:licensing": "vitest run src/licensing",
-    "test:scim": "vitest run src/ee/scim src/ee/services/org-directory-service.test.ts src/ee/routes/org-scim-tokens.test.ts"
+    "test:licensing": "vitest run src/licensing"
   },
   "dependencies": {
     "@1password/sdk": "^0.4.0",
