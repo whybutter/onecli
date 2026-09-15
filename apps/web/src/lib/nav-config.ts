@@ -123,8 +123,12 @@ export const getNavItems = (
   if (CAPS.rbac || entitlementKnown) {
     adminGroup.push({ title: "Groups", url: `${p}/groups`, icon: Boxes });
   }
+  // Usage (recorded gateway requests) needs no billing capability — this
+  // fork has no plan tiers, and the page itself is member-visible. Billing
+  // stays behind CAPS.billing, which is permanently false in this
+  // onprem-only fork, so it naturally never renders.
+  adminGroup.push({ title: "Usage", url: `${p}/usage`, icon: BarChart3 });
   if (CAPS.billing) {
-    adminGroup.push({ title: "Usage", url: `${p}/usage`, icon: BarChart3 });
     adminGroup.push({
       title: "Billing",
       url: `${p}/billing`,
