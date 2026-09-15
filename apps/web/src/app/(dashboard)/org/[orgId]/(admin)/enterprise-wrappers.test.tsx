@@ -1,27 +1,16 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
 
-// ── The four admin EE route wrappers, unlicensed arm ────────────────────────
+// ── The four admin route wrappers, post v2-migration Phase 0 ────────────────
 //
-// Each wrapper is the ONLY server gate for org-sso-page and org-domains-page
-// (those inner pages have no self-gate — groups/app-availability do, tested
-// in their own onprem suites). Before this suite, deleting a wrapper's
-// isEntitled branch was invisible to every test. Each arm is
-// mutation-detectable: unlicensed → the locked card renders and the inner
-// page module does NOT; licensed → the inner page renders.
+// `isEntitled()` is now always true, so each wrapper's old
+// `isEntitled() ? <EePage/> : <EnterpriseLockedCard/>` branch collapsed to a
+// plain re-export of its (placeholder) ee page. This replaces the old
+// unlicensed/licensed contract test: there is no more "Enterprise" text
+// anywhere in the UI, and every wrapper renders its inner page
+// unconditionally.
 
-vi.hoisted(() => {
-  // All three deleted BEFORE the module graph loads: NEXT_PUBLIC_EDITION
-  // freezes web CAPS at load, EDITION would silently force isEntitled, and
-  // each test owns ENTERPRISE_ENABLED (isEntitled reads env at call time).
-  delete process.env.NEXT_PUBLIC_EDITION;
-  delete process.env.EDITION;
-  delete process.env.ENTERPRISE_ENABLED;
-});
-
-// Inner ee pages stubbed with testids: rendering the stub means the wrapper
-// let the licensed page through; its absence + the locked card = dark.
 vi.mock("@/ee/groups/groups-page", () => ({
   default: () => <div data-testid="inner-groups" />,
 }));
@@ -42,7 +31,6 @@ import AppAvailabilityWrapper from "./settings/app-availability/page";
 
 const WRAPPERS = [
   { name: "groups", Page: GroupsWrapper, inner: "inner-groups" },
-  { name: "sso", Page: SsoWrapper, inner: "inner-sso" },
   { name: "domains", Page: DomainsWrapper, inner: "inner-domains" },
   {
     name: "app-availability",
@@ -51,26 +39,21 @@ const WRAPPERS = [
   },
 ] as const;
 
-beforeEach(() => vi.stubEnv("ENTERPRISE_ENABLED", ""));
-afterEach(() => {
-  vi.unstubAllEnvs();
-  cleanup();
-});
-
 describe.each(WRAPPERS.map((w) => [w.name, w] as const))(
   "%s wrapper",
   (_name, wrapper) => {
-    it("unlicensed: renders the locked card, never the inner page", () => {
-      render(<wrapper.Page />);
-      expect(screen.getByText("Enterprise")).toBeInTheDocument();
-      expect(screen.queryByTestId(wrapper.inner)).toBeNull();
-    });
-
-    it("licensed: the inner page renders (the gate stands down)", () => {
-      vi.stubEnv("ENTERPRISE_ENABLED", "true");
+    it("always renders the inner (placeholder) page — no more locked state", () => {
       render(<wrapper.Page />);
       expect(screen.getByTestId(wrapper.inner)).toBeInTheDocument();
       expect(screen.queryByText("Enterprise")).toBeNull();
     });
   },
 );
+
+describe("sso wrapper", () => {
+  it("SSO settings is permanently dropped: the placeholder ee page renders unconditionally", () => {
+    render(<SsoWrapper />);
+    expect(screen.getByTestId("inner-sso")).toBeInTheDocument();
+    expect(screen.queryByText("Enterprise")).toBeNull();
+  });
+});

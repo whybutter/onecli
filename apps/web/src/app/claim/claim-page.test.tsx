@@ -1,68 +1,19 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
 
-// ── /claim, unlicensed arm ──────────────────────────────────────────────────
+// ── /claim, post v2-migration Phase 0 ────────────────────────────────────────
 //
-// The dark-reads pin for the web bypass: enterprise-lock covers the /v1
-// provisioning routes, but this page reaches findPendingProvisionByToken
-// through a server component — before the wrapper existed, an unlicensed
-// self-host resolved any claim token and rendered the live org name.
-// Mutation-detectable both ways: unlicensed → locked card AND zero service
-// reads; licensed → the real page runs and reads the token.
-
-vi.hoisted(() => {
-  delete process.env.NEXT_PUBLIC_EDITION;
-  delete process.env.EDITION;
-  delete process.env.ENTERPRISE_ENABLED;
-});
-
-const state = vi.hoisted(() => ({ tokenReads: 0 }));
-
-// The inner page is REAL — only its data edges are stubbed, so the licensed
-// arm proves the wrapper actually lets the flow run (and count reads).
-vi.mock("@onecli/api/ee/services/user-provision-service", () => ({
-  findPendingProvisionByToken: async () => {
-    state.tokenReads += 1;
-    return { organizationName: "Acme" };
-  },
-}));
-vi.mock("@/lib/auth/server", () => ({
-  getServerSession: async () => null,
-}));
-vi.mock("@/ee/team/_components/claim-sign-in", () => ({
-  ClaimSignIn: () => <div data-testid="claim-sign-in" />,
-}));
-vi.mock("@/ee/team/_components/claim-form", () => ({
-  ClaimForm: () => <div data-testid="claim-form" />,
-}));
+// Provisioning/claim links are permanently dropped (invitations + Google
+// login cover it instead). The wrapper is now a plain re-export of the ee
+// placeholder page, which never reads a claim token — replaces the old
+// unlicensed/licensed dark-reads contract test.
 
 import Page from "./page";
 
-const props = { searchParams: Promise.resolve({ token: "tok-1" }) };
-
-beforeEach(() => {
-  state.tokenReads = 0;
-  vi.stubEnv("ENTERPRISE_ENABLED", "");
-});
-afterEach(() => {
-  vi.unstubAllEnvs();
-  cleanup();
-});
-
-describe("/claim wrapper (provisioning dark reads)", () => {
-  it("unlicensed: locked card, token NEVER resolved, org name never fetched", async () => {
-    render(await Page(props));
-    expect(screen.getByText("Enterprise")).toBeInTheDocument();
-    expect(state.tokenReads).toBe(0);
-    expect(screen.queryByTestId("claim-sign-in")).toBeNull();
-  });
-
-  it("licensed: the claim flow runs and resolves the token", async () => {
-    vi.stubEnv("ENTERPRISE_ENABLED", "true");
-    render(await Page(props));
-    expect(state.tokenReads).toBe(1);
-    expect(screen.getByTestId("claim-sign-in")).toBeInTheDocument();
-    expect(screen.queryByText("Enterprise")).toBeNull();
+describe("/claim", () => {
+  it("renders the placeholder without resolving any claim token", async () => {
+    render(await Page({ searchParams: Promise.resolve({ token: "tok-1" }) }));
+    expect(screen.getByText("Claim link")).toBeInTheDocument();
   });
 });

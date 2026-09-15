@@ -1,45 +1,22 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
-// ── /auth/login/sso, unlicensed arm ─────────────────────────────────────────
+// ── /auth/login/sso, post v2-migration Phase 0 ───────────────────────────────
 //
-// Before the wrapper, an unlicensed self-host rendered the full SSO form
-// whose lookup could only 403 (surfacing as a misleading outage message).
-// Now: unlicensed → redirect to the regular login; licensed → the form.
+// SSO is permanently dropped. The route now redirects unconditionally to the
+// regular login rather than branching on entitlement — replaces the old
+// unlicensed/licensed contract test.
 
-vi.hoisted(() => {
-  delete process.env.NEXT_PUBLIC_EDITION;
-  delete process.env.EDITION;
-  delete process.env.ENTERPRISE_ENABLED;
-});
-
-// Throwing redirect mock — a fall-through mock hides bugs (house pattern).
 vi.mock("next/navigation", () => ({
   redirect: (to: string) => {
     throw new Error(`NEXT_REDIRECT:${to}`);
   },
 }));
-vi.mock("@/ee/auth/sso-login-content", () => ({
-  SsoLoginContent: () => <div data-testid="sso-form" />,
-}));
 
 import Page from "./page";
 
-beforeEach(() => vi.stubEnv("ENTERPRISE_ENABLED", ""));
-afterEach(() => {
-  vi.unstubAllEnvs();
-  cleanup();
-});
-
-describe("/auth/login/sso wrapper", () => {
-  it("unlicensed: redirects to the regular login — no dead-end SSO form", () => {
+describe("/auth/login/sso", () => {
+  it("always redirects to the regular login", () => {
     expect(() => Page()).toThrow("NEXT_REDIRECT:/auth/login");
-  });
-
-  it("licensed: renders the SSO form", () => {
-    vi.stubEnv("ENTERPRISE_ENABLED", "true");
-    render(Page());
-    expect(screen.getByTestId("sso-form")).toBeInTheDocument();
   });
 });
