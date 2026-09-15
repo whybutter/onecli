@@ -11,6 +11,7 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 approval = { path = "../approval" }
 apps = { path = "../apps" }
+binding = { path = "../binding" }
 ca = { path = "../ca" }
 cache = { path = "../cache" }
 client-ca = { path = "../client-ca" }
@@ -34,3 +35,7 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 webpki-roots = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+time = { workspace = true }

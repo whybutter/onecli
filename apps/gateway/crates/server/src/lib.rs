@@ -13,6 +13,7 @@
 
 mod vault_api;
 
+pub(crate) mod binding_enforce;
 pub mod entrypoint;
 pub(crate) mod mtls;
 pub use entrypoint::Entrypoint;
@@ -239,6 +240,27 @@ fn parse_plain_bind() -> Result<IpAddr> {
     parse_plain_bind_value(std::env::var("GATEWAY_PLAIN_BIND").ok().as_deref())
 }
 
+/// Whether the plaintext listener's bind address defeats cert↔token binding
+/// enforcement: true when `binding_mode` is `Enforce` AND `plain_bind` is
+/// anything OTHER than loopback. `enforce_binding` exempts the plain listener
+/// by design (see `binding`'s module doc) — that is only safe when the plain
+/// listener itself is unreachable from wherever an attacker sits. Loopback
+/// (`127.0.0.0/8` / `::1`, via `IpAddr::is_loopback`) is the only address
+/// this crate can prove is host-local from the bind address alone; anything
+/// else — including the wildcard `0.0.0.0`/`::` AND a specific-looking but
+/// still off-host-reachable address (a pod/cluster IP) — must warn, since
+/// both are equally reachable from outside this process for the purpose of
+/// skipping the mTLS port entirely. No env access, so this is directly
+/// unit-testable — `main` calls it with `server.plain_bind()` and the
+/// configured `binding::BindingMode`, mirroring how it already uses
+/// `plain_bind()` for the base mTLS-bypass warning.
+pub fn plain_bind_bypasses_binding_enforcement(
+    binding_mode: binding::BindingMode,
+    plain_bind: IpAddr,
+) -> bool {
+    matches!(binding_mode, binding::BindingMode::Enforce) && !plain_bind.is_loopback()
+}
+
 /// Returns true if `host` matches any pattern in `patterns`.
 ///
 /// - `*.example.com` matches `sub.example.com` but NOT `example.com` itself.
@@ -267,6 +289,7 @@ impl GatewayServer {
         cache: Arc<dyn CacheStore>,
         approval_store: Arc<dyn ApprovalStore>,
         client_ca: Option<Arc<client_ca::ClientCa>>,
+        binding_mode: binding::BindingMode,
     ) -> Result<Self> {
         let global_skip = parse_danger_accept_invalid_certs(
             std::env::var("GATEWAY_DANGER_ACCEPT_INVALID_CERTS")
@@ -306,6 +329,7 @@ impl GatewayServer {
             vault_service,
             approval_store,
             client_ca,
+            binding_mode,
         };
 
         Ok(Self {
@@ -938,17 +962,14 @@ where
 
 // ── CONNECT handling ────────────────────────────────────────────────────
 
-/// Handle a CONNECT request: authenticate, resolve policy, then MITM.
-///
-/// `client_identity`/`on_mtls` are threaded through but not yet acted on —
-/// they carry the mTLS listener's verified identity (if any) for a future
-/// cert↔token binding check to consume; this phase only wires the plumbing.
+/// Handle a CONNECT request: authenticate, resolve policy, enforce cert↔token
+/// tenant binding, then MITM.
 async fn handle_connect(
     req: Request<Incoming>,
     peer_addr: SocketAddr,
     state: GatewayState,
-    _client_identity: Option<Arc<client_ca::ClientIdentity>>,
-    _on_mtls: bool,
+    client_identity: Option<Arc<client_ca::ClientIdentity>>,
+    on_mtls: bool,
 ) -> Result<Response<axum::body::Body>, anyhow::Error> {
     let host = req
         .uri()
@@ -988,6 +1009,24 @@ async fn handle_connect(
             return Ok(proxy::response::bad_gateway());
         }
     };
+
+    // Cert-identity ↔ agent-token tenant binding. AFTER `connect::resolve`
+    // (needs the token's workspace/org), BEFORE vault/intercept/spawn — a
+    // denial here must short-circuit before any of that runs. Both proxy
+    // entry points call the SAME `enforce_binding` (see the matching call in
+    // `handle_http_proxy`) so neither can drift from the other.
+    if let Some(denial) = binding_enforce::enforce_binding(
+        &state,
+        on_mtls,
+        client_identity.as_ref(),
+        resp.agent_id.as_deref(),
+        resp.workspace_id.as_deref().unwrap_or_default(),
+        resp.organization_id.as_deref(),
+    )
+    .await
+    {
+        return Ok(denial);
+    }
 
     // Vault fallback: resolved at CONNECT time and passed to mitm as a frozen
     // fallback, but only when DB resolution found no injection for this host.
@@ -1109,14 +1148,16 @@ async fn handle_connect(
 /// directly, applies credential injection, and forwards upstream over the
 /// original scheme (reqwest handles TLS transparently for `https://`).
 ///
-/// `client_identity`/`on_mtls` are threaded through but not yet acted on —
-/// see the same note on [`handle_connect`].
+/// Enforces the same cert↔token tenant binding as [`handle_connect`] via the
+/// shared `binding_enforce::enforce_binding` — absolute-form is the other way
+/// a client reaches an arbitrary host through this proxy, so it is not a
+/// bypass of the binding check either.
 async fn handle_http_proxy(
     req: Request<Incoming>,
     peer_addr: SocketAddr,
     state: GatewayState,
-    _client_identity: Option<Arc<client_ca::ClientIdentity>>,
-    _on_mtls: bool,
+    client_identity: Option<Arc<client_ca::ClientIdentity>>,
+    on_mtls: bool,
 ) -> Result<Response<axum::body::Body>, anyhow::Error> {
     let authority = req
         .uri()
@@ -1164,6 +1205,24 @@ async fn handle_http_proxy(
             return Ok(proxy::response::bad_gateway());
         }
     };
+
+    // Cert-identity ↔ agent-token tenant binding — AFTER `connect::resolve`,
+    // BEFORE app-connection resolution / vault fallback / forwarding. See the
+    // matching call (and its comment) in `handle_connect`; both go through
+    // the ONE shared `enforce_binding` helper so the two entry points can't
+    // drift from each other.
+    if let Some(denial) = binding_enforce::enforce_binding(
+        &state,
+        on_mtls,
+        client_identity.as_ref(),
+        resolved.agent_id.as_deref(),
+        resolved.workspace_id.as_deref().unwrap_or_default(),
+        resolved.organization_id.as_deref(),
+    )
+    .await
+    {
+        return Ok(denial);
+    }
 
     // Per-request app connection disambiguation — app rules MERGE with the
     // secret rules (see inject::merge_injection_rules; #428). When the secret
@@ -1420,6 +1479,37 @@ mod tests {
         // "localhost" is a valid hostname but not an IP literal — parsing it
         // as an IpAddr must fail rather than silently resolve or default.
         assert!(parse_plain_bind_value(Some("localhost")).is_err());
+    }
+
+    // ── plain_bind_bypasses_binding_enforcement ──────────────────────────
+
+    #[test]
+    fn plain_bind_bypass_warns_only_under_enforce_and_non_loopback() {
+        let non_loopback = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+        let loopback = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+
+        assert!(plain_bind_bypasses_binding_enforcement(
+            binding::BindingMode::Enforce,
+            non_loopback
+        ));
+        // A specific-looking but still off-host-reachable address (a
+        // pod/cluster IP) is just as much a bypass as the wildcard.
+        assert!(plain_bind_bypasses_binding_enforcement(
+            binding::BindingMode::Enforce,
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5))
+        ));
+        assert!(!plain_bind_bypasses_binding_enforcement(
+            binding::BindingMode::Enforce,
+            loopback
+        ));
+        // Off/Log never warn, regardless of bind address — enforcement isn't
+        // actually denying anything in those modes.
+        for mode in [binding::BindingMode::Off, binding::BindingMode::Log] {
+            assert!(!plain_bind_bypasses_binding_enforcement(
+                mode,
+                non_loopback
+            ));
+        }
     }
 
     /// Named for what it actually checks. An earlier version looped over both
