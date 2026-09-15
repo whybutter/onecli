@@ -95,9 +95,8 @@ describe("normalizeTestEnv", () => {
   });
 
   it("covers every app-registry credential env var — a new integration must join the list", () => {
-    // Same self-checking shape as licensing/enterprise-lock.test.ts: walk
-    // the registry so a future app's envDefaults cannot silently reopen
-    // the ambient-credential leak.
+    // Self-checking shape: walk the registry so a future app's envDefaults
+    // cannot silently reopen the ambient-credential leak.
     const registryNames = getApps().flatMap((app) =>
       Object.values(app.configurable?.envDefaults ?? {}),
     );

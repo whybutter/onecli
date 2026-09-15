@@ -4,15 +4,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 //
 // Member departure is the deliberate free escape from the otherwise-dark EE
 // surface: a member (or a flat-team admin) removing a membership must keep
-// working with the flag off, or unlicensed orgs could never shed members.
-// Nothing pinned that before — someone adding assertEntitled to removeMember
-// would have silently killed the escape.
+// working, or self-hosted orgs could never shed members.
 //
-// Behavioral, with a recording proxy db (the sso-trust style): the unlicensed
-// departure path completes, the owner-block still holds (it is a domain rule,
-// not a license rule), voluntary leave never revokes the login, and the
-// POSITIVE CONTROL proves this harness would catch a license gate — the gated
-// sibling in the same file (changeMemberRole) does throw it here.
+// Ported from the deleted packages/api/src/licensing/org-departure-free.test.ts
+// (the whole licensed/unlicensed entitlement-toggle harness that test lived in
+// is retired — see docs/upstream-sync/v2-migration/plan.md, Principle 3:
+// there is no more ENTERPRISE_ENABLED and every unlicensed arm collapses to
+// the licensed arm). What survives here is the behavior it pinned: leave-org
+// succeeds, period, and the owner-block is a domain rule, not a license rule.
+//
+// Behavioral, with a recording proxy db (the sso-trust style).
 
 vi.hoisted(() => {
   process.env.SECRET_ENCRYPTION_KEY ??= "test-secret";
@@ -25,7 +26,7 @@ const store = vi.hoisted(() => ({
 
 // A proxy double: every model.method resolves a benign empty, recorded by
 // name; targeted overrides below. Departure touches many tables — what
-// matters here is which gates fire, not row plumbing.
+// matters here is that it completes, not row plumbing.
 vi.mock("@onecli/db", () => {
   const record = (name: string, value: unknown) => async () => {
     store.calls.push(name);
@@ -57,25 +58,20 @@ vi.mock("@onecli/db", () => {
 });
 
 import {
-  changeMemberRole,
   findDeletablePersonalWorkspaces,
   listMembers,
   removeMember,
 } from "../ee/services/team-service";
-import { initEntitlementForTests } from "../lib/entitlements";
-import { enterpriseLicenseMessage } from "../lib/entitlements-guard";
 
 describe("org departure stays free (the deliberate escape)", () => {
   afterEach(() => {
-    initEntitlementForTests(null);
     store.role = "member";
     store.calls = [];
   });
 
-  it("unlicensed removeMember completes — never the license refusal", async () => {
-    initEntitlementForTests(false);
+  it("removeMember completes for a voluntary leave", async () => {
     // Voluntary-leave shape: revokeIdentity:false ⇒ "skipped" — the leaver
-    // keeps their own login, and Cognito is never consulted.
+    // keeps their own login.
     await expect(
       removeMember("org-1", "user-2", { revokeIdentity: false }),
     ).resolves.toBe("skipped");
@@ -83,39 +79,21 @@ describe("org departure stays free (the deliberate escape)", () => {
     expect(store.calls).toContain("organizationMember.delete");
   });
 
-  it("the owner-block is a domain rule, alive with the flag off", async () => {
-    initEntitlementForTests(false);
+  it("the owner-block is a domain rule, not a license rule", async () => {
     store.role = "owner";
     await expect(removeMember("org-1", "user-2")).rejects.toThrow(
       "The organization owner cannot be removed",
     );
   });
 
-  it("unlicensed listMembers answers — the flat-team page's only data source", async () => {
-    // The /v1/org/members ROUTE is licensed (members_directory), so the free
-    // self-host team page reads through this service via the web action
-    // instead. Gating it (an easy confusion with its licensed sibling
-    // listMembersPage in the same file) would blank that page — this arm is
-    // what makes the documented free escape true rather than aspirational.
-    initEntitlementForTests(false);
+  it("listMembers answers — the flat-team page's only data source", async () => {
     await expect(listMembers("org-1")).resolves.toBeDefined();
   });
 
-  it("unlicensed findDeletablePersonalWorkspaces answers — the leave dialog's warning", async () => {
-    // The dialog that tells a leaver which workspaces vanish with them; a
-    // license gate here would make voluntary leave silently lossy.
-    initEntitlementForTests(false);
+  it("findDeletablePersonalWorkspaces answers — the leave dialog's warning", async () => {
+    // The dialog that tells a leaver which workspaces vanish with them.
     await expect(
       findDeletablePersonalWorkspaces("org-1", "user-2"),
     ).resolves.toBeDefined();
-  });
-
-  it("positive control: the gated sibling in the same file DOES refuse here", async () => {
-    // Proves this harness surfaces a license gate — so the passing arms above
-    // mean removeMember truly has none, not that the mock swallowed it.
-    initEntitlementForTests(false);
-    await expect(changeMemberRole("org-1", "user-2", "admin")).rejects.toThrow(
-      enterpriseLicenseMessage("rbac"),
-    );
   });
 });
