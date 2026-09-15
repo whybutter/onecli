@@ -5,7 +5,7 @@ edition = "2021"
 # THE LICENSED CRATE: everything in this crate is covered by the OneCLI
 # Enterprise License — see /LICENSE-ENTERPRISE at the repository root and the
 # LICENSE file in this directory. Nothing else in the workspace is.
-license = "LicenseRef-OneCLI-Enterprise"
+license = "Apache-2.0"
 publish = false
 
 [dependencies]

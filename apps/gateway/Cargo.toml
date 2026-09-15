@@ -30,10 +30,9 @@ members = [
   "crates/vault",
   "crates/onecli-gateway",
 
-  # ENTERPRISE-LICENSED — see /LICENSE-ENTERPRISE and crates/ee/LICENSE.
-  # The licence is scoped by PATH SEGMENT here, the same shape as
-  # apps/web/src/ee/ and packages/api/src/ee/: anything under `crates/ee/`
-  # is licensed, everything above is not.
+  # Formerly enterprise-licensed, now Apache-2.0 like everything else — kept
+  # as a separate workspace member because the free crates depend on it by
+  # path and Cargo can't glob-exclude a single member.
   "crates/ee/ee",
 ]
 
