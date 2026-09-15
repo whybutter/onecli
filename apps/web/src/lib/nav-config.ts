@@ -113,7 +113,8 @@ export const getNavItems = (
   // RBAC builds (cloud) and once the runtime entitlement is known either way.
   // App Availability is org administration and lives under Organization
   // Settings (`getSettingsSections`), beside the other org-wide controls.
-  // Usage + Billing need billing.
+  // Usage is member-visible and needs no billing capability; Billing itself
+  // still needs it.
   const adminGroup: NavItem[] = [
     // "Members" (not "Team"/"Users"): for humans OneCLI is the SP — the label
     // matches the /v1/org/members API resource. The /team URL is historical,
