@@ -10,6 +10,7 @@ import {
 } from "@onecli/ui/components/table";
 import { Badge } from "@onecli/ui/components/badge";
 import type { BudgetListRow } from "@/lib/api/budgets";
+import { isBudgetPeriod } from "@/lib/api/budgets";
 import { BudgetUsageBar } from "./budget-usage-bar";
 import { BudgetRowActions } from "./budget-row-actions";
 
@@ -44,7 +45,7 @@ export const BudgetsList = ({ budgets }: BudgetsListProps) => {
                 <BudgetUsageBar
                   spentCents={b.spentCents}
                   limitCents={b.limitCents}
-                  period={b.period as "monthly" | "total"}
+                  period={isBudgetPeriod(b.period) ? b.period : "monthly"}
                 />
               </TableCell>
               <TableCell>

@@ -13,7 +13,7 @@ import { queryKeys } from "@/lib/api/keys";
 
 export const useAgentDefaults = (workspaceId: string, enabled = true) =>
   useQuery({
-    queryKey: queryKeys.agentDefaults.list(),
+    queryKey: queryKeys.agentDefaults.list(workspaceId),
     queryFn: () => agentDefaults.list(workspaceId),
     enabled: enabled && workspaceId.length > 0,
     retry: false,
@@ -30,7 +30,9 @@ export const useSetAgentDefault = (workspaceId: string) => {
       input: ConnectionGrantInput;
     }) => agentDefaults.set(workspaceId, connectionId, input),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.agentDefaults.all() });
+      qc.invalidateQueries({
+        queryKey: queryKeys.agentDefaults.list(workspaceId),
+      });
     },
     onError: () => toast.error("Failed to update the default"),
   });
@@ -42,7 +44,9 @@ export const useRemoveAgentDefault = (workspaceId: string) => {
     mutationFn: (connectionId: string) =>
       agentDefaults.remove(workspaceId, connectionId),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.agentDefaults.all() });
+      qc.invalidateQueries({
+        queryKey: queryKeys.agentDefaults.list(workspaceId),
+      });
     },
     onError: () => toast.error("Failed to remove the default"),
   });

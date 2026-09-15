@@ -365,7 +365,14 @@ export const WorkspaceAccessDialog = ({
               initialLoading || accessError || !dirty || setAccess.isPending
             }
           >
-            {setAccess.isPending ? "Saving..." : "Save"}
+            {setAccess.isPending ? (
+              <>
+                <Loader2 className="size-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              "Save"
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>
