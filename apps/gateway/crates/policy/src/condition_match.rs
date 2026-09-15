@@ -42,14 +42,20 @@
 //! ## Truncated bodies
 //!
 //! A body over the buffer cap (`ConditionBody::Truncated`) is evaluated on
-//! its observed PREFIX only:
-//! - `contains` / `regex`: a hit inside the prefix is still a definite
-//!   Match (the value assuredly occurs, wherever the rest of the body is);
-//!   a miss is UNKNOWN (the value may sit past the cap) and resolves through
-//!   the failure law above.
-//! - `equals`: always Invalid on a truncated body — the full body is by
-//!   definition longer than the observed prefix, so equality can never be
-//!   soundly decided either way from a prefix alone.
+//! its observed PREFIX only, and only `contains` is MONOTONE under
+//! truncation:
+//! - `contains`: a hit inside the prefix is still a definite Match (the
+//!   value assuredly occurs, wherever the rest of the body is); a miss is
+//!   UNKNOWN (the value may sit past the cap) and resolves through the
+//!   failure law above.
+//! - `equals` / `regex`: always Invalid on a truncated body. `equals`
+//!   because the full body is by definition longer than the observed
+//!   prefix, so equality can never be soundly decided either way from a
+//!   prefix alone. `regex` because a match is NOT monotone under
+//!   truncation — an end anchor (`$`, `\z`) or a trailing `\b` can match the
+//!   observed prefix and then fail once the rest of the body is accounted
+//!   for (or the reverse), so a prefix hit is not sound evidence for the
+//!   full body either.
 //!
 //! A rule's `conditions` may also be a JSON OBJECT — a connection target's
 //! granular session policy (`{repositories: […]}` / `{folders: […]}`), not a
@@ -225,6 +231,15 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 /// module doc's divergence note). Folds both sides over raw bytes — never a
 /// lossy UTF-8 round-trip — so a binary/non-ASCII body still gets a correct,
 /// linear-time substring search over the folded bytes.
+///
+/// Re-folds the haystack per call rather than once per `matches()` — a rule
+/// with several `body contains` conditions pays the fold more than once. Left
+/// as is: it's bounded by the same buffer cap that already bounds every body
+/// condition (at most `ONECLI_CONDITION_BODY_BUFFER_BYTES`, ≤ 8 MiB, per
+/// fold), a rule rarely carries more than a couple of body conditions, and
+/// threading a lazily-folded buffer through `matches`/`eval_condition`/
+/// `eval_body_condition` to dedupe it would add real plumbing for a cost that
+/// is neither unbounded nor on a hot path with many conditions per rule.
 fn contains_bytes_ascii_ci(haystack: &[u8], needle: &[u8]) -> bool {
     let folded_haystack: Vec<u8> = haystack.iter().map(u8::to_ascii_lowercase).collect();
     let folded_needle: Vec<u8> = needle.iter().map(u8::to_ascii_lowercase).collect();
@@ -321,13 +336,22 @@ fn eval_body_condition(cond: &RuleCondition, body: ConditionBody<'_>) -> CondEva
         // against empty.
         ConditionBody::None => eval_operator(&cond.operator, &[], value, true),
         ConditionBody::Full(bytes) => eval_operator(&cond.operator, bytes, value, true),
-        // Truncated: `equals` can never be soundly decided from a prefix
-        // shorter than the real body (vetting decision 3) — always Invalid.
-        // `contains`/`regex` resolve on the observed prefix: a hit is a
-        // definite Match; a miss is UNKNOWN (the value may sit past the cap),
-        // routed through the failure law by returning Invalid.
+        // Truncated: only `contains` is MONOTONE under truncation (a hit in
+        // the observed prefix is assuredly a hit in the full body too, so a
+        // prefix hit is a definite Match; a miss is UNKNOWN — the value may
+        // sit past the cap — and routes through the failure law by returning
+        // Invalid). `equals` and `regex` are always Invalid on a truncated
+        // body (amended vetting decision 3):
+        // - `equals` can never be soundly decided from a prefix shorter than
+        //   the real body.
+        // - `regex` is NOT monotone: an end anchor (`$`, `\z`) or a trailing
+        //   `\b` can match the observed prefix and then fail once the rest of
+        //   the (truncated-away) body is accounted for, or the reverse. A
+        //   prefix hit is therefore not sound evidence for the full body —
+        //   granting an Allow rule on it would be a real unseen-bytes leak,
+        //   not just an over-cautious block.
         ConditionBody::Truncated(bytes) => {
-            if cond.operator == "equals" {
+            if cond.operator != "contains" {
                 return CondEval::Invalid;
             }
             match eval_operator(&cond.operator, bytes, value, true) {
@@ -362,6 +386,23 @@ fn eval_header_condition(cond: &RuleCondition, headers: Option<&hyper::HeaderMap
     let Some(value) = cond.value.as_deref() else {
         return CondEval::Invalid;
     };
+    // Validate the operator (and, for `regex`, pre-compile the pattern)
+    // BEFORE consulting any value. An ABSENT header leaves `values` empty, so
+    // the loop below never runs `eval_operator` at all — without this check,
+    // an unknown operator or an uncompilable regex on a header the request
+    // never sent would silently read as `NoMatch` (falling through the
+    // initial `result` binding) instead of `Invalid`, a fail-OPEN hole for
+    // exactly the "condition can't be evaluated" case the failure law exists
+    // to close.
+    match cond.operator.as_str() {
+        "contains" | "equals" => {}
+        "regex" => {
+            if compiled_regex(value).is_none() {
+                return CondEval::Invalid;
+            }
+        }
+        _ => return CondEval::Invalid,
+    }
     // Any value of a multi-value header satisfies the condition; values are
     // compared case-sensitively on raw bytes (`(?i)` regex for insensitive).
     let mut result = CondEval::NoMatch;
@@ -417,10 +458,17 @@ fn log_unevaluable(rule_name: &str, is_block: bool) {
 
 /// Does the rule's condition set hold for this request? Vacuously true without
 /// behavioral conditions; else ALL conditions must match (AND). Any
-/// unevaluable condition applies the failure law: the rule matches iff it is
-/// a Block rule (see the module doc). `headers` is `None` when the caller has
-/// no header view for this request (e.g. a throwaway matcher built before
-/// headers are available); a header condition is then always `Invalid`.
+/// unevaluable condition applies the failure law: the rule matches unless it
+/// is a plain Allow (see the module doc). Keyed on `action != Allow` rather
+/// than `action == Block`, so a raw `ManualApproval`/`RateLimit` caller —
+/// anything restrictive that isn't a bare Allow — also fails closed on an
+/// Invalid, not just literal `Block`; the live v2 engine never constructs a
+/// throwaway rule with those variants (`polarity_of` collapses every rule to
+/// `Block`/`Allow` first), but this function's own contract shouldn't rely on
+/// every caller doing that translation. `headers` is `None` when the caller
+/// has no header view for this request (e.g. a throwaway matcher built
+/// before headers are available); a header condition is then always
+/// `Invalid`.
 pub fn matches(
     rule: &PolicyRule,
     body: ConditionBody<'_>,
@@ -440,7 +488,7 @@ pub fn matches(
             CondEval::Match => {}
             CondEval::NoMatch => all_match = false,
             CondEval::Invalid => {
-                let is_block = matches!(rule.action, PolicyAction::Block);
+                let is_block = !matches!(rule.action, PolicyAction::Allow);
                 log_unevaluable(&rule.name, is_block);
                 return is_block;
             }
@@ -766,6 +814,37 @@ mod tests {
     }
 
     #[test]
+    fn header_unknown_operator_on_an_absent_header_is_invalid_not_no_match() {
+        // The bug this closes: with an EMPTY `values` list (header absent),
+        // the per-value loop never runs at all, so an unvalidated unknown
+        // operator (or, for `regex`, an uncompilable pattern) would fall
+        // through to the loop's initial NoMatch instead of ever being
+        // checked — silently reading a broken condition as a clean
+        // non-match. A Block rule must still fail closed here.
+        let rule = make_rule(Some(serde_json::json!([
+            {"target": "header", "operator": "missing", "key": "x-approved"}
+        ])));
+        assert!(matches(&rule, ConditionBody::None, None));
+        assert!(matches(
+            &rule,
+            ConditionBody::None,
+            Some(&hyper::HeaderMap::new())
+        ));
+
+        let bad_regex = make_rule(Some(serde_json::json!([
+            {"target": "header", "operator": "regex", "key": "x-approved", "value": "(?<=x)y["}
+        ])));
+        assert!(matches(&bad_regex, ConditionBody::None, None));
+        let allow_bad_regex = rule_with_action(
+            Some(serde_json::json!([
+                {"target": "header", "operator": "regex", "key": "x-approved", "value": "(?<=x)y["}
+            ])),
+            crate::PolicyAction::Allow,
+        );
+        assert!(!matches(&allow_bad_regex, ConditionBody::None, None));
+    }
+
+    #[test]
     fn header_without_key_is_invalid() {
         let rule = make_rule(Some(serde_json::json!([
             {"target": "header", "operator": "equals", "value": "x"}
@@ -905,7 +984,7 @@ mod tests {
     }
 
     #[test]
-    fn truncated_regex_miss_resolves_by_polarity_too() {
+    fn truncated_regex_miss_is_invalid_and_resolves_by_polarity() {
         let conditions = serde_json::json!([
             {"target": "body", "operator": "regex", "value": "wire-transfer"}
         ]);
@@ -914,6 +993,31 @@ mod tests {
         let allow = rule_with_action(Some(conditions), crate::PolicyAction::Allow);
         assert!(matches(&block, prefix, None));
         assert!(!matches(&allow, prefix, None));
+    }
+
+    #[test]
+    fn truncated_regex_is_never_monotone_even_on_a_prefix_hit() {
+        // Amended vetting decision 3: unlike `contains`, `regex` is not
+        // monotone under truncation. `$` matches end-of-input for the
+        // OBSERVED PREFIX, not end of the real body — the prefix hit here is
+        // not sound evidence the full (truncated-away) body still matches
+        // (more bytes could follow and break the anchor), so this must be
+        // Invalid, not a definite Match. A Block still fails closed on the
+        // Invalid; an Allow must not grant on it.
+        let conditions = serde_json::json!([
+            {"target": "body", "operator": "regex", "value": "wire-transfer$"}
+        ]);
+        let prefix = ConditionBody::Truncated(b"please initiate a wire-transfer");
+        let block = make_rule(Some(conditions.clone()));
+        let allow = rule_with_action(Some(conditions), crate::PolicyAction::Allow);
+        assert!(
+            matches(&block, prefix, None),
+            "Block must fail closed even on a prefix hit"
+        );
+        assert!(
+            !matches(&allow, prefix, None),
+            "Allow must not grant on an unsound prefix hit"
+        );
     }
 
     #[test]
