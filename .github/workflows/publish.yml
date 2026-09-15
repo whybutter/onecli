@@ -1,12 +1,12 @@
 # Builds and publishes the OneCLI self-host images — one per
 # docker/<service>.Dockerfile — on every v* tag: multi-arch (amd64 + arm64)
-# manifests at ghcr.io/onecli/onecli-<service>, tagged <version>,
+# manifests at ghcr.io/whybutter/onecli-<service>, tagged <version>,
 # <major>.<minor>, and (non-prerelease tags only) latest — exactly the names
 # docker/docker-compose.yml pulls, so `docker compose up` runs from pre-built
 # images with no source build.
 #
 # Maintainer-owned, kept in lockstep with release.yml: the repository guard on
-# every job makes this workflow a no-op anywhere but onecli/onecli (forks and
+# every job makes this workflow a no-op anywhere but whybutter/onecli (forks and
 # mirrored copies included). Never delete this file — synced copies propagate
 # a deletion.
 name: Publish
@@ -25,14 +25,16 @@ jobs:
     # Display name only — without it every run shows 14 rows of
     # "build (<service>, <arch>)"; this renders "gateway (amd64)" instead.
     name: ${{ matrix.service }} (${{ matrix.arch }})
-    if: github.repository == 'onecli/onecli'
+    if: github.repository == 'whybutter/onecli'
     strategy:
       matrix:
-        # `agent` and `runner` join the stack with hosted agents: the agent image is
-        # the sandbox base, the runner is the daemon that spawns it. `migrations`
-        # is the one-shot schema runner the api gates on. Paths derive by
-        # convention (docker/<service>.Dockerfile).
-        service: [web, gateway, api, migrations, runner, agent, channel-adapter, ssh-terminator]
+        # We only build the four images our compose actually runs: web, api and
+        # gateway are our own code, migrations is the one-shot schema runner the
+        # api gates on. `runner`/`agent`/`channel-adapter`/`ssh-terminator` stay
+        # pointed at upstream's published images (see docker-compose.yml) — we
+        # don't build the hosted-agent stack. Paths derive by convention
+        # (docker/<service>.Dockerfile).
+        service: [web, api, gateway, migrations]
         arch: [amd64, arm64]
         include:
           - arch: amd64
@@ -100,16 +102,18 @@ jobs:
 
   merge:
     name: ${{ matrix.service }} (manifest)
-    if: github.repository == 'onecli/onecli'
+    if: github.repository == 'whybutter/onecli'
     runs-on: ubuntu-latest
     needs: build
     strategy:
       matrix:
-        # `agent` and `runner` join the stack with hosted agents: the agent image is
-        # the sandbox base, the runner is the daemon that spawns it. `migrations`
-        # is the one-shot schema runner the api gates on. Paths derive by
-        # convention (docker/<service>.Dockerfile).
-        service: [web, gateway, api, migrations, runner, agent, channel-adapter, ssh-terminator]
+        # We only build the four images our compose actually runs: web, api and
+        # gateway are our own code, migrations is the one-shot schema runner the
+        # api gates on. `runner`/`agent`/`channel-adapter`/`ssh-terminator` stay
+        # pointed at upstream's published images (see docker-compose.yml) — we
+        # don't build the hosted-agent stack. Paths derive by convention
+        # (docker/<service>.Dockerfile).
+        service: [web, api, gateway, migrations]
     permissions:
       contents: read
       packages: write

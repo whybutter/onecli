@@ -325,7 +325,7 @@ export const DashboardHeader = () => {
               asChild
             >
               <a
-                href="https://github.com/onecli/onecli"
+                href="https://github.com/whybutter/onecli"
                 target="_blank"
                 rel="noopener noreferrer"
               >
