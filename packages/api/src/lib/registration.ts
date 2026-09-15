@@ -6,6 +6,8 @@ import {
 } from "./legacy-local-identity";
 import { logger } from "./logger";
 
+export { REGISTRATION_MODE, type RegistrationMode } from "./env";
+
 /**
  * Who is allowed to create an account on a self-hosted deployment: anyone.
  *
