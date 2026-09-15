@@ -32,13 +32,17 @@ import { useHostedAvailability } from "@/hooks/use-hosted-availability";
 import type { OrgRole } from "@onecli/api/ee/services/authorization-service";
 import { SidebarQuota } from "@/ee/billing/_components/sidebar-quota";
 
-// Members see only their workspaces in the org nav. Every other org-level screen
-// (global connections/rules, team, usage, billing, organization settings) is
-// admin/owner-only. This is an allowlist, not a denylist: any org nav item added
-// later is hidden from members by default until it's listed here — fail closed.
-// Layer 1 of defense-in-depth, alongside the (admin) route-group guard (Layer 2)
-// and the admin-gated server actions + /v1/org/* APIs (Layer 3).
-const MEMBER_ORG_NAV_PATHS = ["/workspaces"];
+// Members see their workspaces AND usage in the org nav — usage is
+// member-visible per its API contract (GET /v1/org/usage, fenced per
+// workspace server-side). Every other org-level screen (global
+// connections/rules, team, billing, organization settings) is admin/owner-
+// only. This is an allowlist, not a denylist: any org nav item added later
+// is hidden from members by default until it's listed here — fail closed.
+// Layer 1 of defense-in-depth, alongside the (admin) route-group guard
+// (Layer 2, which usage now sits outside of — its own membership gate lives
+// on org/[orgId]/layout.tsx instead) and the admin-gated server actions +
+// /v1/org/* APIs (Layer 3).
+const MEMBER_ORG_NAV_PATHS = ["/workspaces", "/usage"];
 
 export const DashboardSidebar = ({
   ...props

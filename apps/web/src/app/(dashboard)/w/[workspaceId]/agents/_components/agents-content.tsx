@@ -52,7 +52,6 @@ export const AgentsContent = ({
   // ONE door — on cloud the org's world decides; self-host keeps the
   // what-you-already-have rule (§3.10 as re-decided 2026-08-23).
   const door = createDoor({
-    agents,
     availability,
     orgByoLegacy: IS_CLOUD ? (org?.byoLegacy ?? null) : null,
     orgByoEnabled: IS_CLOUD ? (org?.byoEnabled ?? null) : null,

@@ -1,15 +1,27 @@
-import { ComingSoonCard } from "@/lib/components/coming-soon-card";
+import type { Metadata } from "next";
+import { redirect } from "next/navigation";
+import { getServerSession } from "@/lib/auth/server";
+import { CreateOrgForm } from "./_components/create-org-form";
+
+export const metadata: Metadata = { title: "Create a new organization" };
+
+/** "{name}'s Org", falling back to the email's local part. */
+const suggestedOrgName = (name: string | undefined, email: string) => {
+  const base = name?.trim() || email.split("@")[0] || "My";
+  return `${base}'s Org`;
+};
 
 /**
- * Phase 0 stand-in for the create-org form. Multi-org has no cap in this
- * fork (v2 migration plan Decision 2), but the create-org UI itself ships
- * in Phase 3.
+ * Create a new organization. No cap and no plan check — multi-org is uncapped
+ * in this edition — so a signed-in user always gets the form.
  */
 export default async function CreateOrgPage() {
+  const session = await getServerSession();
+  if (!session) redirect("/auth/login");
+
   return (
-    <ComingSoonCard
-      title="Create organization"
-      description="Creating additional organizations is available in a later phase."
+    <CreateOrgForm
+      defaultName={suggestedOrgName(session.name, session.email)}
     />
   );
 }

@@ -24,6 +24,7 @@ const getTabRoutes = (pathname: string): Record<string, string> => {
     custom: `${base}/custom`,
     llms: `${base}/llms`,
     vaults: `${base}/vaults`,
+    budgets: `${base}/budgets`,
     connected: `${base}/connected`,
   };
 };
@@ -33,6 +34,7 @@ const pathToTab = (pathname: string): string => {
   if (segment === "custom") return "custom";
   if (segment === "llms") return "llms";
   if (segment === "vaults") return "vaults";
+  if (segment === "budgets") return "budgets";
   if (segment === "connected") return "connected";
   return "apps";
 };
@@ -40,6 +42,10 @@ const pathToTab = (pathname: string): string => {
 interface ConnectionsTabsProps {
   getSecrets?: () => Promise<unknown[]>;
   showVaults?: boolean;
+  /** Org-scoped spend caps tab — wired ONLY from `GlobalConnectionsTabs`.
+   *  Budgets bind to org-owned secrets only (`budget-service.ts`), so the
+   *  per-workspace `ConnectionsTabs` usage must never set this. */
+  showBudgets?: boolean;
   basePath?: string;
   pageScope?: PageScope;
 }
@@ -47,6 +53,7 @@ interface ConnectionsTabsProps {
 export const ConnectionsTabs = ({
   getSecrets,
   showVaults = true,
+  showBudgets = false,
   basePath,
   pageScope = "workspace",
 }: ConnectionsTabsProps) => {
@@ -62,6 +69,7 @@ export const ConnectionsTabs = ({
         custom: `${basePath}/custom`,
         llms: `${basePath}/llms`,
         vaults: `${basePath}/vaults`,
+        budgets: `${basePath}/budgets`,
         connected: `${basePath}/connected`,
       }
     : getTabRoutes(pathname);
@@ -109,6 +117,9 @@ export const ConnectionsTabs = ({
               <span className="sm:hidden">Vaults</span>
               <span className="hidden sm:inline">External Vaults</span>
             </AnimatedTabTrigger>
+          )}
+          {showBudgets && (
+            <AnimatedTabTrigger value="budgets">Budgets</AnimatedTabTrigger>
           )}
         </div>
         <AnimatedTabTrigger

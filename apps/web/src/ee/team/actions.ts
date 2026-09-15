@@ -1,12 +1,19 @@
 "use server";
 
-import { ServiceError } from "@onecli/api/services/errors";
+import { revalidatePath } from "next/cache";
 import {
   getUserRole,
+  requireRole,
   type OrgRole,
 } from "@onecli/api/ee/services/authorization-service";
+import { changeMemberRole } from "@onecli/api/ee/services/team-service";
+import {
+  withAudit,
+  AUDIT_ACTIONS,
+  AUDIT_SERVICES,
+} from "@onecli/api/services/audit-service";
 import { resolveOrgContext } from "@/lib/actions/resolve-user";
-import type { ActionResult } from "@/lib/safe-action";
+import { safeAction, type ActionResult } from "@/lib/safe-action";
 
 /**
  * The caller's role in their active organization, fetched client-side to
@@ -34,18 +41,31 @@ export const getUserOrgRole = async (): Promise<OrgRole> => {
 export const getOrgSubscriptionStatus = async (): Promise<string> => "active";
 
 /**
- * Role changes through the team "Manage access" dialog are Phase 3 work
- * (the dialog itself is a placeholder in Phase 0 — see
- * `_components/manage-access-dialog.tsx`). Throwing here keeps the free
- * Members page compiling and rendering its member list; nothing in Phase 0
- * calls this action from a reachable UI path.
+ * Change a member's role from the "Manage access" dialog. Admin-gated (an
+ * admin may promote/demote a member but not touch the owner — the service
+ * itself refuses that, `changeMemberRole` is owner-immutable); audited as
+ * the one web-layer audit event under `ee/` (the API route equivalent audits
+ * server-side, but this path calls the service directly, so the web layer
+ * must audit it itself). `revalidatePath` refreshes the server-rendered
+ * member list after the dialog closes.
  */
-export const changeTeamMemberRole: (
+export const changeTeamMemberRole = async (
   targetUserId: string,
   newRole: "admin" | "member",
-) => Promise<ActionResult> = async () => {
-  throw new ServiceError(
-    "BAD_REQUEST",
-    "Changing a member's role is not available until Phase 3.",
-  );
-};
+): Promise<ActionResult> =>
+  safeAction(async () => {
+    const { userId, userEmail, organizationId } = await resolveOrgContext();
+    await requireRole(userId, organizationId, "admin");
+    await withAudit(
+      () => changeMemberRole(organizationId, targetUserId, newRole),
+      () => ({
+        organizationId,
+        userId,
+        userEmail,
+        action: AUDIT_ACTIONS.UPDATE,
+        service: AUDIT_SERVICES.MEMBER,
+        metadata: { targetUserId, newRole },
+      }),
+    );
+    revalidatePath("/", "layout");
+  });
