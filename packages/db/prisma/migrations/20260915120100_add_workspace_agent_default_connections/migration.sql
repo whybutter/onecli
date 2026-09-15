@@ -21,7 +21,7 @@ CREATE INDEX "workspace_agent_default_connections_workspace_id_idx" ON "workspac
 CREATE INDEX "workspace_agent_default_connections_connection_id_idx" ON "workspace_agent_default_connections"("connection_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "workspace_agent_default_connections_workspace_id_connection_id_key" ON "workspace_agent_default_connections"("workspace_id", "connection_id");
+CREATE UNIQUE INDEX "workspace_agent_default_connections_workspace_id_connection_key" ON "workspace_agent_default_connections"("workspace_id", "connection_id");
 
 -- AddForeignKey
 ALTER TABLE "workspace_agent_default_connections" ADD CONSTRAINT "workspace_agent_default_connections_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspaces"("id") ON DELETE CASCADE ON UPDATE CASCADE;
