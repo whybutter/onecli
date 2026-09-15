@@ -46,18 +46,14 @@ pub(super) async fn scope(
     creds: &Value,
     policy: Option<&Value>,
 ) -> Option<anyhow::Result<(String, i64)>> {
-    let repos = repositories(policy);
-    let has_repos = repos.as_ref().is_some_and(|r| !r.is_empty());
-
-    if !has_repos {
+    let Some(repos) = repositories(policy).filter(|r| !r.is_empty()) else {
         if super::denies_everything(policy) {
             return Some(Err(anyhow::anyhow!(
                 "empty repository allowlist denies all access; refusing to mint an unscoped token"
             )));
         }
         return None;
-    }
-    let repos = repos.expect("has_repos checked non-empty above");
+    };
 
     let private_key = creds.get("private_key").and_then(Value::as_str);
     let app_id = creds.get("app_id").and_then(Value::as_str);
