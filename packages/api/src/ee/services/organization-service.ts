@@ -62,6 +62,15 @@ export const deleteOrganizationContent = async (
   await tx.userProvision.deleteMany({ where: { organizationId } });
   await tx.budgetSpend.deleteMany({ where: { organizationId } });
   await tx.budget.deleteMany({ where: { organizationId } });
+  // These four FKs are `onDelete: Restrict` (verified by a pg test in
+  // `organization-service.pg.test.ts`), so they must go before the org row
+  // or the delete fails loudly rather than orphaning identity state:
+  // app-availability rules, org domains, the org's one SSO connection, and
+  // its SCIM tokens. `appAvailabilityRuleIdentity` cascades from the rule.
+  await tx.appAvailabilityRule.deleteMany({ where: { organizationId } });
+  await tx.organizationDomain.deleteMany({ where: { organizationId } });
+  await tx.organizationSsoConnection.deleteMany({ where: { organizationId } });
+  await tx.organizationScimToken.deleteMany({ where: { organizationId } });
   await tx.groupRoleMapping.deleteMany({ where: { organizationId } });
   await tx.group.deleteMany({ where: { organizationId } });
   await tx.organizationMember.deleteMany({ where: { organizationId } });
