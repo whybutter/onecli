@@ -314,11 +314,14 @@ export const createOnpremAuth = (options: OnpremAuthOptions) => {
     // - `requireLocalEmailVerified` stays true, so implicit linking still
     //   refuses when the EXISTING account's email is unverified — the common
     //   state on a stock self-host, where no email service runs.
-    //   Registration is open on self-host, so an attacker can pre-register a
-    //   victim's address with a password and wait; refusing unverified-local
-    //   links is what keeps that squatter account from absorbing the
-    //   victim's Google identity. The refused case gets actionable copy
-    //   instead (auth-errors.ts): sign in with the password.
+    //   Whatever ONECLI_REGISTRATION allows in (anyone, in "open" mode; an
+    //   invited or first-account claimant otherwise), a registered address
+    //   is never re-verified after the fact, so an attacker who gets an
+    //   account created can still pre-register a victim's address with a
+    //   password and wait; refusing unverified-local links is what keeps
+    //   that squatter account from absorbing the victim's Google identity.
+    //   The refused case gets actionable copy instead (auth-errors.ts): sign
+    //   in with the password.
     account: {
       accountLinking: {
         enabled: true,
