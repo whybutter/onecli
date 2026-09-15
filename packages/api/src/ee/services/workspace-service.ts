@@ -13,7 +13,10 @@ import {
   slugify,
 } from "../../services/organization-service";
 import { teardownWorkspacePresences } from "../../services/channels/agent-channel-service";
-import { validateDisplayName } from "../../validations/display-name";
+import {
+  DISPLAY_NAME_MIN_LEN,
+  validateDisplayName,
+} from "../../validations/display-name";
 import {
   canManageAllWorkspaces,
   visibleWorkspacesWhere,
@@ -59,6 +62,29 @@ const slugConflict = (slug: string) =>
     "CONFLICT",
     `A workspace with slug "${slug}" already exists`,
   );
+
+/**
+ * Prisma's unique-violation code, matched structurally rather than by class
+ * so a test double's error reads the same as the real client's.
+ */
+const isUniqueViolation = (err: unknown): boolean =>
+  typeof err === "object" &&
+  err !== null &&
+  (err as { code?: unknown }).code === "P2002";
+
+/**
+ * Run a write whose slug uniqueness was pre-checked; a concurrent writer that
+ * wins the race between the check and the write surfaces as the same 409
+ * the pre-check would have answered, never as a 500.
+ */
+const withSlugConflict = async <T>(slug: string, write: () => Promise<T>) => {
+  try {
+    return await write();
+  } catch (err) {
+    if (isUniqueViolation(err)) throw slugConflict(slug);
+    throw err;
+  }
+};
 
 const randomSlugSuffix = customAlphabet(
   "0123456789abcdefghijklmnopqrstuvwxyz",
@@ -270,9 +296,11 @@ export const createWorkspace = async (
   organizationId: string,
 ): Promise<{ id: string; name: string | null; slug: string | null }> => {
   const name = rawName.trim();
+  // `validateDisplayName("")` is null by design (an optional field left
+  // blank), so emptiness is refused here in the validator's own words.
   const problem = name
     ? validateDisplayName(name)
-    : "Workspace name must be at least 2 characters";
+    : `At least ${DISPLAY_NAME_MIN_LEN} characters`;
   if (problem) throw new Error(problem);
 
   const slug = `${slugify(name) || "workspace"}-${randomSlugSuffix()}`;
@@ -347,16 +375,15 @@ export const createOrgWorkspace = async (
   });
   if (!user) throw new ServiceError("NOT_FOUND", "User not found");
 
-  const workspace = await db.workspace.create({
-    data: newWorkspaceData(organizationId, userId, user.email, name, slug),
-    select: workspaceSelect,
-  });
-  await ensureWorkspaceSeeds(workspace.id, userId, user.email);
-  const apiKey = await db.apiKey.findFirst({
-    where: { userId, workspaceId: workspace.id, kind: "user" },
-    select: { key: true },
-  });
-  return { ...workspace, apiKey: apiKey?.key ?? null };
+  // The creator's key is seeded in the same nested create as the row, so it
+  // is read back from that write rather than minted and looked up again.
+  const { apiKeys, ...workspace } = await withSlugConflict(slug, () =>
+    db.workspace.create({
+      data: newWorkspaceData(organizationId, userId, user.email, name, slug),
+      select: { ...workspaceSelect, apiKeys: { select: { key: true } } },
+    }),
+  );
+  return { ...workspace, apiKey: apiKeys[0]?.key ?? null };
 };
 
 /** `PATCH /workspaces/:id`: rename; the slug follows the name. */
@@ -380,11 +407,13 @@ export const updateOrgWorkspace = async (
   });
   if (conflict) throw slugConflict(slug);
 
-  return db.workspace.update({
-    where: { id: targetId },
-    data: { name, slug },
-    select: workspaceSelect,
-  });
+  return withSlugConflict(slug, () =>
+    db.workspace.update({
+      where: { id: targetId },
+      data: { name, slug },
+      select: workspaceSelect,
+    }),
+  );
 };
 
 /**

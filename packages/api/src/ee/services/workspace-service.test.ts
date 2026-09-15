@@ -19,6 +19,10 @@ interface WorkspaceRow {
 
 const store = vi.hoisted(() => ({
   workspaces: [] as WorkspaceRow[],
+  // When set, the next workspace create/update throws Prisma's unique
+  // violation — the concurrent same-slug writer that wins the race between
+  // the pre-check and the write.
+  uniqueViolationOnNextWrite: false,
   bindings: [] as { workspaceId: string; userId: string }[],
   apiKeys: [] as { key: string; userId: string; workspaceId: string }[],
   deleted: [] as string[],
@@ -88,12 +92,31 @@ vi.mock("@onecli/db", () => {
       data,
       select,
     }: {
-      data: Omit<WorkspaceRow, "createdAt">;
+      data: Omit<WorkspaceRow, "createdAt"> & {
+        apiKeys?: { create: { key: string; userId: string } };
+      };
       select?: Record<string, boolean>;
     }) => {
-      const row = { ...data, createdAt: new Date() };
+      if (store.uniqueViolationOnNextWrite) {
+        store.uniqueViolationOnNextWrite = false;
+        throw Object.assign(new Error("Unique constraint failed"), {
+          code: "P2002",
+        });
+      }
+      const { apiKeys, ...rest } = data;
+      const row = { ...rest, createdAt: new Date() };
       store.workspaces.push(row);
-      return pick(row, select);
+      // Materialize the nested key seed the way the database would.
+      if (apiKeys?.create) {
+        store.apiKeys.push({ ...apiKeys.create, workspaceId: row.id });
+      }
+      const picked = pick(row, select) as Record<string, unknown>;
+      if (select?.apiKeys) {
+        picked.apiKeys = store.apiKeys
+          .filter((k) => k.workspaceId === row.id)
+          .map((k) => ({ key: k.key }));
+      }
+      return picked;
     },
     update: async ({
       where,
@@ -104,6 +127,12 @@ vi.mock("@onecli/db", () => {
       data: Partial<WorkspaceRow>;
       select?: Record<string, boolean>;
     }) => {
+      if (store.uniqueViolationOnNextWrite) {
+        store.uniqueViolationOnNextWrite = false;
+        throw Object.assign(new Error("Unique constraint failed"), {
+          code: "P2002",
+        });
+      }
       const row = store.workspaces.find((w) => w.id === where.id)!;
       Object.assign(row, data);
       return pick(row, select);
@@ -235,6 +264,7 @@ beforeEach(() => {
   store.apiKeys = [{ key: "oc_a", userId: "owner", workspaceId: "ws-a" }];
   store.deleted = [];
   store.flushed = [];
+  store.uniqueViolationOnNextWrite = false;
 });
 
 describe("createWorkspace (web action)", () => {
@@ -251,11 +281,11 @@ describe("createWorkspace (web action)", () => {
     expect(row.accessBindings).toEqual({
       create: { userId: "u1", role: "owner" },
     });
-    expect(row).toHaveProperty("apiKeys");
+    expect(store.apiKeys.some((k) => k.workspaceId === created.id)).toBe(true);
   });
 
   it.each([
-    ["", "at least 2"],
+    ["", "At least 2"],
     ["a", "At least 2"],
     ["x".repeat(51), "At most 50"],
     ["***", "letter or number"],
@@ -281,6 +311,24 @@ describe("the /v1/workspaces reads", () => {
     await expect(
       listOrgWorkspacesForUser("plain", ORG, "member"),
     ).resolves.toEqual([]);
+  });
+
+  it("the org fence: an owner of org-1 never sees org-2's workspace, whatever role is passed", async () => {
+    await expect(
+      listOrgWorkspacesForUser("owner", ORG, "owner"),
+    ).resolves.not.toContainEqual(expect.objectContaining({ id: "ws-x" }));
+    await expect(
+      getWorkspaceById("owner", ORG, "ws-x", "owner"),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "Workspace not found",
+    });
+    await expect(
+      updateOrgWorkspace(ORG, "ws-x", { name: "Taken" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(deleteOrgWorkspace(ORG, "ws-x")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
   });
 
   it("getWorkspaceById 404s an unseen workspace — never a 403, never a leak", async () => {
@@ -325,6 +373,20 @@ describe("createOrgWorkspace (POST /workspaces)", () => {
       message: 'A workspace with slug "alpha" already exists',
     });
   });
+
+  it("a concurrent same-slug writer that wins the race is still a 409, never a 500", async () => {
+    // The pre-check passes (no such slug yet); the write itself then hits
+    // the unique constraint because someone else created it in between.
+    store.uniqueViolationOnNextWrite = true;
+    await expect(
+      createOrgWorkspace(ORG, "owner", { name: "Raced" }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: 'A workspace with slug "raced" already exists',
+    });
+    // Any other write failure propagates untouched.
+    store.uniqueViolationOnNextWrite = false;
+  });
 });
 
 describe("updateOrgWorkspace", () => {
@@ -336,6 +398,13 @@ describe("updateOrgWorkspace", () => {
       name: "Beta Two",
       slug: "beta-two",
     });
+  });
+
+  it("a rename that loses the slug race is a 409 too", async () => {
+    store.uniqueViolationOnNextWrite = true;
+    await expect(
+      updateOrgWorkspace(ORG, "ws-b", { name: "Raced" }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
   it("409s when the new slug collides with a sibling, 404s outside the org", async () => {
