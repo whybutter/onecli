@@ -252,3 +252,25 @@ Accepted as written, with these decisions:
 6. **Shared-file ownership:** `lib/nav-config.ts` → WP-B (Usage entry unconditional; WP-C does not touch it); `ee/settings/actions.ts` → WP-A (adds `createOrganizationAction` for WP-C's create-org page); `lib/api/types.ts` → WP-C (merged last, sole editor); `lib/api/keys.ts` → WP-B (appends `budgets`, `usage`, `agentDefaults`); each `app/**/page.tsx` wrapper belongs to the WP that owns the page. Merge order A → B → C.
 7. **Type imports** come from `@onecli/api/ee/...` paths that the existing `./ee/*` export glob already covers; the only `packages/api` change allowed this phase is the one-line `SetWorkspaceAccessInput` type export if it is missing.
 8. **Browser QA** runs against this worktree on ports 10354 (web) / 10356 (api) / 10355 (gateway) with a scratch database migrated from `integration/phase1-2`, never against the main checkout's :10254 stack. The orchestrator runs it after the three WPs merge.
+
+## Browser QA record (2026-09-15, orchestrator)
+
+Stack: this worktree, web :10354, api :10356, no gateway (the approvals bell's `/gw` poll therefore logs a 500 on every page; not a Phase 3 defect), scratch database `onecli_phase3_qa` cloned from the Phase 2 e2e template. Owner account created through the real signup.
+
+| Surface               | Result                                                                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Overview API key card | masked `oc_931••••ed7d`, reveal control, "Never used"                                                                                                      |
+| Groups                | create, members dialog (filter, select all/clear, checkbox rows), count updates; aria-labels present                                                       |
+| Domains               | claim, TXT record `onecli-verification=<token>` at `@ (domain)`, Verify → "TXT record not found yet…" guidance on the 400, Remove present                  |
+| Org General           | owner sees editable name, ID copy, Save enabled only when dirty; rename persisted and audited; **sidebar org label stale until reload** (fix round)        |
+| Create org            | real form, redirect to the new org's default workspace, no cap                                                                                             |
+| Workspaces list       | actions menu → Share workspace → real dialog (people with role select, groups with counts); group binding persisted and audited                            |
+| Workspace settings    | access card reflects "1 group"; agent-defaults card with honest empty state; delete disabled for the only workspace; **copy mentions Billing** (fix round) |
+| Budgets tab           | under Global Connections; create dialog with secret/cap/period fields and metered-secret empty state                                                       |
+| Usage                 | member-visible route, two stat cards, "recorded gateway requests" caveat with explainer                                                                    |
+| Install page          | key masked inside the manual command with "Reveal API key"; CLI pointed at the api-server origin                                                           |
+| Agents                | single BYO "Create agent" door; dialog asks name + identifier                                                                                              |
+| Members               | owner row has no role affordance; member row → Manage access → role-only dialog → Admin; persisted, audited, row updates in place                          |
+| GitHub picker         | not exercised live (needs a GitHub App installation); covered by component tests                                                                           |
+
+Nits logged for the fix rounds: unlabeled icon-only buttons (workspace card actions, member row actions, two copy buttons on Install), "App Availability" still in the settings sub-nav, Groups subtitle mentions an identity provider.
