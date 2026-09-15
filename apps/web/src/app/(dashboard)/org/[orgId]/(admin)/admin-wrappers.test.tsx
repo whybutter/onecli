@@ -2,26 +2,28 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-// ── The four admin route wrappers, post v2-migration Phase 0 ────────────────
+// ── The admin route wrappers, post v2-migration Phase 0 ─────────────────────
 //
-// `isEntitled()` is now always true, so each wrapper's old
+// `isEntitled()` is now always true, so each locked-page wrapper's old
 // `isEntitled() ? <EePage/> : <EnterpriseLockedCard/>` branch collapsed to a
-// plain re-export of its (placeholder) ee page. This replaces the old
-// unlicensed/licensed contract test: there is no more "Enterprise" text
-// anywhere in the UI, and every wrapper renders its inner page
-// unconditionally.
+// plain re-export of its (placeholder) ee page. Permanently dropped surfaces
+// (SSO settings) redirect instead of rendering a placeholder — see
+// `settings/sso/page.tsx`. This replaces the old unlicensed/licensed
+// contract test: there is no more "Enterprise" text anywhere in the UI.
 
 vi.mock("@/ee/groups/groups-page", () => ({
   default: () => <div data-testid="inner-groups" />,
-}));
-vi.mock("@/ee/settings/org-sso-page", () => ({
-  default: () => <div data-testid="inner-sso" />,
 }));
 vi.mock("@/ee/settings/org-domains-page", () => ({
   default: () => <div data-testid="inner-domains" />,
 }));
 vi.mock("@/ee/app-availability/app-availability-page", () => ({
   default: () => <div data-testid="inner-app-availability" />,
+}));
+vi.mock("next/navigation", () => ({
+  redirect: (to: string) => {
+    throw new Error(`NEXT_REDIRECT:${to}`);
+  },
 }));
 
 import GroupsWrapper from "./groups/page";
@@ -51,9 +53,9 @@ describe.each(WRAPPERS.map((w) => [w.name, w] as const))(
 );
 
 describe("sso wrapper", () => {
-  it("SSO settings is permanently dropped: the placeholder ee page renders unconditionally", () => {
-    render(<SsoWrapper />);
-    expect(screen.getByTestId("inner-sso")).toBeInTheDocument();
-    expect(screen.queryByText("Enterprise")).toBeNull();
+  it("SSO is permanently dropped: redirects to org settings instead of a placeholder", async () => {
+    await expect(
+      SsoWrapper({ params: Promise.resolve({ orgId: "org-1" }) }),
+    ).rejects.toThrow("NEXT_REDIRECT:/org/org-1/settings/general");
   });
 });

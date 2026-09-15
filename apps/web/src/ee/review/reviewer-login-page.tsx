@@ -1,15 +1,10 @@
-import { ComingSoonCard } from "@/lib/components/coming-soon-card";
+import { notFound } from "next/navigation";
 
 /**
  * The app-store-reviewer login backdoor is a cloud-ops surface with no
- * onprem equivalent — placeholder rather than a 404 so a stray bookmark
- * gets an explanation instead of a dead end.
+ * onprem equivalent — a plain 404, same convention as `billing-route.tsx`
+ * for every permanently dropped surface.
  */
 export default function ReviewerLoginPage() {
-  return (
-    <ComingSoonCard
-      title="Reviewer login"
-      description="This login is not part of this build."
-    />
-  );
+  notFound();
 }
