@@ -1,15 +1,30 @@
 import type { Hono } from "hono";
 import type { ApiEnv } from "../types";
+import { orgDomainRoutes } from "./routes/org-domains";
+import { orgGroupRoutes } from "./routes/org-groups";
+import { orgMemberRoutes } from "./routes/org-members";
+import { workspaceAccessRoutes } from "./routes/workspace-access";
 
 export type RegisterEeRoutes = (app: Hono<ApiEnv>) => void;
 
 /**
  * Enterprise route registration, mounted under `/v1` by `createApiApp`.
  *
- * Phase 0 of the v2 migration mounts nothing: every router the licensed tree
- * used to add here (org members, groups, domains, workspace access, …) is
- * rebuilt in a later phase. Until then those URLs answer with Hono's 404,
- * which is the same posture an unlicensed self-host had (a 403/404 gate in
- * front of every one of them).
+ * Phase 2 (WP-A) of the v2 migration starts populating this: the RBAC
+ * directory surface (org members, groups, workspace access) and org domains.
+ * One `app.route(...)` per line, alphabetical by prefix, so a textual merge
+ * of the three work packages' insertions never conflicts. There is no
+ * `requireEnterprise` middleware in this fork (unlike the licensed tree —
+ * see `phase2-plan.md` correction 4): every route here answers unconditionally,
+ * gated only by the auth middleware's `role` option and, where the spec
+ * calls for it, the no-op `assertFeatureAllowed`/`assertCanShareWorkspace`
+ * seams in `quota-service.ts`.
  */
-export const registerEeRoutes: RegisterEeRoutes = () => {};
+export const registerEeRoutes: RegisterEeRoutes = (app) => {
+  app.route("/org/domains", orgDomainRoutes());
+  app.route("/org/groups", orgGroupRoutes());
+  app.route("/org/members", orgMemberRoutes());
+  // Composes onto the free `workspaceRoutes()` base path — GET/PUT
+  // `/workspaces/:id/access` — rather than owning `/workspaces` itself.
+  app.route("/workspaces", workspaceAccessRoutes());
+};

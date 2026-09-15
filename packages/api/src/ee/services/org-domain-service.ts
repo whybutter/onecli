@@ -1,0 +1,250 @@
+import { randomBytes } from "node:crypto";
+import { resolveTxt } from "node:dns/promises";
+import { domainToASCII } from "node:url";
+import { db } from "@onecli/db";
+import { ServiceError } from "../../services/errors";
+
+/**
+ * The organization's claimed email domains — api-ee-behaviour §8.1, ported
+ * verbatim (this fork ships domains). `OrganizationDomain.verifiedAt` is the
+ * whole state machine: null = claimed-but-pending, non-null = verified.
+ * There is deliberately no "failed" state — a DNS miss throws and leaves the
+ * row untouched, since a miss now may be a hit thirty seconds from now.
+ *
+ * Every read/write is scoped to ONE organization, `findFirst`/`updateMany`/
+ * `deleteMany({ id, organizationId })`, so a cross-org id reads as absent
+ * (404) — except uniqueness, which is GLOBAL: `OrganizationDomain.domain` is
+ * `@unique` across every org, verified or not, because a domain is a single
+ * claim on a namespace no two tenants can share.
+ */
+
+/** The wire shape (matches the client's `OrgDomain`). */
+export interface OrgDomainRow {
+  id: string;
+  domain: string;
+  verificationToken: string;
+  verifiedAt: string | null;
+  createdAt: string;
+}
+
+interface DomainRecord {
+  id: string;
+  domain: string;
+  verificationToken: string;
+  verifiedAt: Date | null;
+  createdAt: Date;
+}
+
+const SELECT = {
+  id: true,
+  domain: true,
+  verificationToken: true,
+  verifiedAt: true,
+  createdAt: true,
+} as const;
+
+const toRow = (row: DomainRecord): OrgDomainRow => ({
+  id: row.id,
+  domain: row.domain,
+  verificationToken: row.verificationToken,
+  verifiedAt: row.verifiedAt?.toISOString() ?? null,
+  createdAt: row.createdAt.toISOString(),
+});
+
+// ─── Normalization ──────────────────────────────────────────────────────────
+
+/** `([a-z0-9-]+.)+[a-z0-9-]{2,}` — labels plus a 2+ char TLD; no bare label. */
+const DOMAIN_RE = /^([a-z0-9-]+\.)+[a-z0-9-]{2,}$/;
+
+/**
+ * Trim, lowercase, strip one trailing DNS-root dot, IDNA/punycode to ASCII
+ * (`münchen.de` → `xn--mnchen-3ya.de`), then shape-check. `null` when the
+ * value is not a domain at all (a URL, an email, an IP, a bare label).
+ */
+const normalizeDomain = (raw: string): string | null => {
+  let value = raw.trim().toLowerCase();
+  if (value.endsWith(".")) value = value.slice(0, -1);
+  if (!value) return null;
+
+  const ascii = domainToASCII(value);
+  if (!ascii) return null;
+  if (!DOMAIN_RE.test(ascii)) return null;
+  return ascii;
+};
+
+/**
+ * Public mailbox providers can never be claimed — an org "claiming"
+ * gmail.com would let it steer every gmail.com address into its own SSO.
+ */
+const PUBLIC_MAILBOX_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "msn.com",
+  "yahoo.com",
+  "ymail.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "aol.com",
+  "proton.me",
+  "protonmail.com",
+  "pm.me",
+  "gmx.com",
+  "gmx.net",
+  "mail.com",
+  "zoho.com",
+  "yandex.com",
+  "yandex.ru",
+  "fastmail.com",
+  "hey.com",
+  "tutanota.com",
+  "tuta.io",
+]);
+
+/** The comparison key SSO trust and enforcement key on: same normalization,
+ * applied to the part after the last `@`. `null` when absent/invalid. */
+export const emailDomainOf = (email: string): string | null => {
+  const at = email.lastIndexOf("@");
+  if (at < 0 || at === email.length - 1) return null;
+  return normalizeDomain(email.slice(at + 1));
+};
+
+const isUniqueViolation = (err: unknown): boolean =>
+  typeof err === "object" &&
+  err !== null &&
+  (err as { code?: unknown }).code === "P2002";
+
+// ─── Reads / claim / delete ─────────────────────────────────────────────────
+
+export const listOrgDomains = async (
+  organizationId: string,
+): Promise<OrgDomainRow[]> => {
+  const rows = await db.organizationDomain.findMany({
+    where: { organizationId },
+    select: SELECT,
+    orderBy: { createdAt: "asc" },
+  });
+  return rows.map(toRow);
+};
+
+export const claimOrgDomain = async (
+  organizationId: string,
+  userId: string,
+  rawDomain: string,
+): Promise<OrgDomainRow> => {
+  const domain = normalizeDomain(rawDomain);
+  if (!domain) {
+    throw new ServiceError(
+      "BAD_REQUEST",
+      "Enter a valid domain like example.com",
+    );
+  }
+  if (PUBLIC_MAILBOX_DOMAINS.has(domain)) {
+    throw new ServiceError(
+      "BAD_REQUEST",
+      "Public email providers can't be claimed. Use your company's domain.",
+    );
+  }
+
+  try {
+    const row = await db.organizationDomain.create({
+      // `verifiedAt` is left at its default null: a claim is an assertion,
+      // only `verifyOrgDomain` may ever set it.
+      data: {
+        organizationId,
+        domain,
+        verificationToken: randomBytes(16).toString("hex"),
+        createdByUserId: userId,
+      },
+      select: SELECT,
+    });
+    return toRow(row);
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new ServiceError(
+        "CONFLICT",
+        "This domain is already claimed by an organization.",
+      );
+    }
+    throw err;
+  }
+};
+
+const NO_RECORD_CODES = new Set(["ENOTFOUND", "ENODATA", "SERVFAIL"]);
+const NOT_FOUND_MESSAGE =
+  "TXT record not found yet. DNS changes can take a few minutes to propagate.";
+
+const dnsErrorCode = (err: unknown): string | undefined =>
+  typeof err === "object" && err !== null && "code" in err
+    ? String((err as { code: unknown }).code)
+    : undefined;
+
+/**
+ * `resolveTxt` answers `string[][]`: one inner array per record, split into
+ * the 255-octet chunks the wire format demands. A record's real value is its
+ * chunks CONCATENATED. Lowercased on both sides since the token is hex and
+ * some DNS panels normalize a stored value's case.
+ */
+const flattenTxt = (records: string[][]): string[] =>
+  records.map((chunks) => chunks.join("").trim().toLowerCase());
+
+/**
+ * Run the DNS check. Already-verified rows return immediately without a DNS
+ * call (idempotent — a double-click or a polling client costs nothing extra).
+ * `ENOTFOUND`/`ENODATA`/`SERVFAIL` are "not published yet"; anything else
+ * propagates (an operator-side DNS fault is not the same failure).
+ */
+export const verifyOrgDomain = async (
+  organizationId: string,
+  domainId: string,
+): Promise<OrgDomainRow> => {
+  const row = await db.organizationDomain.findFirst({
+    where: { id: domainId, organizationId },
+    select: SELECT,
+  });
+  if (!row) throw new ServiceError("NOT_FOUND", "Domain not found");
+  if (row.verifiedAt) return toRow(row);
+
+  const expected = `onecli-verification=${row.verificationToken}`.toLowerCase();
+
+  let records: string[][];
+  try {
+    records = await resolveTxt(row.domain);
+  } catch (err) {
+    const code = dnsErrorCode(err);
+    if (code && NO_RECORD_CODES.has(code)) {
+      throw new ServiceError("BAD_REQUEST", NOT_FOUND_MESSAGE);
+    }
+    throw err;
+  }
+
+  if (!flattenTxt(records).includes(expected)) {
+    throw new ServiceError("BAD_REQUEST", NOT_FOUND_MESSAGE);
+  }
+
+  const verifiedAt = new Date();
+  // Org-scoped conditional write: a count of 0 means the row was deleted
+  // between the read and the write, a 404 rather than a P2025 500.
+  const { count } = await db.organizationDomain.updateMany({
+    where: { id: domainId, organizationId },
+    data: { verifiedAt },
+  });
+  if (count === 0) throw new ServiceError("NOT_FOUND", "Domain not found");
+
+  return toRow({ ...row, verifiedAt });
+};
+
+/** `DELETE /org/domains/:domainId`. Deliberately never plan-gated (see the
+ * route doc): teardown must survive a plan lapse. */
+export const deleteOrgDomain = async (
+  organizationId: string,
+  domainId: string,
+): Promise<void> => {
+  const { count } = await db.organizationDomain.deleteMany({
+    where: { id: domainId, organizationId },
+  });
+  if (count === 0) throw new ServiceError("NOT_FOUND", "Domain not found");
+};
