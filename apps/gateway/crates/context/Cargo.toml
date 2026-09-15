@@ -14,6 +14,7 @@ futures-util = { workspace = true }
 approval = { path = "../approval" }
 ca = { path = "../ca" }
 cache = { path = "../cache" }
+client-ca = { path = "../client-ca" }
 common = { path = "../common" }
 crypto = { path = "../crypto" }
 db = { path = "../db" }

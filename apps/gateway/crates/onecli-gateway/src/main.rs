@@ -188,6 +188,50 @@ async fn main() -> Result<()> {
     let ca = CertificateAuthority::load_or_generate(&data_dir).await?;
     info!("CA certificate loaded");
 
+    // Client-certificate minting authority. Only meaningful when the mTLS
+    // trust anchor is the gateway's OWN generated client CA: if an operator
+    // has configured GATEWAY_CLIENT_CA (an externally managed trust anchor
+    // cert, whose matching private key we never hold), minting against a
+    // locally generated CA would produce certificates nobody trusts. In that
+    // case, skip generating/loading a client CA entirely and leave minting
+    // unavailable (the internal endpoint 503s) rather than silently minting
+    // from an unrelated CA. Any OTHER failure here (a corrupt on-disk key, an
+    // unwritable data dir, ...) aborts startup — fail closed, mirroring
+    // `CertificateAuthority::load_or_generate` above.
+    let operator_configured_client_ca = std::env::var("GATEWAY_CLIENT_CA")
+        .ok()
+        .is_some_and(|v| !v.trim().is_empty());
+    let client_ca: Option<Arc<client_ca::ClientCa>> = if operator_configured_client_ca {
+        info!(
+            "GATEWAY_CLIENT_CA is set — client-certificate minting stays unavailable (the \
+             internal endpoint 503s); the trust anchor is externally managed"
+        );
+        None
+    } else {
+        let authority = client_ca::ClientCa::load_or_generate(&data_dir).await?;
+        info!("client-certificate CA loaded");
+        Some(Arc::new(authority))
+    };
+    let fallback_client_ca_pem = client_ca.as_ref().map(|c| c.ca_cert_pem());
+
+    // mTLS is opt-in: unset GATEWAY_MTLS_PORT and this is a no-op (full
+    // backward compatibility). When it IS requested, any load failure here
+    // must abort startup — the gateway must never silently fall back to
+    // plaintext-only when mTLS was asked for. Validated here, before
+    // `server::entrypoint::run_all` starts either entrypoint, so a bad mTLS
+    // config is a boot failure rather than a mid-flight teardown of the
+    // plaintext listener (see `entrypoint::run_all`'s "abort every
+    // entrypoint on the first fatal error" semantics).
+    let mtls = client_ca::MtlsConfig::from_env(
+        &ca.ca_cert_pem(),
+        cli.port,
+        fallback_client_ca_pem.as_deref(),
+    )?;
+    match &mtls {
+        Some(m) => info!(port = m.port, "mTLS client-certificate listener configured"),
+        None => info!("mTLS disabled (GATEWAY_MTLS_PORT not set)"),
+    }
+
     // Support both DATABASE_URL (OSS) and individual DB_* vars (cloud ECS from Secrets Manager)
     let database_url = match std::env::var("DATABASE_URL") {
         Ok(url) => url,
@@ -257,7 +301,7 @@ async fn main() -> Result<()> {
     // OS is asked to choose. The listening line logs the address actually bound.
     info!("gateway ready");
 
-    // Serve until a shutdown signal stops the listener.
+    // Serve until a shutdown signal stops the listener(s).
     let server = GatewayServer::new(
         ca,
         cli.port,
@@ -265,8 +309,19 @@ async fn main() -> Result<()> {
         vault_service,
         cache,
         approval_store,
-    );
-    let entrypoints: Vec<Box<dyn Entrypoint>> = vec![Box::new(server)];
+        client_ca,
+    )?;
+    let mut entrypoints: Vec<Box<dyn Entrypoint>> = Vec::with_capacity(2);
+    // Cloned before `server` is moved into the entrypoints vec below — the
+    // mTLS entrypoint needs its own handle to the same shared state so it
+    // serves the identical router/context as the plaintext listener.
+    if let Some(mtls_config) = mtls {
+        entrypoints.push(Box::new(server::MtlsEntrypoint::new(
+            server.state().clone(),
+            mtls_config,
+        )));
+    }
+    entrypoints.push(Box::new(server));
     let result = server::entrypoint::run_all(entrypoints).await;
 
     // The drain, in the one order that does not lose data: connections first
