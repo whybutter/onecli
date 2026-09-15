@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Route-level tests for `POST /gateway/client-cert` (mounted at
@@ -13,7 +13,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * gated on a test-only header, so the 401 case exercises a REAL "no auth
  * context reaches the handler" path rather than assuming the real
  * session/API-key resolution would 401 (that's `middleware/auth.test.ts`'s
- * job).
+ * job). One test (the "org key + X-Workspace-Id" smoke test) flips
+ * `authState.useReal` to route through the REAL `auth()` middleware instead
+ * of the stub — proving `auth({ requireWorkspace: true })`'s existing
+ * org-key-with-header resolution (not new, §0.11 of the Phase 4 plan) also
+ * works for this specific route, without re-testing the mechanism itself
+ * (that's `middleware/auth.test.ts`'s job too).
  */
 
 interface FakeClientHostRow {
@@ -22,6 +27,7 @@ interface FakeClientHostRow {
   organizationId?: string;
   label?: string;
   spiffeUri: string;
+  revokedAt?: Date | null;
 }
 
 const state = vi.hoisted(() => ({
@@ -31,6 +37,15 @@ const state = vi.hoisted(() => ({
   clientHostUpdates: [] as Record<string, unknown>[],
 }));
 
+// Toggled by the org-key smoke test only; every other test leaves this
+// false and gets the simple test-header-gated stub below.
+const authState = vi.hoisted(() => ({ useReal: false }));
+
+const ORG_KEY = "oc_org_test-key";
+const ORG_KEY_USER_ID = "user-1";
+const ORG_KEY_ORG_ID = "org-1";
+const ORG_KEY_WORKSPACE_ID = "ws-1";
+
 vi.mock("@onecli/db", () => ({
   Prisma: { JsonNull: null },
   db: {
@@ -39,17 +54,20 @@ vi.mock("@onecli/db", () => ({
         state.clientHosts.push({ ...args.data });
         return { id: args.data.id, spiffeUri: args.data.spiffeUri };
       },
-      // Tenant-scoped lookup — mirrors the real Prisma query exactly
-      // (`where: { id, workspaceId }`): a row belonging to a DIFFERENT
-      // workspaceId is indistinguishable from "doesn't exist" here, same as
-      // in Postgres, which is the property the IDOR guard depends on.
+      // Tenant-scoped, non-revoked lookup — mirrors the real Prisma query
+      // exactly (`where: { id, workspaceId, revokedAt: null }`): a row
+      // belonging to a DIFFERENT workspaceId, or a revoked one, is
+      // indistinguishable from "doesn't exist" here, same as in Postgres,
+      // which is the property the IDOR/revocation guard depends on.
       findFirst: async (args: {
-        where: { id: string; workspaceId: string };
+        where: { id: string; workspaceId: string; revokedAt: null };
         select?: unknown;
       }) => {
         const found = state.clientHosts.find(
           (h) =>
-            h.id === args.where.id && h.workspaceId === args.where.workspaceId,
+            h.id === args.where.id &&
+            h.workspaceId === args.where.workspaceId &&
+            (h.revokedAt ?? null) === null,
         );
         return found ? { id: found.id, spiffeUri: found.spiffeUri } : null;
       },
@@ -67,6 +85,53 @@ vi.mock("@onecli/db", () => ({
     apiKey: {
       findFirst: async () => null,
       findMany: async () => [],
+      // Backs the org-key smoke test's `authenticateApiKey` call. Every
+      // other test authenticates through the stubbed `../middleware/auth`
+      // below and never reaches this.
+      findUnique: async ({ where }: { where: { key: string } }) =>
+        where.key === ORG_KEY
+          ? {
+              id: "apikey-org-1",
+              key: ORG_KEY,
+              userId: ORG_KEY_USER_ID,
+              organizationId: ORG_KEY_ORG_ID,
+              scope: "organization",
+              lastUsedAt: null,
+            }
+          : null,
+      // `recordApiKeyUse`'s fire-and-forget lastUsedAt stamp.
+      updateMany: async () => ({ count: 1 }),
+    },
+    // `getUserRole` (the org-key admin re-check) and `resolveUserEmail`'s
+    // reads, for the same smoke test.
+    organizationMember: {
+      findUnique: async ({
+        where,
+      }: {
+        where: {
+          organizationId_userId: { organizationId: string; userId: string };
+        };
+      }) =>
+        where.organizationId_userId.organizationId === ORG_KEY_ORG_ID &&
+        where.organizationId_userId.userId === ORG_KEY_USER_ID
+          ? { role: "admin", status: "active" }
+          : null,
+    },
+    user: {
+      findUnique: async ({ where }: { where: { id: string } }) =>
+        where.id === ORG_KEY_USER_ID ? { email: "guy@acme.com" } : null,
+    },
+    // The org-key branch's X-Workspace-Id validation (in-org check).
+    workspace: {
+      findFirst: async ({
+        where,
+      }: {
+        where: { id: string; organizationId: string };
+      }) =>
+        where.id === ORG_KEY_WORKSPACE_ID &&
+        where.organizationId === ORG_KEY_ORG_ID
+          ? { id: ORG_KEY_WORKSPACE_ID }
+          : null,
     },
   },
 }));
@@ -83,44 +148,55 @@ vi.mock("../lib/gateway-client-cert", () => ({
   },
 }));
 
-vi.mock("../middleware/auth", () => ({
-  auth:
-    () =>
-    async (
-      c: {
-        req: { header: (name: string) => string | undefined };
-        set: (key: string, value: unknown) => void;
-        json: (body: unknown, status: number) => Response;
-      },
-      next: () => Promise<void>,
-    ) => {
-      if (c.req.header("x-test-authed") !== "yes") {
-        return c.json(
-          {
-            error: {
-              message: "Invalid API key or token.",
-              type: "authentication_error",
+vi.mock("../middleware/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../middleware/auth")>();
+  return {
+    ...actual,
+    auth:
+      (options?: Parameters<typeof actual.auth>[0]) =>
+      async (
+        c: Parameters<ReturnType<typeof actual.auth>>[0],
+        next: () => Promise<void>,
+      ) => {
+        // The org-key smoke test flips this to exercise the REAL
+        // session/API-key resolution end to end; every other test gets the
+        // fast test-header-gated stub below.
+        if (authState.useReal) {
+          return actual.auth(options)(c, next);
+        }
+        if (c.req.header("x-test-authed") !== "yes") {
+          return c.json(
+            {
+              error: {
+                message: "Invalid API key or token.",
+                type: "authentication_error",
+              },
             },
-          },
-          401,
-        );
-      }
-      c.set("auth", {
-        userId: "user-1",
-        userEmail: "guy@acme.com",
-        organizationId: "org-1",
-        workspaceId: "ws-1",
-      });
-      return next();
-    },
-  requireWorkspaceId: (auth: { workspaceId?: string }) => {
-    if (!auth.workspaceId) throw new Error("no workspace");
-    return auth.workspaceId;
-  },
-}));
+            401,
+          );
+        }
+        c.set("auth", {
+          userId: "user-1",
+          userEmail: "guy@acme.com",
+          organizationId: "org-1",
+          workspaceId: "ws-1",
+        });
+        return next();
+      },
+  };
+});
 
 import { errorHandler } from "../middleware/error-handler";
+import { getUserRole } from "../ee/services/authorization-service";
+import { initRoleResolver } from "../providers";
 import { clientCertRoutes } from "./gateway";
+
+// Wires the real org-key admin re-check (`authenticateApiKey`'s org-key
+// branch calls `getRoleResolver()`) to the mocked `organizationMember` table
+// above — needed only by the smoke test below, which is the sole test that
+// flips `authState.useReal`. Cheap to do unconditionally at module load
+// (no edition-default graph pulled in, unlike `ensureEditionDefaults()`).
+initRoleResolver({ getUserRole });
 
 const VALID_CSR =
   "-----BEGIN CERTIFICATE REQUEST-----\nMIIBazCB7QIBADAA\n-----END CERTIFICATE REQUEST-----\n";
@@ -317,5 +393,98 @@ describe("POST /gateway/client-cert", () => {
     expect(res.status).toBe(404);
     expect(state.mintCalls).toHaveLength(0);
     expect(state.clientHosts).toHaveLength(0);
+  });
+
+  // A revoked host must not be able to renew by re-presenting its own
+  // hostId — the same NOT_FOUND treatment as the IDOR/nonexistent cases
+  // above, so a caller can't distinguish "revoked" from "not mine"/"doesn't
+  // exist" either. (Real-Postgres proof of the same property, over the
+  // actual `revokedAt: null` filter, lives in
+  // `client-host-service.pg.test.ts`.)
+  it("renewal with a revoked host's own hostId is rejected the same way", async () => {
+    state.clientHosts.push({
+      id: "33333333-3333-4333-8333-333333333333",
+      workspaceId: "ws-1",
+      spiffeUri: "spiffe://onecli/host/33333333-3333-4333-8333-333333333333",
+      revokedAt: new Date(),
+    });
+
+    const res = await post(
+      { csrPem: VALID_CSR, hostId: "33333333-3333-4333-8333-333333333333" },
+      true,
+    );
+
+    expect(res.status).toBe(404);
+    expect(state.mintCalls).toHaveLength(0);
+    expect(state.auditRows).toHaveLength(0);
+    // No fallback create happened — still just the one seeded (revoked) row.
+    expect(state.clientHosts).toHaveLength(1);
+  });
+});
+
+// ── Auth mechanism smoke test (real auth(), not the stub) ──────────────────
+
+describe("POST /gateway/client-cert — org key + X-Workspace-Id (real auth)", () => {
+  beforeEach(() => {
+    authState.useReal = true;
+    state.auditRows = [];
+    state.mintCalls = [];
+    state.clientHosts = [];
+    state.clientHostUpdates = [];
+  });
+
+  afterEach(() => {
+    authState.useReal = false;
+  });
+
+  /**
+   * `auth({ requireWorkspace: true })` — this route's actual auth option —
+   * already resolves an org-scoped `oc_org_` key's target workspace from an
+   * explicit `X-Workspace-Id` header (validating org membership first, see
+   * `middleware/auth/api-key.ts`). That mechanism is NOT new (§0.11 of the
+   * Phase 4 plan) and has its own dedicated coverage in
+   * `middleware/auth.test.ts`; this is a smoke test proving THIS route
+   * enrolls successfully through it end to end — real `auth()` middleware,
+   * mocked DB underneath.
+   */
+  it("enrolls successfully via an org key with X-Workspace-Id", async () => {
+    const res = await app.request("/client-cert", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${ORG_KEY}`,
+        "x-workspace-id": ORG_KEY_WORKSPACE_ID,
+      },
+      body: JSON.stringify({ csrPem: VALID_CSR, label: "org-key-relay" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { hostId: string; identity: string };
+    expect(body.identity).toMatch(/^spiffe:\/\/onecli\/host\/.+/);
+
+    expect(state.mintCalls).toHaveLength(1);
+    expect(state.auditRows).toHaveLength(1);
+    const audit = state.auditRows[0] as {
+      workspaceId: string;
+      organizationId: string;
+      userId: string;
+    };
+    expect(audit.workspaceId).toBe(ORG_KEY_WORKSPACE_ID);
+    expect(audit.organizationId).toBe(ORG_KEY_ORG_ID);
+    expect(audit.userId).toBe(ORG_KEY_USER_ID);
+  });
+
+  it("401s an org key with no X-Workspace-Id header (real auth's own rule)", async () => {
+    const res = await app.request("/client-cert", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${ORG_KEY}`,
+      },
+      body: JSON.stringify({ csrPem: VALID_CSR }),
+    });
+
+    expect(res.status).toBe(401);
+    expect(state.mintCalls).toHaveLength(0);
   });
 });
