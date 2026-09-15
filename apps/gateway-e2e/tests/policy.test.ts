@@ -648,36 +648,33 @@ describe("rule identities", () => {
     expect(res.status).toBe(403);
   });
 
-  // Phase 0's `find_principal_set` resolves direct users only; group
-  // inheritance is Phase 1.
-  scenario.skip(
-    "applies an org rule bound to an inherited group",
-    async (cx) => {
-      const upstream = await cx.upstream();
-      await cx.seed({
-        rules: [
-          {
-            name: "group-block",
-            action: "block",
-            scope: "organization",
-            identities: ["group"],
-            targets: [{ hostPattern: "127.0.0.1" }],
-          },
-        ],
-      });
-      const gw = await cx.startGateway();
+  // Phase 1: `find_principal_set` now resolves the full CTE, including a
+  // group granted directly to the workspace (the `direct_groups` arm).
+  scenario("applies an org rule bound to an inherited group", async (cx) => {
+    const upstream = await cx.upstream();
+    await cx.seed({
+      rules: [
+        {
+          name: "group-block",
+          action: "block",
+          scope: "organization",
+          identities: ["group"],
+          targets: [{ hostPattern: "127.0.0.1" }],
+        },
+      ],
+    });
+    const gw = await cx.startGateway();
 
-      const res = await throughProxy(gw.origin, {
-        url: upstream.url("/anything"),
-        token: cx.ids.agentToken,
-      });
+    const res = await throughProxy(gw.origin, {
+      url: upstream.url("/anything"),
+      token: cx.ids.agentToken,
+    });
 
-      // The group reaches the agent via the CTE's granted-group arm
-      // (`direct_groups` → `all_groups`), the sibling of the inherited-user
-      // path above.
-      expect(res.status).toBe(403);
-    },
-  );
+    // The group reaches the agent via the CTE's granted-group arm
+    // (`direct_groups` → `all_groups`), the sibling of the inherited-user
+    // path above.
+    expect(res.status).toBe(403);
+  });
 
   scenario("ignores a rule bound to a different agent", async (cx) => {
     const upstream = await cx.upstream();

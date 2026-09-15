@@ -235,3 +235,224 @@ describe("resource boundaries (org ∩ workspace)", () => {
     },
   );
 });
+
+/**
+ * Dropbox's request-level folder guard, end to end (Phase 1 WP-C item F: the
+ * `FolderPolicy` amendment — `gateway-ee-behaviour.md` §1.8).
+ *
+ * Unlike GitHub (token-scoped: an out-of-scope request never even reaches the
+ * gateway's own check because the credential itself can't reach it), Dropbox
+ * has no token-level scoping, so every request is inspected live against the
+ * policy's `folders` allowlist. That guard's decode is the amendment under
+ * test: `{folders: [42]}` (a non-empty array with no usable string entry) must
+ * now deny everything, not read as "no restriction" (the Phase 0 spec gap).
+ */
+
+const DROPBOX_HOST = "api.dropboxapi.com";
+const DROPBOX_CONNECTIONS = [{ provider: "dropbox", label: "acme-dropbox" }];
+
+const dropboxGrant = (resources?: { folders: string[] }) => ({
+  name: "grant: agent → dropbox connection",
+  action: "allow" as const,
+  source: "grant" as const,
+  priority: 90,
+  identities: ["agent" as const],
+  targets: [{ kind: "connection" as const, connectionIndex: 0 }],
+  ...(resources ? { resources } : {}),
+});
+
+const dropboxRequest = (
+  gw: { origin: string },
+  token: string,
+  path: string,
+  body?: string,
+) =>
+  throughProxy(gw.origin, {
+    url: `http://${DROPBOX_HOST}${path}`,
+    token,
+    method: body === undefined ? "GET" : "POST",
+    body,
+  });
+
+const expectDropboxDenied = (
+  res: { status: number; body: string },
+  allowed: string[],
+) => {
+  expect(res.status).toBe(403);
+  expect(JSON.parse(res.body)).toMatchObject({
+    error: "resource_access_denied",
+    allowed,
+  });
+};
+
+describe("Dropbox folder guard (FolderPolicy amendment)", () => {
+  scenario(
+    "a non-empty folders array with no usable string entries denies everything, even a pathless-allowed endpoint",
+    async (cx) => {
+      // Seed a valid (typed) folder first so the fixture builder accepts it,
+      // then overwrite the stored conditions with the malformed shape
+      // directly — `RuleSpec.resources.folders` is typed as
+      // `ReadonlyArray<string>`, so `[42]` cannot be authored through the
+      // typed fixture API (WP-A owns fixtures.ts; this WP seeds the gap via
+      // `cx.db.prisma` directly, as instructed).
+      await cx.seed({
+        appConnections: DROPBOX_CONNECTIONS,
+        rules: [dropboxGrant({ folders: ["/placeholder"] })],
+      });
+      await cx.db.prisma.policyRuleV2.update({
+        where: { id: `${cx.ids.workspace}-rule-0` },
+        data: { conditions: { folders: [42] } },
+      });
+      const gw = await cx.startGateway();
+
+      // `/2/users/get_current_account` is on the PATHLESS allowlist — an
+      // in-scope or unrestricted policy would allow it outright. DenyAll must
+      // still deny it, proving the check runs before that allowlist.
+      const res = await dropboxRequest(
+        gw,
+        cx.ids.agentToken,
+        "/2/users/get_current_account",
+      );
+      expectDropboxDenied(res, []);
+    },
+  );
+
+  scenario(
+    "an explicitly empty folders array denies everything (the empty-scope refusal, ahead of the guard)",
+    async (cx) => {
+      await cx.seed({
+        appConnections: DROPBOX_CONNECTIONS,
+        rules: [dropboxGrant({ folders: [] })],
+      });
+      const gw = await cx.startGateway();
+
+      const res = await dropboxRequest(
+        gw,
+        cx.ids.agentToken,
+        "/2/users/get_current_account",
+      );
+      expect(res.status).toBe(403);
+      expect(JSON.parse(res.body)).toMatchObject({ allowed: [] });
+      expect(res.body).toContain("do not overlap");
+    },
+  );
+
+  scenario(
+    "folders: ['/'] is unrestricted — the guard never denies it",
+    async (cx) => {
+      // No `blockDropbox` here: the ordinary policy engine decides (step 6)
+      // before the granular guard ever runs (step 10, `gateway-ee-behaviour.md`
+      // §0.4), so a host-level block rule would answer `blocked_by_policy`
+      // for this request regardless of what the guard decided — it cannot
+      // discriminate "unrestricted" from "restricted but denied" (both would
+      // reach the same block). The only response shape that is unique to a
+      // GUARD denial is `resource_access_denied`, so the real assertion is
+      // its absence.
+      await cx.seed({
+        appConnections: DROPBOX_CONNECTIONS,
+        rules: [dropboxGrant({ folders: ["/"] })],
+      });
+      const gw = await cx.startGateway();
+
+      const res = await dropboxRequest(
+        gw,
+        cx.ids.agentToken,
+        "/2/files/list_folder",
+        JSON.stringify({ path: "/anything/at/all" }),
+      );
+      // Whatever the request's eventual fate (forwarded, or refused for an
+      // unrelated reason such as no real network path to the real Dropbox
+      // API in this sandbox), it must not be the GUARD's own denial shape —
+      // that would mean the guard treated `["/"]` as restrictive.
+      let deniedByGuard = false;
+      try {
+        const parsed: unknown = JSON.parse(res.body);
+        deniedByGuard =
+          typeof parsed === "object" &&
+          parsed !== null &&
+          (parsed as Record<string, unknown>).error ===
+            "resource_access_denied";
+      } catch {
+        deniedByGuard = false;
+      }
+      expect(deniedByGuard).toBe(false);
+    },
+  );
+
+  scenario(
+    "a mix of garbage and valid folder entries restricts to the valid ones",
+    async (cx) => {
+      // No `blockDropbox` here on purpose: the ordinary policy engine (step 6)
+      // decides before the granular guard ever runs (step 10), so a
+      // host-level block rule would answer `blocked_by_policy` for EVERY
+      // request regardless of what the guard would have decided — it cannot
+      // discriminate "guard allowed" from "guard denied". The in-scope half
+      // of this shape (`Restricted(["/valid"])` admits `/valid/sub`) is
+      // pinned at the unit level instead
+      // (`mixed_garbage_and_valid_folders_enforces_on_the_valid_entry` in
+      // `crates/ee/ee/src/granular_access/dropbox.rs`); this scenario proves
+      // the security-critical direction end to end: an out-of-scope path
+      // under a policy that also carries a garbage entry is still denied,
+      // with the garbage entry dropped (not fatal) from the reported
+      // allowlist.
+      await cx.seed({
+        appConnections: DROPBOX_CONNECTIONS,
+        rules: [dropboxGrant({ folders: ["/placeholder"] })],
+      });
+      await cx.db.prisma.policyRuleV2.update({
+        where: { id: `${cx.ids.workspace}-rule-0` },
+        data: { conditions: { folders: [42, "/valid"] } },
+      });
+      const gw = await cx.startGateway();
+
+      const outOfScope = await dropboxRequest(
+        gw,
+        cx.ids.agentToken,
+        "/2/files/list_folder",
+        JSON.stringify({ path: "/elsewhere" }),
+      );
+      expectDropboxDenied(outOfScope, ["/valid"]);
+    },
+  );
+
+  scenario(
+    "a truncated request body must fail closed, never decide on whatever fit in the buffer",
+    async (cx) => {
+      // Phase 1 WP-C item E: `forward.rs` must hand the Dropbox guard `None`
+      // for a truncated condition buffer, not the observed prefix. Without
+      // that fix, this scenario does NOT come back 403: the truncated PREFIX
+      // (bytes 0..4096) is on its own a syntactically complete, in-scope JSON
+      // document — `{"path": "/clients/allowed"}` followed by nothing but
+      // JSON whitespace — so a guard that trusts "whatever parsed" allows the
+      // request through on a buffer that never actually observed whether the
+      // real (truncated-away) tail of the wire body carries anything else.
+      // `.filter(|b| !b.truncated)` makes ANY truncated body deny
+      // unconditionally, independent of what happens to fit in the prefix.
+      await cx.seed({
+        appConnections: DROPBOX_CONNECTIONS,
+        rules: [dropboxGrant({ folders: ["/clients"] })],
+      });
+      const gw = await cx.startGateway({
+        env: { ONECLI_CONDITION_BODY_BUFFER_BYTES: "4096" },
+      });
+
+      const value = JSON.stringify({ path: "/clients/allowed" });
+      // Total body > the 4096-byte cap (forces `truncated: true`); everything
+      // past the closing `}` is pure whitespace, so the observed 4096-byte
+      // prefix alone is complete, valid, in-scope JSON.
+      const body = value + " ".repeat(4096 - value.length + 256);
+
+      const res = await dropboxRequest(
+        gw,
+        cx.ids.agentToken,
+        "/2/files/list_folder",
+        body,
+      );
+      // The "cannot read request body" denial reports the POLICY's allowlist
+      // (there is one — `/clients` — the guard just couldn't read the body
+      // to check it), unlike the `DenyAll` denials above which report `[]`.
+      expectDropboxDenied(res, ["/clients"]);
+      expect(res.body).toContain("cannot read request body");
+    },
+  );
+});

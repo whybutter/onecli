@@ -142,6 +142,7 @@ pub async fn handle_websocket(
         "GET",
         &path,
         policy::ConditionBody::None,
+        Some(req.headers()),
         has_injections,
         policy::is_llm_host(host),
         rules.winning_connection_id.as_deref(),
