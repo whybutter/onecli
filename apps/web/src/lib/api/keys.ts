@@ -138,6 +138,27 @@ export const queryKeys = {
     list: (workspaceId: string) =>
       [...queryKeys.workspaceAccess.all(), workspaceId] as const,
   },
+  // Org-scoped spend caps (`/v1/org/budgets`) — admin-only, org-scoped
+  // credential (§ org-budgets.ts). scope()'s org slot is the real
+  // discriminator here; the workspace slot is always "default" since this
+  // is only ever read from an org-scoped route.
+  budgets: {
+    all: () => ["budgets", ...scope()] as const,
+    list: () => [...queryKeys.budgets.all(), "list"] as const,
+  },
+  // Org-scoped recorded-gateway-requests summary (`/v1/org/usage`) —
+  // member-visible, org-scoped credential.
+  usage: {
+    all: () => ["usage", ...scope()] as const,
+    summary: () => [...queryKeys.usage.all(), "summary"] as const,
+  },
+  // The workspace's default-connections template for brand-new agents
+  // (`/v1/workspaces/:id/agent-defaults`) — workspace-scoped, deliberately
+  // NOT org-scoped like the two above (risk 2: don't "fix" this to match).
+  agentDefaults: {
+    all: () => ["agent-defaults", ...scope()] as const,
+    list: () => [...queryKeys.agentDefaults.all(), "list"] as const,
+  },
   workspaces: {
     all: () => ["workspaces", ...scope()] as const,
     // organizationId only when explicitly overridden (account-route picker).
