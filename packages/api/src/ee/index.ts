@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import type { ApiEnv } from "../types";
+import { orgBudgetRoutes } from "./routes/org-budgets";
 
 export type RegisterEeRoutes = (app: Hono<ApiEnv>) => void;
 
@@ -12,4 +13,6 @@ export type RegisterEeRoutes = (app: Hono<ApiEnv>) => void;
  * which is the same posture an unlicensed self-host had (a 403/404 gate in
  * front of every one of them).
  */
-export const registerEeRoutes: RegisterEeRoutes = () => {};
+export const registerEeRoutes: RegisterEeRoutes = (app) => {
+  app.route("/org/budgets", orgBudgetRoutes());
+};
