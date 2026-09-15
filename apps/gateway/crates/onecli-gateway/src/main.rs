@@ -26,6 +26,7 @@ use clap::Parser;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
+use binding::BindingMode;
 use ca::CertificateAuthority;
 use context::PolicyEngine;
 use server::{Entrypoint, GatewayServer};
@@ -232,6 +233,14 @@ async fn main() -> Result<()> {
         None => info!("mTLS disabled (GATEWAY_MTLS_PORT not set)"),
     }
 
+    // Cert-identity ↔ agent-token tenant binding enforcement posture. Read
+    // once at startup (a mid-process env change is invisible by contract,
+    // same as every other startup-only knob here) and logged so the active
+    // posture is always visible in the boot log, not just inferable from
+    // whether the var happens to be set.
+    let binding_mode = BindingMode::from_env();
+    info!(mode = ?binding_mode, "cert/token tenant binding enforcement configured");
+
     // Support both DATABASE_URL (OSS) and individual DB_* vars (cloud ECS from Secrets Manager)
     let database_url = match std::env::var("DATABASE_URL") {
         Ok(url) => url,
@@ -310,6 +319,7 @@ async fn main() -> Result<()> {
         cache,
         approval_store,
         client_ca,
+        binding_mode,
     )?;
 
     // The plaintext listener has no client-certificate check at all — if
@@ -327,6 +337,33 @@ async fn main() -> Result<()> {
              authentication entirely. Set GATEWAY_PLAIN_BIND=127.0.0.1 to restrict it, \
              but note that loopback also breaks Docker-published browser -> gateway \
              vault/approval/cache calls, which arrive on the plaintext listener."
+        );
+    }
+
+    // A second, narrower warning beside the one above: cert/token binding
+    // enforcement is only as strong as the listener it applies to.
+    // `enforce_binding` exempts the plain listener BY DESIGN (it has no
+    // client certificate to bind at all) — but if that listener is reachable
+    // from anywhere an attacker can reach, they simply skip the mTLS port and
+    // the binding check entirely. Broader than the warning above (which only
+    // fires on the literal unspecified address, 0.0.0.0): any non-loopback
+    // bind — including a specific, deliberately "reachable" address like a
+    // pod/cluster IP — still lets the plain listener see traffic from
+    // off-host, so this warns on anything that isn't loopback, not just the
+    // wildcard address. Fires independently of the mTLS warning above: mTLS
+    // can be configured without binding enforcement (Off/Log), and binding
+    // enforcement requires mTLS to be configured at all (`enforce_binding`
+    // is a no-op off the mTLS listener), so this only ever fires alongside
+    // the warning above, never instead of it.
+    if server::plain_bind_bypasses_binding_enforcement(binding_mode, server.plain_bind()) {
+        warn!(
+            plain_bind = %server.plain_bind(),
+            "GATEWAY_BINDING_ENFORCEMENT=enforce is set but the plaintext listener is \
+             bound to a non-loopback address — cert/token binding is only checked on the \
+             mTLS listener, so anyone who can reach the plaintext port bypasses it \
+             entirely, same as the mTLS bypass warning above. Restrict GATEWAY_PLAIN_BIND \
+             to loopback (127.0.0.1) or another trusted-network-only address (same \
+             tradeoff noted above applies)."
         );
     }
 
