@@ -299,6 +299,7 @@ model Workspace {
   budgets          Budget[] // cloud-only: per-secret spend budgets for this workspace (inert in OSS)
   accessBindings   WorkspaceAccess[]
   skills           Skill[]
+  agentDefaultConnections WorkspaceAgentDefaultConnection[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -369,6 +370,7 @@ model User {
   sshKeys                       UserSshKey[]
   provisionedAs                 UserProvision?                @relation("ProvisionedUser")
   createdProvisions             UserProvision[]               @relation("ProvisionCreator")
+  createdAgentDefaultConnections WorkspaceAgentDefaultConnection[] @relation("WorkspaceAgentDefaultConnectionCreator")
 
   @@map("users")
 }
@@ -388,6 +390,13 @@ model ApiKey {
   // key). Service keys are invisible to the personal-key flows: regenerate,
   // ensure, and the key-listing UI all filter kind "user".
   kind           String   @default("user") // "user" | "service"
+  // Throttled stamp of the key's last successful authentication
+  // (`recordApiKeyUse`, api-key-service.ts) — null until first use. Written
+  // by both api-key auth branches (workspace and org) after the role/access
+  // check passes, pinned to the SECRET that authenticated so a rotation race
+  // can never credit the new secret with the old one's traffic. The gateway
+  // stamp is a separate, later integration step (phase2-plan risk 8).
+  lastUsedAt     DateTime? @map("last_used_at")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
@@ -1948,12 +1957,44 @@ model AppConnection {
   organization      Organization?      @relation(fields: [organizationId], references: [id])
   appConfig         AppConfig?         @relation(fields: [appConfigId], references: [id], onDelete: SetNull)
   policyRuleTargets PolicyRuleTarget[]
+  agentDefaultConnections WorkspaceAgentDefaultConnection[]
 
   @@index([workspaceId, provider])
   @@index([organizationId, provider])
   @@index([scope])
   @@index([appConfigId])
   @@map("app_connections")
+}
+
+// Workspace-level template: which connections a brand-new agent in this
+// workspace should be granted automatically, applied once at creation
+// (`afterCreateAgent` resource hook) via the same `setConnectionGrant` path
+// the manual attach UI uses — this table stores INTENT (a template), never
+// the grant itself. An explicit, workspace-scoped allowlist by construction:
+// there is deliberately no "grant everything" entry, matching the attach
+// model's move away from whole-workspace secret modes. Deleting the
+// workspace or the connection cascades — a stale template row pointing at a
+// gone connection can't express anything.
+model WorkspaceAgentDefaultConnection {
+  id              String   @id @default(uuid())
+  workspaceId     String   @map("workspace_id")
+  connectionId    String   @map("connection_id")
+  access          String // "full" | "custom" — mirrors ConnectionGrantInput
+  allow           String[] @default([])
+  ask             String[] @default([])
+  resources       Json? // session policy restriction; null = unrestricted
+  createdByUserId String?  @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connection    AppConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  createdByUser User?         @relation("WorkspaceAgentDefaultConnectionCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, connectionId])
+  @@index([workspaceId])
+  @@index([connectionId])
+  @@map("workspace_agent_default_connections")
 }
 
 model AppConfig {
