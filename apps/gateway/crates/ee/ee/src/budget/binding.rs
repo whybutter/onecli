@@ -55,6 +55,19 @@ impl BudgetSecret for db::SecretRow {
 /// silent permanent block via a misconfigured non-positive limit). Subject is
 /// always `Org(org_id)` — the `User` subject is a documented Phase 1
 /// follow-up, not built here.
+///
+/// Ordering is load-bearing, not incidental: `secrets` arrives in the same
+/// order `proxy::connect` built `injection_rules` from (org secrets, then
+/// workspace — see `resolve_secret_injections`), and `inject::apply_injections`
+/// applies each rule's `HeaderMap::insert` in that order, so the LAST secret
+/// in `secrets` whose rule matches the request path is the one whose
+/// credential actually goes out on the wire ("last wins"). Meanwhile
+/// `proxy::hooks::track_and_wrap` charges the FIRST metered binding it finds
+/// in the Vec this function returns. Those two "firsts" must agree, or a
+/// metered response gets attributed to a budgeted secret that was NOT the one
+/// actually used. So bindings are emitted in REVERSE of `secrets`' order —
+/// the effective (last-injected) secret's binding comes first — rather than
+/// in the DB's arbitrary row order.
 pub async fn resolve_bindings<S: BudgetSecret>(
     pool: &sqlx::PgPool,
     org_id: &str,
@@ -82,23 +95,30 @@ pub async fn resolve_bindings<S: BudgetSecret>(
         }
     };
 
-    let type_by_id: HashMap<&str, &str> =
-        secrets.iter().map(|s| (s.id(), s.secret_type())).collect();
+    // Keyed by secret id so bindings can be built while walking `secrets` in
+    // the order that determines metering attribution (see above), not the
+    // order Postgres happened to return the rows in.
+    let budget_by_secret_id: HashMap<&str, (i32, &str)> = rows
+        .iter()
+        .map(|(id, limit_cents, period)| (id.as_str(), (*limit_cents, period.as_str())))
+        .collect();
 
-    rows.into_iter()
-        .filter_map(|(secret_id, limit_cents, period)| {
+    secrets
+        .iter()
+        .rev()
+        .filter_map(|secret| {
+            let (limit_cents, period) = *budget_by_secret_id.get(secret.id())?;
             if limit_cents <= 0 {
                 warn!(
-                    secret_id,
+                    secret_id = secret.id(),
                     limit_cents, "budget: non-positive limit; skipping"
                 );
                 return None;
             }
-            let secret_type = (*type_by_id.get(secret_id.as_str())?).to_string();
             Some(BudgetBinding {
-                secret_id,
+                secret_id: secret.id().to_string(),
                 subject: BudgetSubject::Org(org_id.to_string()),
-                secret_type,
+                secret_type: secret.secret_type().to_string(),
                 limit_nanos: i64::from(limit_cents) * CENT_TO_NANOS,
                 period: if period == "total" {
                     BudgetPeriod::Total
@@ -182,6 +202,64 @@ mod tests {
         assert_eq!(bindings[0].limit_nanos, 1_000 * CENT_TO_NANOS);
 
         cleanup(&pool, &org_id, &[&secret_id]).await;
+    }
+
+    /// Two budgeted secrets of the same type on the same host: `secrets` is
+    /// passed in `proxy::connect`'s injection order (org, then workspace), and
+    /// the workspace one (last = the effective, actually-injected credential
+    /// under "last wins" header injection) must come FIRST in the returned
+    /// bindings — `track_and_wrap` metering the first metered binding must
+    /// charge the secret that was actually used, not whichever row Postgres
+    /// happened to return first.
+    #[tokio::test]
+    async fn orders_the_effective_last_injected_secret_first() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let org_id = unique_id("org");
+        let org_secret_id = unique_id("sec-org");
+        let workspace_secret_id = unique_id("sec-ws");
+        insert_org(&pool, &org_id).await;
+        insert_secret(&pool, &org_secret_id, &org_id, "organization", "anthropic").await;
+        insert_secret(
+            &pool,
+            &workspace_secret_id,
+            &org_id,
+            "workspace",
+            "anthropic",
+        )
+        .await;
+        insert_budget(&pool, &org_id, &org_secret_id, 500, "monthly").await;
+        insert_budget(&pool, &org_id, &workspace_secret_id, 1_000, "monthly").await;
+
+        let secret_row = |id: &str, scope: &str| db::SecretRow {
+            id: id.to_string(),
+            scope: scope.to_string(),
+            type_: "anthropic".to_string(),
+            value_source: "inline".to_string(),
+            encrypted_value: None,
+            op_ref: None,
+            host_pattern: "api.anthropic.com".to_string(),
+            path_pattern: None,
+            injection_config: None,
+            metadata: None,
+        };
+        // Injection order: org first, workspace last (mirrors
+        // `resolve_secret_injections`'s `pool_secrets.extend(workspace_result)`).
+        let secrets = vec![
+            secret_row(&org_secret_id, "organization"),
+            secret_row(&workspace_secret_id, "workspace"),
+        ];
+
+        let bindings = resolve_bindings(&pool, &org_id, &secrets, true).await;
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(
+            bindings[0].secret_id, workspace_secret_id,
+            "the last-injected (workspace) secret's binding must come first"
+        );
+        assert_eq!(bindings[1].secret_id, org_secret_id);
+
+        cleanup(&pool, &org_id, &[&org_secret_id, &workspace_secret_id]).await;
     }
 
     #[tokio::test]
