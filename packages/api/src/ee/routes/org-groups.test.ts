@@ -7,6 +7,7 @@ import type { ApiEnv } from "../../types";
 // mock, house style per `routes/workspaces.test.ts`.
 
 const ORG_KEY = "oc_org_test-key";
+const WORKSPACE_KEY = "oc_ws_test-key";
 
 vi.hoisted(() => {
   process.env.NEXT_PUBLIC_EDITION = "cloud";
@@ -39,16 +40,24 @@ const memberCount = (groupId: string) =>
 vi.mock("@onecli/db", () => {
   const db = {
     apiKey: {
-      findUnique: async ({ where }: { where: { key: string } }) =>
-        where.key === ORG_KEY
-          ? {
-              userId: "admin-1",
-              organizationId: "org-1",
-              scope: "organization",
-            }
-          : null,
+      findUnique: async ({ where }: { where: { key: string } }) => {
+        if (where.key === ORG_KEY) {
+          return {
+            userId: "admin-1",
+            organizationId: "org-1",
+            scope: "organization",
+          };
+        }
+        if (where.key === WORKSPACE_KEY) {
+          return { userId: "admin-1", workspaceId: "ws-1", kind: "user" };
+        }
+        return null;
+      },
     },
     user: { findUnique: async () => ({ email: "admin@example.com" }) },
+    workspace: {
+      findUnique: async () => ({ id: "ws-1", organizationId: "org-1" }),
+    },
     organizationMember: {
       findUnique: async () => ({ role: "owner", status: "active" }),
       findMany: async ({
@@ -317,6 +326,13 @@ describe("GET/POST /v1/org/groups", () => {
     const res = await app.request("/v1/org/groups");
     expect(res.status).toBe(401);
   });
+
+  it("403s a workspace-scoped credential", async () => {
+    const res = await app.request("/v1/org/groups", {
+      headers: { authorization: `Bearer ${WORKSPACE_KEY}` },
+    });
+    expect(res.status).toBe(403);
+  });
 });
 
 describe("GET/PATCH/DELETE /v1/org/groups/:groupId", () => {
@@ -331,6 +347,24 @@ describe("GET/PATCH/DELETE /v1/org/groups/:groupId", () => {
 
   it("404s an unknown group id", async () => {
     const res = await app.request("/v1/org/groups/nope", {
+      headers: orgKeyHeaders,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("404s a group that belongs to a DIFFERENT org, never leaking it as a 403 or a hit", async () => {
+    store.groups = [
+      {
+        id: "grp-other-org",
+        organizationId: "org-2",
+        name: "Someone Else's",
+        source: "manual",
+        externalId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ];
+    const res = await app.request("/v1/org/groups/grp-other-org", {
       headers: orgKeyHeaders,
     });
     expect(res.status).toBe(404);

@@ -125,13 +125,16 @@ describe("removeMember", () => {
   it('voluntary leave completes and keeps the login — outcome "skipped"', async () => {
     await expect(
       removeMember("org-1", "user-2", { revokeIdentity: false }),
-    ).resolves.toBe("skipped");
+    ).resolves.toEqual({ revocation: "skipped", email: "leaver@example.com" });
     // The membership row actually went — departure worked, not just no-op'd.
     expect(store.calls).toContain("organizationMember.delete");
   });
 
   it("an admin removal completes too, with the same outcome in this build", async () => {
-    await expect(removeMember("org-1", "user-2")).resolves.toBe("skipped");
+    await expect(removeMember("org-1", "user-2")).resolves.toEqual({
+      revocation: "skipped",
+      email: "leaver@example.com",
+    });
     expect(store.calls).toContain("organizationMember.delete");
   });
 

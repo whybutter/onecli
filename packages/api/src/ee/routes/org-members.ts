@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { db } from "@onecli/db";
 import type { ApiEnv } from "../../types";
 import { auth } from "../../middleware/auth";
+import { ServiceError } from "../../services/errors";
 import {
   withAudit,
   AUDIT_ACTIONS,
@@ -25,6 +25,7 @@ import type { DirectoryPage } from "../lib/directory-page";
 import {
   createMemberSchema,
   memberListQuerySchema,
+  memberPatchSchema,
   userGroupsQuerySchema,
 } from "../validations/directory";
 
@@ -35,16 +36,6 @@ export interface OrgMemberRow {
   status: string;
   ssoExempt: boolean;
   revocation?: string;
-}
-
-/** The wire shape `POST /org/members` answers with. */
-export interface CreatedOrgMemberRow {
-  userId: string;
-  email: string;
-  name: string | null;
-  role: string;
-  status: string;
-  joinedAt: string;
 }
 
 export type { OrgMemberListRow, GroupRow, DirectoryPage };
@@ -61,6 +52,15 @@ export const orgMemberRoutes = () => {
   const app = new Hono<ApiEnv>();
   const admin = auth({ requireWorkspace: false, role: "admin" });
   app.use("*", admin);
+  app.use("*", async (c, next) => {
+    if (c.get("auth").scope === "workspace") {
+      throw new ServiceError(
+        "FORBIDDEN",
+        "Members require an organization-scoped credential.",
+      );
+    }
+    return next();
+  });
 
   const auditBase = (c: Context<ApiEnv>) => ({
     organizationId: c.get("auth").organizationId,
@@ -129,53 +129,37 @@ export const orgMemberRoutes = () => {
         },
       }),
     );
-    const response: CreatedOrgMemberRow = {
+    const response: OrgMemberListRow = {
       userId: created.userId,
       email: created.email,
       name: created.name,
       role: created.role,
       status: created.status,
+      ssoExempt: created.ssoExempt,
       joinedAt: created.joinedAt,
     };
     return c.json(response, 201);
   });
 
-  // DELETE /org/members/:userId
+  // DELETE /org/members/:userId — pre-checks (typed NOT_FOUND/BAD_REQUEST,
+  // no audit row) live in `removeMember` itself, mirroring suspend/reinstate.
   app.delete("/:userId", async (c) => {
     const authCtx = c.get("auth");
     const targetUserId = c.req.param("userId");
-
-    // Pre-checks with typed errors, BEFORE any destructive step — matches
-    // §1.4: cross-org ids read as absent, and the owner guard fires with no
-    // audit row.
-    const membership = await db.organizationMember.findUnique({
-      where: {
-        organizationId_userId: {
-          organizationId: authCtx.organizationId,
-          userId: targetUserId,
-        },
-      },
-      select: { role: true, userEmail: true },
-    });
-    if (!membership) {
-      return c.json(
-        { error: "User is not a member of this organization" },
-        404,
-      );
-    }
-    if (membership.role === "owner") {
-      return c.json({ error: "The organization owner cannot be removed" }, 400);
-    }
 
     await withAudit(
       () =>
         removeMember(authCtx.organizationId, targetUserId, {
           revokeIdentity: true,
         }),
-      (revocation) => ({
+      (result) => ({
         ...auditBase(c),
         action: AUDIT_ACTIONS.DELETE,
-        metadata: { targetUserId, email: membership.userEmail, revocation },
+        metadata: {
+          targetUserId,
+          email: result.email,
+          revocation: result.revocation,
+        },
       }),
     );
     return c.body(null, 204);
@@ -185,19 +169,14 @@ export const orgMemberRoutes = () => {
   app.patch("/:userId", async (c) => {
     const authCtx = c.get("auth");
     const targetUserId = c.req.param("userId");
-    const body: unknown = await c.req.json().catch(() => null);
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
+    const body = await c.req.json().catch(() => null);
+    const parsed = memberPatchSchema.safeParse(body);
+    if (!parsed.success) {
       return c.json({ error: PATCH_ERROR }, 400);
     }
-    const record = body as Record<string, unknown>;
-    const keys = Object.keys(record);
-    if (keys.length !== 1) return c.json({ error: PATCH_ERROR }, 400);
 
-    if (keys[0] === "status") {
-      if (record.status !== "active" && record.status !== "suspended") {
-        return c.json({ error: PATCH_ERROR }, 400);
-      }
-      const status = record.status;
+    if ("status" in parsed.data) {
+      const { status } = parsed.data;
       const result = await withAudit(
         () =>
           status === "suspended"
@@ -221,25 +200,17 @@ export const orgMemberRoutes = () => {
       return c.json(response);
     }
 
-    if (keys[0] === "ssoExempt") {
-      if (typeof record.ssoExempt !== "boolean") {
-        return c.json({ error: PATCH_ERROR }, 400);
-      }
-      const ssoExempt = record.ssoExempt;
-      const result = await withAudit(
-        () =>
-          setMemberSsoExempt(authCtx.organizationId, targetUserId, ssoExempt),
-        (updated) => ({
-          ...auditBase(c),
-          action: AUDIT_ACTIONS.UPDATE,
-          metadata: { targetUserId, ssoExempt: updated.ssoExempt },
-        }),
-      );
-      const response: OrgMemberRow = result;
-      return c.json(response);
-    }
-
-    return c.json({ error: PATCH_ERROR }, 400);
+    const { ssoExempt } = parsed.data;
+    const result = await withAudit(
+      () => setMemberSsoExempt(authCtx.organizationId, targetUserId, ssoExempt),
+      (updated) => ({
+        ...auditBase(c),
+        action: AUDIT_ACTIONS.UPDATE,
+        metadata: { targetUserId, ssoExempt: updated.ssoExempt },
+      }),
+    );
+    const response: OrgMemberRow = result;
+    return c.json(response);
   });
 
   return app;

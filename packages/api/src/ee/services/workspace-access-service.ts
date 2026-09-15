@@ -128,6 +128,21 @@ export const setWorkspaceAccessBindings = async (
   actorUserId: string,
   input: SetWorkspaceAccessInput,
 ): Promise<SetWorkspaceAccessResult> => {
+  // Re-resolve the workspace against the CALLER'S org rather than trusting
+  // that `organizationId` (threaded from the route's authCtx) actually names
+  // the workspace's real organization. `requireWorkspaceManagement` already
+  // fences on this, but a service is a smaller, more reusable surface than
+  // one call site — this makes the invariant hold even if a future caller
+  // (or a bug in the guard) skips it, rather than validating every addition
+  // against a org the workspace was never in.
+  const workspace = await db.workspace.findFirst({
+    where: { id: workspaceId, organizationId },
+    select: { id: true },
+  });
+  if (!workspace) {
+    throw new ServiceError("NOT_FOUND", "Workspace not found");
+  }
+
   const desiredUserRole = new Map<string, "owner" | "member">();
   for (const user of input.users) desiredUserRole.set(user.userId, user.role);
   const desiredGroupIds = new Set(input.groupIds);
@@ -219,8 +234,11 @@ export const setWorkspaceAccessBindings = async (
       });
     }
     for (const [userId, role] of usersToReRole) {
-      await tx.workspaceAccess.update({
-        where: { workspaceId_userId: { workspaceId, userId } },
+      // `updateMany` rather than `update`: a row a concurrent writer just
+      // deleted (e.g. a simultaneous removal from another admin's PUT)
+      // reads as "nothing to update" here, not a P2025 500.
+      await tx.workspaceAccess.updateMany({
+        where: { workspaceId, userId },
         data: { role },
       });
     }

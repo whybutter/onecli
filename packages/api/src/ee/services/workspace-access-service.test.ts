@@ -14,8 +14,13 @@ interface BindingRow {
 }
 
 const store = vi.hoisted(() => ({
-  workspace: { id: "ws-1", createdByUserId: "creator-1" } as {
+  workspace: {
+    id: "ws-1",
+    organizationId: "org-1",
+    createdByUserId: "creator-1",
+  } as {
     id: string;
+    organizationId: string;
     createdByUserId: string | null;
   } | null,
   bindings: [] as BindingRow[],
@@ -36,6 +41,16 @@ vi.mock("@onecli/db", () => {
   const db = {
     workspace: {
       findUnique: async () => store.workspace,
+      findFirst: async ({
+        where,
+      }: {
+        where: { id: string; organizationId: string };
+      }) =>
+        store.workspace &&
+        store.workspace.id === where.id &&
+        store.workspace.organizationId === where.organizationId
+          ? { id: store.workspace.id }
+          : null,
     },
     workspaceAccess: {
       findMany: async ({ where }: { where: { workspaceId: string } }) =>
@@ -86,21 +101,20 @@ vi.mock("@onecli/db", () => {
         });
         return { count: before - store.bindings.length };
       },
-      update: async ({
+      updateMany: async ({
         where,
         data,
       }: {
-        where: { workspaceId_userId: { workspaceId: string; userId: string } };
+        where: { workspaceId: string; userId: string };
         data: { role: string };
       }) => {
         const row = store.bindings.find(
           (b) =>
-            b.workspaceId === where.workspaceId_userId.workspaceId &&
-            b.userId === where.workspaceId_userId.userId,
+            b.workspaceId === where.workspaceId && b.userId === where.userId,
         );
-        if (!row) throw new Error("not found");
+        if (!row) return { count: 0 };
         row.role = data.role;
-        return row;
+        return { count: 1 };
       },
       createMany: async ({
         data,
@@ -169,7 +183,11 @@ const WS = "ws-1";
 const ORG = "org-1";
 
 beforeEach(() => {
-  store.workspace = { id: WS, createdByUserId: "creator-1" };
+  store.workspace = {
+    id: WS,
+    organizationId: ORG,
+    createdByUserId: "creator-1",
+  };
   store.bindings = [];
   store.users = [];
   store.groups = [];
@@ -412,5 +430,29 @@ describe("setWorkspaceAccessBindings", () => {
         groupIds: [],
       }),
     ).resolves.toEqual({ added: 0, removed: 0, roleChanged: 1 });
+  });
+
+  it("404s when the given organizationId does not actually own the workspace — never validates additions against the wrong org", async () => {
+    // The workspace really belongs to ORG; a caller passing a DIFFERENT
+    // organizationId (e.g. a session scoped elsewhere via x-organization-id)
+    // must be refused before any addition is validated against that other
+    // org's membership/group tables — otherwise a user active in "org-evil"
+    // could be bound onto a workspace that never belonged to org-evil.
+    activeMember("u1");
+    store.orgMembers.push({
+      organizationId: "org-evil",
+      userId: "evil-user",
+      status: "active",
+    });
+    await expect(
+      setWorkspaceAccessBindings("org-evil", WS, "evil-user", {
+        users: [{ userId: "evil-user", role: "owner" }],
+        groupIds: [],
+      }),
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "Workspace not found",
+    });
+    expect(store.bindings).toEqual([]);
   });
 });

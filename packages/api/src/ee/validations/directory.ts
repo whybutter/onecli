@@ -54,6 +54,14 @@ export const memberSsoExemptSchema = z
   .object({ ssoExempt: z.boolean() })
   .strict();
 
+/** `PATCH /org/members/:userId` body: exactly one of `{ status }` or
+ * `{ ssoExempt }` — a `.strict()` union member rejects the other key, so a
+ * body naming both, neither, or an unknown key fails every branch. */
+export const memberPatchSchema = z.union([
+  memberStatusSchema,
+  memberSsoExemptSchema,
+]);
+
 export const createGroupSchema = z
   .object({ name: z.string().trim().min(1).max(100) })
   .strict();

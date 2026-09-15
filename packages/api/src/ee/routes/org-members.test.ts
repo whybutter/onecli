@@ -9,6 +9,7 @@ import type { ApiEnv } from "../../types";
 
 const ORG_KEY = "oc_org_test-key";
 const MEMBER_KEY = "oc_org_member-key";
+const WORKSPACE_KEY = "oc_ws_test-key";
 
 vi.hoisted(() => {
   process.env.NEXT_PUBLIC_EDITION = "cloud";
@@ -50,6 +51,9 @@ vi.mock("@onecli/db", () => ({
             organizationId: "org-1",
             scope: "organization",
           };
+        }
+        if (where.key === WORKSPACE_KEY) {
+          return { userId: "admin-1", workspaceId: "ws-1", kind: "user" };
         }
         return null;
       },
@@ -168,7 +172,10 @@ vi.mock("@onecli/db", () => ({
     group: { findMany: async () => [] },
     groupMember: { deleteMany: async () => ({ count: 0 }) },
     workspaceAccess: { deleteMany: async () => ({ count: 0 }) },
-    workspace: { findMany: async () => [] },
+    workspace: {
+      findMany: async () => [],
+      findUnique: async () => ({ id: "ws-1", organizationId: "org-1" }),
+    },
     auditLog: {
       create: async ({
         data,
@@ -286,6 +293,16 @@ describe("GET /v1/org/members", () => {
       headers: { authorization: `Bearer ${MEMBER_KEY}` },
     });
     expect(res.status).toBe(401);
+  });
+
+  it("403s a workspace-scoped credential (org membership requires an org-scoped one)", async () => {
+    // admin-1's org key is admin/owner, but a workspace key confines its
+    // holder's authority to that one workspace — it must never reach the
+    // org-wide membership directory, even for the same user.
+    const res = await app.request("/v1/org/members", {
+      headers: { authorization: `Bearer ${WORKSPACE_KEY}` },
+    });
+    expect(res.status).toBe(403);
   });
 });
 

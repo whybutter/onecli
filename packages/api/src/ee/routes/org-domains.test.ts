@@ -7,6 +7,7 @@ import type { ApiEnv } from "../../types";
 // mock, with `node:dns/promises` mocked for the verify route.
 
 const ORG_KEY = "oc_org_test-key";
+const WORKSPACE_KEY = "oc_ws_test-key";
 
 vi.hoisted(() => {
   process.env.NEXT_PUBLIC_EDITION = "cloud";
@@ -38,20 +39,32 @@ vi.mock("@onecli/db", () => ({
   Prisma: {},
   db: {
     apiKey: {
-      findUnique: async ({ where }: { where: { key: string } }) =>
-        where.key === ORG_KEY
-          ? {
-              userId: "admin-1",
-              organizationId: "org-1",
-              scope: "organization",
-            }
-          : null,
+      findUnique: async ({ where }: { where: { key: string } }) => {
+        if (where.key === ORG_KEY) {
+          return {
+            userId: "admin-1",
+            organizationId: "org-1",
+            scope: "organization",
+          };
+        }
+        if (where.key === WORKSPACE_KEY) {
+          return { userId: "admin-1", workspaceId: "ws-1", kind: "user" };
+        }
+        return null;
+      },
     },
     user: { findUnique: async () => ({ email: "admin@example.com" }) },
     organizationMember: {
       findUnique: async () => ({ role: "owner", status: "active" }),
     },
+    workspace: {
+      findUnique: async () => ({ id: "ws-1", organizationId: "org-1" }),
+    },
+    workspaceAccess: { findFirst: async () => null },
     organizationDomain: {
+      count: async ({ where }: { where: { organizationId: string } }) =>
+        store.domains.filter((d) => d.organizationId === where.organizationId)
+          .length,
       findMany: async ({ where }: { where: { organizationId: string } }) =>
         store.domains
           .filter((d) => d.organizationId === where.organizationId)
@@ -211,6 +224,29 @@ describe("GET/POST /v1/org/domains", () => {
     const res = await app.request("/v1/org/domains");
     expect(res.status).toBe(401);
   });
+
+  it("403s a workspace-scoped credential", async () => {
+    const res = await app.request("/v1/org/domains", {
+      headers: { authorization: `Bearer ${WORKSPACE_KEY}` },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses a 26th domain for the org", async () => {
+    for (let i = 0; i < 25; i++) {
+      await app.request("/v1/org/domains", {
+        method: "POST",
+        headers: orgKeyHeaders,
+        body: JSON.stringify({ domain: `d${i}.example.com` }),
+      });
+    }
+    const res = await app.request("/v1/org/domains", {
+      method: "POST",
+      headers: orgKeyHeaders,
+      body: JSON.stringify({ domain: "one-too-many.example.com" }),
+    });
+    expect(res.status).toBe(400);
+  });
 });
 
 describe("POST /v1/org/domains/:domainId/verify", () => {
@@ -260,7 +296,7 @@ describe("POST /v1/org/domains/:domainId/verify", () => {
     expect(res.status).toBe(404);
   });
 
-  it("audits even the idempotent already-verified re-check", async () => {
+  it("does NOT audit the idempotent already-verified re-check — no DNS call, no fresh VERIFY event", async () => {
     const claimed = await claim();
     dns.resolveTxt.mockResolvedValue([
       [`onecli-verification=${claimed.verificationToken}`],
@@ -270,14 +306,14 @@ describe("POST /v1/org/domains/:domainId/verify", () => {
       headers: orgKeyHeaders,
     });
     store.auditLogs = [];
+    dns.resolveTxt.mockClear();
     const again = await app.request(`/v1/org/domains/${claimed.id}/verify`, {
       method: "POST",
       headers: orgKeyHeaders,
     });
     expect(again.status).toBe(200);
-    expect(store.auditLogs).toContainEqual(
-      expect.objectContaining({ action: "verify" }),
-    );
+    expect(store.auditLogs).toEqual([]);
+    expect(dns.resolveTxt).not.toHaveBeenCalled();
   });
 });
 

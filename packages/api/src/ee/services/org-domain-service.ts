@@ -3,6 +3,7 @@ import { resolveTxt } from "node:dns/promises";
 import { domainToASCII } from "node:url";
 import { db } from "@onecli/db";
 import { ServiceError } from "../../services/errors";
+import { isUniqueViolation } from "../lib/prisma-errors";
 
 /**
  * The organization's claimed email domains — api-ee-behaviour §8.1, ported
@@ -112,11 +113,6 @@ export const emailDomainOf = (email: string): string | null => {
   return normalizeDomain(email.slice(at + 1));
 };
 
-const isUniqueViolation = (err: unknown): boolean =>
-  typeof err === "object" &&
-  err !== null &&
-  (err as { code?: unknown }).code === "P2002";
-
 // ─── Reads / claim / delete ─────────────────────────────────────────────────
 
 export const listOrgDomains = async (
@@ -129,6 +125,17 @@ export const listOrgDomains = async (
   });
   return rows.map(toRow);
 };
+
+/**
+ * Ceiling on how many domains one organization may hold. Not in
+ * api-ee-behaviour §8.1 (the upstream spec has no cap); added as a rate-limit
+ * floor on the outbound-DNS fan-out a `verify` click opens (see
+ * `verifyOrgDomain`) — an uncapped org could mint unbounded rows and fire a
+ * lookup at each. A BAD_REQUEST (400): this is a deployment-shape limit the
+ * caller can act on immediately (remove one), not a state conflict with
+ * another resource (409's territory in Appendix B).
+ */
+const MAX_ORG_DOMAINS = 25;
 
 export const claimOrgDomain = async (
   organizationId: string,
@@ -146,6 +153,14 @@ export const claimOrgDomain = async (
     throw new ServiceError(
       "BAD_REQUEST",
       "Public email providers can't be claimed. Use your company's domain.",
+    );
+  }
+
+  const held = await db.organizationDomain.count({ where: { organizationId } });
+  if (held >= MAX_ORG_DOMAINS) {
+    throw new ServiceError(
+      "BAD_REQUEST",
+      `An organization can hold at most ${MAX_ORG_DOMAINS} domains. Remove one before adding another.`,
     );
   }
 
@@ -177,6 +192,15 @@ const NO_RECORD_CODES = new Set(["ENOTFOUND", "ENODATA", "SERVFAIL"]);
 const NOT_FOUND_MESSAGE =
   "TXT record not found yet. DNS changes can take a few minutes to propagate.";
 
+/**
+ * Resolver-side failures rather than "no record yet": the lookup itself
+ * didn't complete, so nothing was actually learned about whether the record
+ * exists. Reported as a retryable 400, not a 500 — this instance's outbound
+ * DNS having a bad moment is not an application bug.
+ */
+const UNREACHABLE_CODES = new Set(["ETIMEOUT", "ECONNREFUSED", "EREFUSED"]);
+const UNREACHABLE_MESSAGE = "DNS lookup failed, try again.";
+
 const dnsErrorCode = (err: unknown): string | undefined =>
   typeof err === "object" && err !== null && "code" in err
     ? String((err as { code: unknown }).code)
@@ -191,22 +215,32 @@ const dnsErrorCode = (err: unknown): string | undefined =>
 const flattenTxt = (records: string[][]): string[] =>
   records.map((chunks) => chunks.join("").trim().toLowerCase());
 
+export interface VerifyOrgDomainResult {
+  domain: OrgDomainRow;
+  /** `false` on the idempotent already-verified path — nothing happened, so
+   * the caller (the route) must not audit a fresh VERIFY event for it. */
+  changed: boolean;
+}
+
 /**
  * Run the DNS check. Already-verified rows return immediately without a DNS
- * call (idempotent — a double-click or a polling client costs nothing extra).
- * `ENOTFOUND`/`ENODATA`/`SERVFAIL` are "not published yet"; anything else
- * propagates (an operator-side DNS fault is not the same failure).
+ * call (idempotent — a double-click or a polling client costs nothing extra
+ * — and `changed: false` so the caller knows not to audit a non-event).
+ * `ENOTFOUND`/`ENODATA`/`SERVFAIL` are "not published yet"; `ETIMEOUT`/
+ * `ECONNREFUSED`/`EREFUSED` mean the lookup itself didn't complete (a
+ * retryable 400); anything else propagates (an unrecognised resolver fault
+ * is not safely reportable as either).
  */
 export const verifyOrgDomain = async (
   organizationId: string,
   domainId: string,
-): Promise<OrgDomainRow> => {
+): Promise<VerifyOrgDomainResult> => {
   const row = await db.organizationDomain.findFirst({
     where: { id: domainId, organizationId },
     select: SELECT,
   });
   if (!row) throw new ServiceError("NOT_FOUND", "Domain not found");
-  if (row.verifiedAt) return toRow(row);
+  if (row.verifiedAt) return { domain: toRow(row), changed: false };
 
   const expected = `onecli-verification=${row.verificationToken}`.toLowerCase();
 
@@ -217,6 +251,9 @@ export const verifyOrgDomain = async (
     const code = dnsErrorCode(err);
     if (code && NO_RECORD_CODES.has(code)) {
       throw new ServiceError("BAD_REQUEST", NOT_FOUND_MESSAGE);
+    }
+    if (code && UNREACHABLE_CODES.has(code)) {
+      throw new ServiceError("BAD_REQUEST", UNREACHABLE_MESSAGE);
     }
     throw err;
   }
@@ -234,7 +271,7 @@ export const verifyOrgDomain = async (
   });
   if (count === 0) throw new ServiceError("NOT_FOUND", "Domain not found");
 
-  return toRow({ ...row, verifiedAt });
+  return { domain: toRow({ ...row, verifiedAt }), changed: true };
 };
 
 /** `DELETE /org/domains/:domainId`. Deliberately never plan-gated (see the

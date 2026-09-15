@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type { ApiEnv } from "../../types";
 import { auth } from "../../middleware/auth";
+import { ServiceError } from "../../services/errors";
 import {
   withAudit,
   AUDIT_ACTIONS,
@@ -44,6 +45,15 @@ export const orgGroupRoutes = () => {
   const app = new Hono<ApiEnv>();
   const admin = auth({ requireWorkspace: false, role: "admin" });
   app.use("*", admin);
+  app.use("*", async (c, next) => {
+    if (c.get("auth").scope === "workspace") {
+      throw new ServiceError(
+        "FORBIDDEN",
+        "Groups require an organization-scoped credential.",
+      );
+    }
+    return next();
+  });
 
   const auditBase = (c: Context<ApiEnv>) => ({
     organizationId: c.get("auth").organizationId,

@@ -28,6 +28,7 @@ interface BindingRow {
 const store = vi.hoisted(() => ({
   workspaces: [
     { id: "ws-1", organizationId: "org-1", createdByUserId: "admin-1" },
+    { id: "ws-2", organizationId: "org-2", createdByUserId: "admin-2" },
   ],
   bindings: [] as BindingRow[],
   orgMembers: [
@@ -43,7 +44,32 @@ const store = vi.hoisted(() => ({
       role: "member",
       status: "active",
     },
+    {
+      organizationId: "org-2",
+      userId: "admin-2",
+      role: "owner",
+      status: "active",
+    },
+    // A member of org-1 who ALSO admins org-2 — the two-org fixture the
+    // caller's-org fence test exploits: scoped to org-1 via
+    // x-organization-id, targeting a workspace that really lives in org-2.
+    {
+      organizationId: "org-1",
+      userId: "cross-admin",
+      role: "member",
+      status: "active",
+    },
+    {
+      organizationId: "org-2",
+      userId: "cross-admin",
+      role: "admin",
+      status: "active",
+    },
   ],
+  // Session identity lookup, keyed by the auth provider's external id.
+  usersByAuth: {
+    "ext-cross-admin": { id: "cross-admin", email: "cross-admin@example.com" },
+  } as Record<string, { id: string; email: string }>,
   users: [] as { id: string; name: string | null; email: string }[],
   groups: [] as { id: string; organizationId: string; name: string }[],
   auditLogs: [] as {
@@ -71,7 +97,18 @@ vi.mock("@onecli/db", () => {
         return null;
       },
     },
-    user: { findUnique: async () => ({ email: "admin@example.com" }) },
+    user: {
+      findUnique: async ({
+        where,
+      }: {
+        where: { externalAuthId?: string; id?: string };
+      }) => {
+        if (where.externalAuthId) {
+          return store.usersByAuth[where.externalAuthId] ?? null;
+        }
+        return { email: "admin@example.com" };
+      },
+    },
     organizationMember: {
       findUnique: async ({
         where,
@@ -86,6 +123,23 @@ vi.mock("@onecli/db", () => {
             (m) => m.organizationId === organizationId && m.userId === userId,
           ) ?? null
         );
+      },
+      findFirst: async ({
+        where,
+      }: {
+        where: {
+          userId: string;
+          organizationId: string;
+          status: { not: string };
+        };
+      }) => {
+        const member = store.orgMembers.find(
+          (m) =>
+            m.userId === where.userId &&
+            m.organizationId === where.organizationId &&
+            m.status !== where.status.not,
+        );
+        return member ? { organizationId: member.organizationId } : null;
       },
       findMany: async ({
         where,
@@ -109,14 +163,23 @@ vi.mock("@onecli/db", () => {
       }: {
         where: {
           id: string;
-          organization: {
+          organizationId?: string;
+          organization?: {
             members: { some: { userId: string; status: { not: string } } };
           };
         };
       }) => {
         const workspace = store.workspaces.find((w) => w.id === where.id);
         if (!workspace) return null;
-        const probe = where.organization.members.some;
+        // Flat shape — `setWorkspaceAccessBindings`'s own org-ownership
+        // check: `{ id, organizationId }`.
+        if (where.organizationId !== undefined) {
+          return workspace.organizationId === where.organizationId
+            ? { id: workspace.id }
+            : null;
+        }
+        // Nested shape — the auth middleware's visibility fence.
+        const probe = where.organization!.members.some;
         const member = store.orgMembers.find(
           (m) =>
             m.organizationId === workspace.organizationId &&
@@ -192,21 +255,20 @@ vi.mock("@onecli/db", () => {
         });
         return { count: before - store.bindings.length };
       },
-      update: async ({
+      updateMany: async ({
         where,
         data,
       }: {
-        where: { workspaceId_userId: { workspaceId: string; userId: string } };
+        where: { workspaceId: string; userId: string };
         data: { role: string };
       }) => {
         const row = store.bindings.find(
           (b) =>
-            b.workspaceId === where.workspaceId_userId.workspaceId &&
-            b.userId === where.workspaceId_userId.userId,
+            b.workspaceId === where.workspaceId && b.userId === where.userId,
         );
-        if (!row) throw new Error("not found");
+        if (!row) return { count: 0 };
         row.role = data.role;
-        return row;
+        return { count: 1 };
       },
       createMany: async ({
         data,
@@ -269,7 +331,15 @@ import { createApiApp } from "../../app";
 import { getUserRole } from "../services/authorization-service";
 import { workspaceAccessRoutes } from "./workspace-access";
 
-const nullSession = { getSession: async () => null };
+// A session provider gated on a marker header, so the existing API-key
+// tests (which never set it) are unaffected — API-key auth is checked first
+// in the middleware chain regardless.
+const sessionProvider = {
+  getSession: async (request: Request) => {
+    const externalAuthId = request.headers.get("x-test-session");
+    return externalAuthId ? { id: externalAuthId, email: "" } : null;
+  },
+};
 const orgKeyHeaders = {
   authorization: `Bearer ${ORG_KEY}`,
   "content-type": "application/json",
@@ -278,11 +348,16 @@ const wsKeyHeaders = {
   authorization: `Bearer ${WORKSPACE_KEY}`,
   "content-type": "application/json",
 };
+const crossAdminSessionHeaders = (organizationId: string) => ({
+  "x-test-session": "ext-cross-admin",
+  "x-organization-id": organizationId,
+  "content-type": "application/json",
+});
 
 let app: Hono<ApiEnv>;
 
 beforeAll(() => {
-  app = createApiApp(nullSession, {
+  app = createApiApp(sessionProvider, {
     roleResolver: { getUserRole },
     eeRoutes: (a) => {
       a.route("/workspaces", workspaceAccessRoutes());
@@ -404,5 +479,41 @@ describe("PUT /v1/workspaces/:id/access", () => {
       body: JSON.stringify({ users: [], groupIds: [] }),
     });
     expect(res.status).toBe(404);
+  });
+
+  describe("the caller's-org fence (api-ee-behaviour §2.2)", () => {
+    // cross-admin is a member of org-1 and a genuine admin of org-2; ws-2
+    // really belongs to org-2. Scoped to org-1 (x-organization-id), the
+    // request must 404 rather than let an org-1-active user get bound onto
+    // an org-2 workspace, or let cross-admin manage org-2 while declaring
+    // org-1 as their context.
+    it("404s a PUT against a workspace that belongs to a DIFFERENT org than the caller's scoped org", async () => {
+      const res = await app.request("/v1/workspaces/ws-2/access", {
+        method: "PUT",
+        headers: crossAdminSessionHeaders("org-1"),
+        body: JSON.stringify({
+          users: [{ userId: "member-1", role: "owner" }],
+          groupIds: [],
+        }),
+      });
+      expect(res.status).toBe(404);
+      expect(store.bindings).toEqual([]);
+    });
+
+    it("404s the same GET too", async () => {
+      const res = await app.request("/v1/workspaces/ws-2/access", {
+        headers: crossAdminSessionHeaders("org-1"),
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("succeeds once the caller's scoped org actually matches the workspace's org", async () => {
+      const res = await app.request("/v1/workspaces/ws-2/access", {
+        method: "PUT",
+        headers: crossAdminSessionHeaders("org-2"),
+        body: JSON.stringify({ users: [], groupIds: [] }),
+      });
+      expect(res.status).toBe(200);
+    });
   });
 });

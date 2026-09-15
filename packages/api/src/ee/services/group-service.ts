@@ -7,6 +7,7 @@ import {
   toDirectoryPage,
   type DirectoryPage,
 } from "../lib/directory-page";
+import { isUniqueViolation } from "../lib/prisma-errors";
 
 /**
  * The org's human-group directory: list/create/rename/delete plus the three
@@ -29,11 +30,13 @@ import {
  * reads it defensively even so.
  */
 
+export type GroupSource = "manual" | "scim";
+
 /** One row of the groups directory (matches the client's `GroupRow`). */
 export interface GroupRow {
   id: string;
   name: string;
-  source: string;
+  source: GroupSource;
   externalId: string | null;
   memberCount: number;
   createdAt: string;
@@ -68,25 +71,22 @@ type GroupRowSource = {
   _count: { members: number };
 };
 
+/** The stored column is a plain string (no DB enum); every write path in
+ * this file only ever sets "manual", and SCIM (not shipped in this phase)
+ * would only ever set "scim" — an unrecognized value defaults to "manual"
+ * rather than widening the wire type or throwing on a read. */
+const asGroupSource = (value: string): GroupSource =>
+  value === "scim" ? "scim" : "manual";
+
 const toGroupRow = (row: GroupRowSource): GroupRow => ({
   id: row.id,
   name: row.name,
-  source: row.source,
+  source: asGroupSource(row.source),
   externalId: row.externalId,
   memberCount: row._count.members,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });
-
-/**
- * Prisma's unique-violation code, matched structurally rather than by class
- * so a test double's error reads the same as the real client's (see
- * `workspace-service.ts`).
- */
-const isUniqueViolation = (err: unknown): boolean =>
-  typeof err === "object" &&
-  err !== null &&
-  (err as { code?: unknown }).code === "P2002";
 
 const GROUP_CURSOR_KEYS = ["name", "id"] as const;
 
