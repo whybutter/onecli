@@ -458,7 +458,7 @@ describe.skipIf(!PROOF_URL)("workspace service on PostgreSQL", () => {
 
     await expect(
       team.removeMember(ORG, MEMBER, { revokeIdentity: false }),
-    ).resolves.toBe("skipped");
+    ).resolves.toMatchObject({ revocation: "skipped", email: MEMBER_EMAIL });
 
     const remaining = await db.workspace.findMany({
       where: { organizationId: ORG },

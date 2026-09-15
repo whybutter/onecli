@@ -16,6 +16,7 @@ import {
   toDirectoryPage,
   type DirectoryPage,
 } from "../lib/directory-page";
+import { isUniqueViolation } from "../lib/prisma-errors";
 import { listGroupsPage, type GroupRow } from "./group-service";
 import { deleteWorkspace } from "./workspace-service";
 
@@ -111,7 +112,12 @@ const requireMembership = async (
     where: { organizationId_userId: { organizationId, userId } },
     select: { role: true, userEmail: true },
   });
-  if (!membership) throw new Error("User is not a member of this organization");
+  if (!membership) {
+    throw new ServiceError(
+      "NOT_FOUND",
+      "User is not a member of this organization",
+    );
+  }
   return membership;
 };
 
@@ -257,21 +263,30 @@ export const findDeletablePersonalWorkspaces = async (
   }));
 };
 
+export interface RemoveMemberResult {
+  revocation: RevocationOutcome;
+  /** The removed member's email, for the caller's audit metadata. */
+  email: string;
+}
+
 /**
  * Remove a member (an admin removing them, or the member leaving). The
  * organization owner can never be removed — a domain rule, not a licence
- * rule. Order: their truly-personal workspaces go (full cascade + key
- * flush), then every key of theirs in this org, then the bindings they were
- * shared INTO, their group memberships here, and finally the membership
- * row. `revokeIdentity: false` is the voluntary-leave shape; either way the
- * login is untouched in this build, so the outcome is `"skipped"`.
- * Not audited here — callers audit with their own actor.
+ * rule. Guards run BEFORE any destructive step (mirrors suspendMember):
+ * NOT_FOUND for a non-member, BAD_REQUEST for the owner, both typed so the
+ * route needs no separate pre-check query. Order once past the guards:
+ * their truly-personal workspaces go (full cascade + key flush), then every
+ * key of theirs in this org, then the bindings they were shared INTO, their
+ * group memberships here, and finally the membership row. `revokeIdentity:
+ * false` is the voluntary-leave shape; either way the login is untouched in
+ * this build, so the outcome is `"skipped"`. Not audited here — callers
+ * audit with their own actor.
  */
 export type RemoveMember = (
   organizationId: string,
   targetUserId: string,
   options?: { revokeIdentity?: boolean },
-) => Promise<RevocationOutcome>;
+) => Promise<RemoveMemberResult>;
 
 export const removeMember: RemoveMember = async (
   organizationId,
@@ -279,7 +294,10 @@ export const removeMember: RemoveMember = async (
 ) => {
   const membership = await requireMembership(organizationId, targetUserId);
   if (membership.role === "owner") {
-    throw new Error("The organization owner cannot be removed");
+    throw new ServiceError(
+      "BAD_REQUEST",
+      "The organization owner cannot be removed",
+    );
   }
 
   const personal = await findDeletablePersonalWorkspaces(
@@ -308,7 +326,7 @@ export const removeMember: RemoveMember = async (
     },
   });
 
-  return "skipped";
+  return { revocation: "skipped", email: membership.userEmail };
 };
 
 // ─── Directory list, suspend/reinstate, create, and the user→groups page ──
@@ -407,12 +425,16 @@ export const listMembersPage = async (
   }));
 };
 
+const MEMBER_ALREADY_EXISTS =
+  "This user is already a member of the organization.";
+
 export interface CreatedMember {
   userId: string;
   email: string;
   name: string | null;
   role: string;
   status: string;
+  ssoExempt: boolean;
   joinedAt: string;
   /** Route-only: folded into the audit metadata, dropped from the response. */
   userCreated: boolean;
@@ -423,6 +445,14 @@ export interface CreatedMember {
  * auth id — this is a manual, non-directory provisioning door, but the
  * placeholder-id convention is shared with the real SCIM/JIT doors) and an
  * active `member` membership.
+ *
+ * Two existence checks, not one: the fast pre-check by `userEmail` covers the
+ * common case cheaply, but an EXISTING user's row can carry a different
+ * canonical email than the one this call was given (their email changed
+ * elsewhere since they joined) — the by-`userId` check after resolving the
+ * user catches that. `organizationMember.create`'s own unique-violation
+ * catch is the last line of defense, for the concurrent-double-add race
+ * neither read can see.
  */
 export const createMember = async (
   organizationId: string,
@@ -434,10 +464,7 @@ export const createMember = async (
     select: { userId: true },
   });
   if (existingMembership) {
-    throw new ServiceError(
-      "CONFLICT",
-      "This user is already a member of the organization.",
-    );
+    throw new ServiceError("CONFLICT", MEMBER_ALREADY_EXISTS);
   }
 
   let user = await db.user.findUnique({
@@ -451,18 +478,34 @@ export const createMember = async (
       select: { id: true, name: true },
     });
     userCreated = true;
+  } else {
+    const existingByUserId = await db.organizationMember.findUnique({
+      where: { organizationId_userId: { organizationId, userId: user.id } },
+      select: { userId: true },
+    });
+    if (existingByUserId) {
+      throw new ServiceError("CONFLICT", MEMBER_ALREADY_EXISTS);
+    }
   }
 
-  const membership = await db.organizationMember.create({
-    data: {
-      organizationId,
-      userId: user.id,
-      userEmail: email,
-      role: "member",
-      status: "active",
-    },
-    select: { createdAt: true },
-  });
+  let membership: { createdAt: Date };
+  try {
+    membership = await db.organizationMember.create({
+      data: {
+        organizationId,
+        userId: user.id,
+        userEmail: email,
+        role: "member",
+        status: "active",
+      },
+      select: { createdAt: true },
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new ServiceError("CONFLICT", MEMBER_ALREADY_EXISTS);
+    }
+    throw err;
+  }
 
   return {
     userId: user.id,
@@ -470,6 +513,7 @@ export const createMember = async (
     name: user.name ?? name,
     role: "member",
     status: "active",
+    ssoExempt: false,
     joinedAt: membership.createdAt.toISOString(),
     userCreated,
   };

@@ -2,8 +2,10 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type { ApiEnv } from "../../types";
 import { auth } from "../../middleware/auth";
+import { ServiceError } from "../../services/errors";
 import {
   withAudit,
+  recordAuditEvent,
   AUDIT_ACTIONS,
   AUDIT_SERVICES,
   AUDIT_SOURCE,
@@ -31,6 +33,15 @@ export const orgDomainRoutes = () => {
   const app = new Hono<ApiEnv>();
   const admin = auth({ requireWorkspace: false, role: "admin" });
   app.use("*", admin);
+  app.use("*", async (c, next) => {
+    if (c.get("auth").scope === "workspace") {
+      throw new ServiceError(
+        "FORBIDDEN",
+        "Domains require an organization-scoped credential.",
+      );
+    }
+    return next();
+  });
 
   const auditBase = (c: Context<ApiEnv>) => ({
     organizationId: c.get("auth").organizationId,
@@ -75,26 +86,31 @@ export const orgDomainRoutes = () => {
     return c.json(domain, 201);
   });
 
-  // POST /org/domains/:domainId/verify — audited even on the idempotent
-  // already-verified path (Appendix A: "verified: true" is recorded either
-  // way; a miss throws before withAudit ever runs).
+  // POST /org/domains/:domainId/verify — a real DNS miss throws before any
+  // audit; `withAudit` always logs, so it doesn't fit here — only a REAL
+  // unverified→verified transition is a VERIFY event. A re-check of an
+  // already-verified row is a read (`changed: false`) and must not write N
+  // audit rows for a double-click or a polling client.
   app.post("/:domainId/verify", async (c) => {
     const authCtx = c.get("auth");
     const domainId = c.req.param("domainId");
     await assertFeatureAllowed(authCtx.organizationId, "sso");
 
-    const domain = await withAudit(
-      () => verifyOrgDomain(authCtx.organizationId, domainId),
-      (result) => ({
+    const { domain, changed } = await verifyOrgDomain(
+      authCtx.organizationId,
+      domainId,
+    );
+    if (changed) {
+      await recordAuditEvent({
         ...auditBase(c),
         action: AUDIT_ACTIONS.VERIFY,
         metadata: {
-          domainId: result.id,
-          domain: result.domain,
+          domainId: domain.id,
+          domain: domain.domain,
           verified: true,
         },
-      }),
-    );
+      });
+    }
     return c.json(domain);
   });
 

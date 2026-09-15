@@ -26,6 +26,9 @@ vi.mock("@onecli/db", () => ({
   Prisma: {},
   db: {
     organizationDomain: {
+      count: async ({ where }: { where: { organizationId: string } }) =>
+        store.domains.filter((d) => d.organizationId === where.organizationId)
+          .length,
       findMany: async ({ where }: { where: { organizationId: string } }) =>
         store.domains
           .filter((d) => d.organizationId === where.organizationId)
@@ -167,12 +170,13 @@ describe("verifyOrgDomain", () => {
     dns.resolveTxt.mockResolvedValue([
       [`ONECLI-VERIFICATION=`, claimed.verificationToken.toUpperCase()],
     ]);
-    const verified = await verifyOrgDomain(ORG, claimed.id);
-    expect(verified.verifiedAt).not.toBeNull();
+    const result = await verifyOrgDomain(ORG, claimed.id);
+    expect(result.domain.verifiedAt).not.toBeNull();
+    expect(result.changed).toBe(true);
     expect(dns.resolveTxt).toHaveBeenCalledWith("example.com");
   });
 
-  it("is idempotent on an already-verified row — no DNS call", async () => {
+  it("is idempotent on an already-verified row — no DNS call, changed: false", async () => {
     const claimed = await claimOrgDomain(ORG, "u1", "example.com");
     dns.resolveTxt.mockResolvedValue([
       [`onecli-verification=${claimed.verificationToken}`],
@@ -180,7 +184,8 @@ describe("verifyOrgDomain", () => {
     await verifyOrgDomain(ORG, claimed.id);
     dns.resolveTxt.mockClear();
     const again = await verifyOrgDomain(ORG, claimed.id);
-    expect(again.verifiedAt).not.toBeNull();
+    expect(again.domain.verifiedAt).not.toBeNull();
+    expect(again.changed).toBe(false);
     expect(dns.resolveTxt).not.toHaveBeenCalled();
   });
 
@@ -199,6 +204,20 @@ describe("verifyOrgDomain", () => {
     },
   );
 
+  it.each(["ETIMEOUT", "ECONNREFUSED", "EREFUSED"])(
+    "%s (the lookup itself failed) maps to a retryable 400, not a 500",
+    async (code) => {
+      const claimed = await claimOrgDomain(ORG, "u1", "example.com");
+      dns.resolveTxt.mockRejectedValue(
+        Object.assign(new Error("dns"), { code }),
+      );
+      await expect(verifyOrgDomain(ORG, claimed.id)).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: "DNS lookup failed, try again.",
+      });
+    },
+  );
+
   it("a mismatched record also reads as 'not found yet'", async () => {
     const claimed = await claimOrgDomain(ORG, "u1", "example.com");
     dns.resolveTxt.mockResolvedValue([["onecli-verification=wrong-token"]]);
@@ -207,10 +226,10 @@ describe("verifyOrgDomain", () => {
     });
   });
 
-  it("an unrecognised DNS error propagates rather than being swallowed", async () => {
+  it("a genuinely unrecognised DNS error propagates rather than being swallowed", async () => {
     const claimed = await claimOrgDomain(ORG, "u1", "example.com");
     dns.resolveTxt.mockRejectedValue(
-      Object.assign(new Error("boom"), { code: "ECONNREFUSED" }),
+      Object.assign(new Error("boom"), { code: "EWEIRD" }),
     );
     await expect(verifyOrgDomain(ORG, claimed.id)).rejects.toThrow("boom");
   });
@@ -220,6 +239,30 @@ describe("verifyOrgDomain", () => {
     await expect(verifyOrgDomain("org-2", claimed.id)).rejects.toMatchObject({
       code: "NOT_FOUND",
     });
+  });
+});
+
+describe("claimOrgDomain — per-org cap", () => {
+  it("refuses a 26th domain", async () => {
+    for (let i = 0; i < 25; i++) {
+      await claimOrgDomain(ORG, "u1", `d${i}.example.com`);
+    }
+    await expect(
+      claimOrgDomain(ORG, "u1", "one-too-many.example.com"),
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message:
+        "An organization can hold at most 25 domains. Remove one before adding another.",
+    });
+  });
+
+  it("does not count another org's domains toward the cap", async () => {
+    for (let i = 0; i < 25; i++) {
+      await claimOrgDomain("org-2", "u1", `other${i}.example.com`);
+    }
+    await expect(
+      claimOrgDomain(ORG, "u1", "fine.example.com"),
+    ).resolves.toMatchObject({ domain: "fine.example.com" });
   });
 });
 

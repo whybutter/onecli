@@ -468,9 +468,9 @@ describe("the GROUP arm (risk 1: never wider than 'a group bound to THIS workspa
     // `getUserRole` is the choke point for both binding kinds.
     store.members.push(member("grouped-suspended", "member", "suspended"));
     store.groupMembers.push({ groupId: GROUP, userId: "grouped-suspended" });
-    await expect(
-      canAccessWorkspace("grouped-suspended", WS),
-    ).resolves.toBe(false);
+    await expect(canAccessWorkspace("grouped-suspended", WS)).resolves.toBe(
+      false,
+    );
     await expect(
       eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("grouped-suspended", {
         id: WS,
