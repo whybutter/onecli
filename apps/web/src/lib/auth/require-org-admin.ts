@@ -7,8 +7,13 @@ import { requireRole } from "@onecli/api/ee/services/authorization-service";
 /**
  * Server-side role guard for the org-level admin pages (Groups, Domains,
  * Organization Settings, ...). Resolves the caller's org context and
- * requires "admin" or "owner"; on ANY thrown error (forbidden or transient)
- * redirects to the org's workspace list rather than surfacing the error.
+ * requires "admin" or "owner", failing closed on ANY thrown error rather
+ * than surfacing it to the error boundary:
+ *
+ * - no org context can be resolved at all (not authenticated, no active
+ *   membership, missing request context) → redirect home;
+ * - the org IS known but the role check refuses (forbidden or a transient
+ *   failure) → redirect to that org's workspace list.
  *
  * Defense in depth beside the `(admin)` route-group layout
  * (`lib/dashboard/admin-layout.tsx`), which already gates the same pages —
@@ -16,11 +21,18 @@ import { requireRole } from "@onecli/api/ee/services/authorization-service";
  * touching any data.
  */
 export const requireOrgAdmin = async (): Promise<OrgContext> => {
-  const ctx = await resolveOrgContext();
+  let ctx: OrgContext;
+  try {
+    ctx = await resolveOrgContext();
+  } catch {
+    redirect("/");
+  }
+
   try {
     await requireRole(ctx.userId, ctx.organizationId, "admin");
   } catch {
     redirect(`/org/${ctx.organizationId}/workspaces`);
   }
+
   return ctx;
 };
