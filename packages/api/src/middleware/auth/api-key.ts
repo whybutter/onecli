@@ -1,7 +1,6 @@
 import { db } from "@onecli/db";
 import type { AuthContext } from "../../providers";
 import { getRoleResolver, ROLE_HIERARCHY } from "../../providers";
-import { CAPS } from "../../lib/env";
 import { recordApiKeyUse } from "../../services/api-key-service";
 import { resolveUserEmail, canAccessWorkspaceAsUser } from "./resolve";
 
@@ -59,16 +58,14 @@ export const authenticateApiKey = async (
       return "invalid-key";
 
     // Org keys are an admin capability — re-check the key's user still holds
-    // admin/owner in the org (only when RBAC is active; non-RBAC editions enforce
-    // no roles). Closes the gap where a key keeps working after a demotion.
-    if (CAPS.rbac) {
-      const resolver = getRoleResolver();
-      const role = resolver
-        ? await resolver.getUserRole(apiKey.userId, apiKey.organizationId)
-        : null;
-      if (!role || ROLE_HIERARCHY[role] < ROLE_HIERARCHY.admin)
-        return "invalid-key";
-    }
+    // admin/owner in the org. Closes the gap where a key keeps working after
+    // a demotion.
+    const resolver = getRoleResolver();
+    const role = resolver
+      ? await resolver.getUserRole(apiKey.userId, apiKey.organizationId)
+      : null;
+    if (!role || ROLE_HIERARCHY[role] < ROLE_HIERARCHY.admin)
+      return "invalid-key";
 
     const userEmail = await resolveUserEmail(apiKey.userId);
     const headerWorkspaceId = request.headers.get("x-workspace-id");

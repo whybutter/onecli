@@ -23,7 +23,7 @@ import type {
   ChannelTransport,
   PresenceIdentity,
 } from "./types";
-import { CAPS, RUNNER_ONLINE_THRESHOLD_SECONDS } from "../../lib/env";
+import { RUNNER_ONLINE_THRESHOLD_SECONDS } from "../../lib/env";
 import { logger } from "../../lib/logger";
 
 const log = logger.child({ component: "agent-channel-service" });
@@ -242,10 +242,10 @@ export const getAgentChannels = async (
   const agent = await requireHostedAgent(workspaceId, agentId);
 
   // Whether the CALLER may take the "connect Slack for the org" deep link
-  // (it sits behind the org admin layout). RBAC off = no roles = everyone
-  // may; no viewer identity (service callers, older tests) = same.
+  // (it sits behind the org admin layout). No viewer identity (service
+  // callers, older tests) defaults to allowed.
   let viewerIsOrgAdmin = true;
-  if (CAPS.rbac && viewerUserId) {
+  if (viewerUserId) {
     const resolver = getRoleResolver();
     const role = resolver
       ? await resolver.getUserRole(viewerUserId, agent.workspace.organizationId)
