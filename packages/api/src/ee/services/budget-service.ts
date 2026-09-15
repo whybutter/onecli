@@ -1,5 +1,6 @@
-import { db, Prisma } from "@onecli/db";
+import { db } from "@onecli/db";
 import { ServiceError } from "../../services/errors";
+import { isUniqueViolation } from "../lib/prisma-errors";
 
 // Per-(secret, org) spend caps. Every call is fenced to ONE organization — the
 // caller's `auth.organizationId`, never a body parameter — so this can neither
@@ -177,10 +178,7 @@ export const createBudget = async (
       updatedAt: created.updatedAt.toISOString(),
     };
   } catch (err) {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2002"
-    ) {
+    if (isUniqueViolation(err)) {
       throw new ServiceError(
         "CONFLICT",
         "A budget already exists for this secret.",
