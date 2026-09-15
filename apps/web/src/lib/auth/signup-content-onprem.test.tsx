@@ -207,6 +207,38 @@ describe("self-hosted sign-up screen", () => {
     expect(screen.queryByRole("link", { name: "Log in" })).toBeNull();
   });
 
+  it("shows the invite-only message and no form when closed", () => {
+    renderScreen({ closed: true });
+    expect(
+      screen.getByRole("heading", { name: "Invite only" }),
+    ).toBeTruthy();
+    expect(screen.getByText(/only accepts new accounts by invitation/i)).toBeTruthy();
+    expect(screen.queryByPlaceholderText("Name")).toBeNull();
+    expect(screen.queryByPlaceholderText("Email")).toBeNull();
+    expect(screen.queryByPlaceholderText("Password")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Google/ })).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Log in" }).getAttribute("href"),
+    ).toBe("/auth/login");
+  });
+
+  it("ignores closed when an invitation is also present", () => {
+    // An invited joiner must always see the join form — never the closed
+    // state — even if a caller passed both (defends the precedence rather
+    // than trusting page.tsx never to pass both).
+    renderScreen({
+      closed: true,
+      invitation: {
+        token: "tok-1",
+        email: "invited@acme.test",
+        organizationName: "Acme",
+      },
+    });
+    expect(screen.getByRole("heading", { name: "Join the team" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Invite only" })).toBeNull();
+    expect(screen.getByPlaceholderText("Email")).toBeTruthy();
+  });
+
   it("sends an invited Google signup back to the token-bearing URL", async () => {
     // The invitation token lives in this page's URL; the OAuth round-trip
     // must land back on it or the join (and the personal-org suppression)
