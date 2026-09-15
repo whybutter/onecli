@@ -65,6 +65,7 @@ fn target_matches(
     rule: &NewRule,
     request: &PolicyRequest,
     body: ConditionBody<'_>,
+    headers: Option<&hyper::HeaderMap>,
 ) -> bool {
     match target {
         Target::Network {
@@ -83,6 +84,7 @@ fn target_matches(
                     &request.method,
                     &request.path,
                     body,
+                    headers,
                 )
         }
         Target::App { provider, tools } => super::catalog::app_target_matches(
@@ -92,6 +94,7 @@ fn target_matches(
             &request.method,
             &request.path,
             body,
+            headers,
             &rule.conditions,
             polarity_of(rule),
         ),
@@ -113,6 +116,7 @@ fn target_matches(
                     &request.method,
                     &request.path,
                     body,
+                    headers,
                     &rule.conditions,
                     polarity_of(rule),
                 )
@@ -129,7 +133,12 @@ fn target_matches(
     }
 }
 
-fn rule_matches(rule: &NewRule, request: &PolicyRequest, body: ConditionBody<'_>) -> bool {
+fn rule_matches(
+    rule: &NewRule,
+    request: &PolicyRequest,
+    body: ConditionBody<'_>,
+    headers: Option<&hyper::HeaderMap>,
+) -> bool {
     // A non-default rule matches only when it names at least one target AND one of
     // them matches. Empty targets = matches NOTHING (fail-closed): "match every
     // request" is the Default Rule's terminal job or an explicit network wildcard,
@@ -143,7 +152,7 @@ fn rule_matches(rule: &NewRule, request: &PolicyRequest, body: ConditionBody<'_>
         && rule
             .targets
             .iter()
-            .any(|t| target_matches(t, rule, request, body))
+            .any(|t| target_matches(t, rule, request, body, headers))
 }
 
 struct LevelMatch<'a> {
@@ -156,6 +165,7 @@ fn first_match<'a>(
     rules: &[&'a NewRule],
     request: &PolicyRequest,
     body: ConditionBody<'_>,
+    headers: Option<&hyper::HeaderMap>,
 ) -> Option<LevelMatch<'a>> {
     let mut ordered: Vec<&'a NewRule> = rules.to_vec();
     // Priority, then id: a total, deterministic order even if two rules share a
@@ -164,7 +174,7 @@ fn first_match<'a>(
     // the two ports agree on ties; a mixed-case PK format would break that.
     ordered.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.id.cmp(&b.id)));
     for rule in ordered {
-        if rule_matches(rule, request, body) {
+        if rule_matches(rule, request, body, headers) {
             return Some(LevelMatch {
                 rank: strictness_rank(rule),
                 rule,
@@ -210,6 +220,7 @@ pub(super) fn evaluate_outcome<'a>(
     rules: &'a [NewRule],
     request: &PolicyRequest,
     body: ConditionBody<'_>,
+    headers: Option<&hyper::HeaderMap>,
 ) -> Outcome<'a> {
     let org_explicit: Vec<&NewRule> = rules
         .iter()
@@ -220,8 +231,8 @@ pub(super) fn evaluate_outcome<'a>(
         .filter(|r| !r.is_default && r.scope == Scope::Workspace)
         .collect();
 
-    let org_match = first_match(&org_explicit, request, body);
-    let workspace_match = first_match(&workspace_explicit, request, body);
+    let org_match = first_match(&org_explicit, request, body, headers);
+    let workspace_match = first_match(&workspace_explicit, request, body, headers);
 
     // A Default Rule Block is a HARD FLOOR at its level: the org default's Block
     // may not be opened by a workspace ALLOW (only an org allow rule or an org
@@ -281,7 +292,10 @@ pub(super) fn evaluate_new(
     request: &PolicyRequest,
     body: ConditionBody<'_>,
 ) -> Decision {
-    match evaluate_outcome(rules, request, body) {
+    // Test-only twin of the corpus/parity path — headers have no equivalent
+    // in the TS evaluator this mirrors, so callers here never exercise
+    // `header`-target conditions; always `None`.
+    match evaluate_outcome(rules, request, body, None) {
         Outcome::Rule(rule) => to_decision(rule),
         Outcome::DenyDefault(_) => Decision::block_by_default(),
         Outcome::Allow => Decision::allow(),
@@ -340,10 +354,10 @@ mod tests {
         let b = matching_rule("b", 5, Action::Block);
         let req = request();
 
-        let ab = first_match(&[&a, &b], &req, ConditionBody::None).expect("a matches");
+        let ab = first_match(&[&a, &b], &req, ConditionBody::None, None).expect("a matches");
         assert_eq!(ab.rule.id, "a", "lower id wins");
 
-        let ba = first_match(&[&b, &a], &req, ConditionBody::None).expect("a matches");
+        let ba = first_match(&[&b, &a], &req, ConditionBody::None, None).expect("a matches");
         assert_eq!(
             ba.rule.id, "a",
             "reversed insertion order still picks the lower id"

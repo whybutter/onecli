@@ -226,13 +226,35 @@ Applicability (all must hold, else pass-through / `None`):
 
 - a session policy is present;
 - port-stripped host resolves to provider `dropbox` via the app registry;
-- `folders(policy)` is `Some`: the `folders` key holds an array; after normalizing
-  (lowercase, strip trailing `/`) and **dropping empty entries** (root), at least one entry
-  remains. So `{folders: []}` and `{folders: ["/"]}` both mean **no guard** (the former is
-  caught earlier by `denies_everything`; the latter is _unrestricted_).
+- `folder_policy(policy)` decodes to `Restricted(list)`: the `folders` key holds an
+  array with at least one entry that normalizes (lowercase, strip trailing `/`) to
+  something other than the account root.
 
-`needs_body(policy, host)` = `host == "api.dropboxapi.com"` **and** `folders(policy)` is
-`Some`. The content host is decided from a header, so no buffering.
+`folder_policy(policy)` (Phase 1 WP-C amendment) is a three-way decode, not a
+`Some`/`None` allowlist:
+
+- **`Unrestricted`** (no guard): the `folders` key is absent, the policy isn't an
+  object, or the key holds something other than an array; OR every string entry
+  normalizes to the account root (e.g. `{folders: ["/"]}`) — root is the widest
+  scope.
+- **`DenyAll`** (guard denies unconditionally, before the pathless allowlist and
+  every other check): the `folders` key holds an array with **zero in-scope
+  entries** — either explicitly empty (`{folders: []}`, ordinarily intercepted
+  earlier by `denies_everything`, but the guard denies it too as defence in
+  depth) **or** non-empty with zero usable STRING entries, e.g. `{folders: [42]}`.
+  This second case is the amendment: before it, a non-empty-but-garbage array
+  decoded as `Unrestricted` (a spec gap) — the fail-closed reading is to deny,
+  not to hand out an unscoped credential for a policy an administrator wrote to
+  restrict access. A raw array with a MIX of garbage and usable entries
+  (`{folders: [42, "/valid"]}`) decodes to `Restricted(["/valid"])` — the
+  non-string entry is dropped, not fatal, matching `denies_everything`'s "raw
+  entries that are not strings are ignored" rule elsewhere in this document.
+- **`Restricted(list)`**: the normalized, non-empty allowlist — the only shape
+  that triggers the guard above.
+
+`needs_body(policy, host)` = `host == "api.dropboxapi.com"` **and** `folder_policy(policy)`
+is `Restricted`. `DenyAll` needs no body either — it denies before ever consulting one. The
+content host is decided from a header, so no buffering.
 
 `enforce(allowed, host, path, headers, body)`; `endpoint` = path with query string removed:
 
@@ -267,7 +289,9 @@ Shape table (provider × request × policy):
 | dropbox            | `folders` non-empty                   | unknown endpoint on either host                                  | 403 (endpoint not permitted)                                                                                                                                                                                                                                                                                                                                              |
 | dropbox            | `folders` non-empty                   | WebSocket upgrade                                                | hook runs with `body = None`; api host would deny, but Dropbox has no WS traffic — effectively N/A                                                                                                                                                                                                                                                                        |
 | dropbox            | `folders: ["/"]`                      | anything                                                         | pass-through (unrestricted)                                                                                                                                                                                                                                                                                                                                               |
-| dropbox            | `folders: []`                         | anything                                                         | 403 empty-scope (step 3), before the guard                                                                                                                                                                                                                                                                                                                                |
+| dropbox            | `folders: []`                         | anything                                                         | 403 empty-scope (step 3), before the guard; the guard itself also denies (`DenyAll`) if ever reached                                                                                                                                                                                                                                                                     |
+| dropbox            | `folders: [42]` (non-empty, no usable string entries) | anything                                             | 403 deny-all (Phase 1 amendment — denies before the pathless allowlist)                                                                                                                                                                                                                                                                                                   |
+| dropbox            | `folders: [42, "/valid"]`             | api host, path inside `/valid`                                   | allow — the garbage entry is dropped, not fatal (`Restricted(["/valid"])`)                                                                                                                                                                                                                                                                                                |
 | dropbox            | `repositories: [...]` (axis mismatch) | anything                                                         | guard: `folders` absent → pass-through; but connect-time: scoping requested, no scoper for the cred type → shared refresh → not minted → `has_request_guard("dropbox")` is **true** so the stored token is **not** withheld → credential injects unrestricted. (Composition would already have produced `{repositories: []}` if an org boundary existed on another axis.) |
 | github-app         | `repositories` non-empty              | any request                                                      | no request-level check; scoped token minted after policy allow; injected                                                                                                                                                                                                                                                                                                  |
 | github-app         | `repositories: []`                    | any                                                              | 403 empty-scope before mint                                                                                                                                                                                                                                                                                                                                               |
@@ -281,7 +305,7 @@ Shape table (provider × request × policy):
 | Error class                                     | Posture                                                                         |
 | ----------------------------------------------- | ------------------------------------------------------------------------------- |
 | Unparseable / missing body or header on Dropbox | Fail-**closed** (403)                                                           |
-| Truncated body buffer                           | Fail-closed (JSON parse fails → 403)                                            |
+| Truncated body buffer                           | Fail-closed: the forward path hands the guard `None` for a truncated buffer (Phase 1 WP-C item E), not the observed prefix, so the guard's own "cannot read request body" denial fires unconditionally rather than depending on whether the prefix happens to still parse |
 | Unknown Dropbox endpoint                        | Fail-closed                                                                     |
 | GitHub mint upstream error / incomplete creds   | Credential withheld → 502 `credential_unavailable` (deferred) — fail-closed     |
 | Policy on unrecognised axis for the provider    | Deny-all sentinel on composition; at mint time, withheld unless request-guarded |

@@ -32,31 +32,56 @@ fn normalize(entry: &str) -> String {
     lower.strip_suffix('/').map(str::to_string).unwrap_or(lower)
 }
 
-/// The policy's normalized `folders` allowlist, with empty (account-root)
-/// entries dropped. `None` means "no restriction applies" — either the
-/// `folders` key is absent/not-an-array, or every entry normalizes to root
-/// (`gateway-ee-behaviour.md` §1.8: `{folders: []}` and `{folders: ["/"]}`
-/// both mean "no guard" — the former is caught earlier by
-/// `denies_everything`, the latter is genuinely unrestricted).
+/// The three shapes a Dropbox folder scope decodes to (Phase 1 WP-C
+/// amendment, `gateway-ee-behaviour.md` §1.8):
 ///
-/// NOTE (Phase 0, not changed here): a `folders` key present with a raw,
-/// non-empty array but ZERO usable string entries (e.g. `{"folders": [42]}`)
-/// or a non-array value (`{"folders": "x"}`) also falls through to `None`
-/// ("no restriction") today, per `gateway-ee-behaviour.md` §1.8's literal
-/// reading of `folders(policy)`. This is a spec gap, not an implementation
-/// bug: Phase 1 is expected to amend the spec so a recognised key with a
-/// non-empty raw array and no usable entries denies-all instead (consistent
-/// with how `denies_everything` already treats an explicitly empty array).
-fn allowed_folders(policy: Option<&Value>) -> Option<Vec<String>> {
-    let obj = policy?.as_object()?;
-    let entries = obj.get("folders")?.as_array()?;
-    let normalized: Vec<String> = entries
-        .iter()
-        .filter_map(|v| v.as_str())
+/// - `Unrestricted`: no `folders` key (absent, non-object policy, or the key
+///   holds something other than an array), or every string entry normalizes
+///   to the account root (`["/"]`) — the widest scope, i.e. "no guard".
+/// - `DenyAll`: the `folders` key holds an array with no in-scope entries —
+///   either explicitly empty (`[]`, ordinarily caught earlier by
+///   `denies_everything`, but handled here too as defence in depth) or
+///   non-empty with ZERO usable string entries (e.g. `{"folders": [42]}`).
+///   This second case is the amendment: Phase 0 read a non-empty-but-garbage
+///   array as `Unrestricted` (a spec gap), which would have handed out an
+///   unscoped credential for a policy an administrator wrote to restrict
+///   access. Denying is the fail-closed reading.
+/// - `Restricted(list)`: the normalized, non-empty allowlist.
+enum FolderPolicy {
+    Unrestricted,
+    DenyAll,
+    Restricted(Vec<String>),
+}
+
+/// Decode a policy's `folders` scope into a [`FolderPolicy`].
+fn folder_policy(policy: Option<&Value>) -> FolderPolicy {
+    let Some(entries) = policy
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("folders"))
+        .and_then(Value::as_array)
+    else {
+        return FolderPolicy::Unrestricted;
+    };
+    if entries.is_empty() {
+        return FolderPolicy::DenyAll;
+    }
+    let string_entries: Vec<&str> = entries.iter().filter_map(Value::as_str).collect();
+    if string_entries.is_empty() {
+        // Non-empty raw array, but not one usable (string) entry — the
+        // amendment: deny, don't read this as "no restriction".
+        return FolderPolicy::DenyAll;
+    }
+    let normalized: Vec<String> = string_entries
+        .into_iter()
         .map(normalize)
         .filter(|e| !e.is_empty())
         .collect();
-    (!normalized.is_empty()).then_some(normalized)
+    if normalized.is_empty() {
+        // Every string entry normalized to the account root (e.g. `["/"]`,
+        // `["/", "//"]`) — the widest scope, not deny-all.
+        return FolderPolicy::Unrestricted;
+    }
+    FolderPolicy::Restricted(normalized)
 }
 
 /// Whether `target` (a raw request path/argument) falls within `allowed` — a
@@ -148,9 +173,10 @@ fn check_targets(
 
 /// Whether the request-forwarding path must buffer the request body for
 /// `enforce` to inspect. The content host (`content.dropboxapi.com`) carries
-/// its target in a header instead, so it never needs buffering.
+/// its target in a header instead, so it never needs buffering. `DenyAll`
+/// needs no body either — it denies before ever consulting one.
 pub(super) fn needs_body(policy: Option<&Value>, host: &str) -> bool {
-    host == API_HOST && allowed_folders(policy).is_some()
+    host == API_HOST && matches!(folder_policy(policy), FolderPolicy::Restricted(_))
 }
 
 /// Enforce the folder allowlist against one request. `host` must already be
@@ -162,8 +188,20 @@ pub(super) fn enforce(
     headers: &hyper::HeaderMap,
     body: Option<&[u8]>,
 ) -> Option<super::Denial> {
-    let allowed = allowed_folders(policy)?;
     let endpoint = endpoint_of(path);
+    let allowed = match folder_policy(policy) {
+        FolderPolicy::Unrestricted => return None,
+        // Denies before the pathless allowlist and the smuggled-query check:
+        // a policy that denies everything must deny EVERYTHING, including the
+        // endpoints an in-scope policy would let through unconditionally.
+        FolderPolicy::DenyAll => {
+            return deny(
+                format!("folders policy denies all access for {endpoint}"),
+                &[],
+            );
+        }
+        FolderPolicy::Restricted(list) => list,
+    };
 
     // Checked on BOTH hosts, before anything else: a smuggled `?arg=` or
     // `?authorization=` query parameter could name a second, out-of-scope
@@ -258,22 +296,73 @@ mod tests {
     }
 
     #[test]
-    fn root_boundary_means_no_restriction() {
-        assert!(allowed_folders(Some(&json!({"folders": ["/"]}))).is_none());
+    fn root_boundary_means_unrestricted() {
+        assert!(matches!(
+            folder_policy(Some(&json!({"folders": ["/"]}))),
+            FolderPolicy::Unrestricted
+        ));
     }
 
     #[test]
-    fn empty_list_means_no_restriction_here_denies_everything_catches_it_earlier() {
-        assert!(allowed_folders(Some(&json!({"folders": []}))).is_none());
+    fn no_folders_key_means_unrestricted() {
+        assert!(matches!(folder_policy(None), FolderPolicy::Unrestricted));
+        assert!(matches!(
+            folder_policy(Some(&json!({}))),
+            FolderPolicy::Unrestricted
+        ));
+        assert!(matches!(
+            folder_policy(Some(&json!({"folders": "not-an-array"}))),
+            FolderPolicy::Unrestricted
+        ));
+    }
+
+    #[test]
+    fn empty_list_denies_all_here_too_even_though_denies_everything_catches_it_earlier() {
+        // Ordinarily intercepted upstream by `denies_everything` before this
+        // guard ever runs — this pins the defence-in-depth reading on its own.
+        assert!(matches!(
+            folder_policy(Some(&json!({"folders": []}))),
+            FolderPolicy::DenyAll
+        ));
+    }
+
+    #[test]
+    fn non_empty_array_with_no_usable_string_entries_denies_all() {
+        // The Phase 1 amendment: a garbage array (no string entries at all)
+        // must not read as "no restriction" — that would hand out an
+        // unscoped credential for a policy an administrator wrote to
+        // restrict access.
+        assert!(matches!(
+            folder_policy(Some(&json!({"folders": [42]}))),
+            FolderPolicy::DenyAll
+        ));
+        assert!(matches!(
+            folder_policy(Some(&json!({"folders": [42, null, true]}))),
+            FolderPolicy::DenyAll
+        ));
+    }
+
+    #[test]
+    fn mixed_garbage_and_valid_entries_is_restricted_to_the_valid_ones() {
+        let policy = json!({"folders": [42, "/valid"]});
+        match folder_policy(Some(&policy)) {
+            FolderPolicy::Restricted(list) => assert_eq!(list, vec!["/valid".to_string()]),
+            _ => panic!("expected Restricted"),
+        }
     }
 
     #[test]
     fn normalizes_case_and_trailing_slash_and_drops_root() {
         let policy = json!({"folders": ["/Clients/Acme/", "/Marketing", "/"]});
-        assert_eq!(
-            allowed_folders(Some(&policy)),
-            Some(vec!["/clients/acme".to_string(), "/marketing".to_string()])
-        );
+        match folder_policy(Some(&policy)) {
+            FolderPolicy::Restricted(list) => {
+                assert_eq!(
+                    list,
+                    vec!["/clients/acme".to_string(), "/marketing".to_string()]
+                );
+            }
+            _ => panic!("expected Restricted"),
+        }
     }
 
     #[test]
@@ -318,6 +407,80 @@ mod tests {
         assert!(needs_body(Some(&policy), "api.dropboxapi.com"));
         assert!(!needs_body(Some(&policy), "content.dropboxapi.com"));
         assert!(!needs_body(None, "api.dropboxapi.com"));
+    }
+
+    #[test]
+    fn needs_body_is_false_for_deny_all_and_unrestricted() {
+        // Neither shape ever consults the body: DenyAll denies before
+        // looking, Unrestricted never looks at all.
+        assert!(!needs_body(
+            Some(&json!({"folders": [42]})),
+            "api.dropboxapi.com"
+        ));
+        assert!(!needs_body(
+            Some(&json!({"folders": []})),
+            "api.dropboxapi.com"
+        ));
+        assert!(!needs_body(
+            Some(&json!({"folders": ["/"]})),
+            "api.dropboxapi.com"
+        ));
+    }
+
+    #[test]
+    fn deny_all_denies_before_the_pathless_allowlist() {
+        // A garbage `folders` array must deny EVERYTHING, including an
+        // endpoint an in-scope policy would allow unconditionally — proving
+        // the DenyAll check runs before the pathless-allowlist short-circuit.
+        let policy = json!({"folders": [42]});
+        let denial = enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/files/list_folder/continue",
+            &hyper::HeaderMap::new(),
+            None,
+        )
+        .expect("denied");
+        assert_eq!(denial.rule_name, "Dropbox folder policy");
+        assert!(denial.allowed.is_empty());
+    }
+
+    #[test]
+    fn deny_all_from_empty_array_also_denies_pathless_endpoints() {
+        let policy = json!({"folders": []});
+        assert!(enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/users/get_current_account",
+            &hyper::HeaderMap::new(),
+            None,
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn mixed_garbage_and_valid_folders_enforces_on_the_valid_entry() {
+        let policy = json!({"folders": [42, "/valid"]});
+        let ok = json!({"path": "/valid/file"}).to_string();
+        assert!(enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/files/list_folder",
+            &hyper::HeaderMap::new(),
+            Some(ok.as_bytes()),
+        )
+        .is_none());
+
+        let out_of_scope = json!({"path": "/other"}).to_string();
+        let denial = enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/files/list_folder",
+            &hyper::HeaderMap::new(),
+            Some(out_of_scope.as_bytes()),
+        )
+        .expect("denied");
+        assert_eq!(denial.allowed, vec!["/valid".to_string()]);
     }
 
     #[test]

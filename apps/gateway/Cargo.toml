@@ -65,6 +65,7 @@ http-body-util = "0.1"
 hyper = { version = "1", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 jsonwebtoken = "9"
+memchr = "2"
 percent-encoding = "2"
 rcgen = "0.13"
 regex = "1"
