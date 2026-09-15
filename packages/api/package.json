@@ -24,8 +24,7 @@
     "check-types": "tsc --noEmit",
     "lint": "eslint --max-warnings 0",
     "lint:fix": "eslint --fix --max-warnings 0",
-    "test": "vitest run",
-    "test:scim": "vitest run src/ee/scim src/ee/services/org-directory-service.test.ts src/ee/routes/org-scim-tokens.test.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@1password/sdk": "^0.4.0",

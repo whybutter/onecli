@@ -25,7 +25,8 @@ export type { OrgRole };
  *   seeds that owner binding; there is no creator arm.
  */
 
-const isOrgRole = (value: string): value is OrgRole => value in ROLE_HIERARCHY;
+const isOrgRole = (value: string): value is OrgRole =>
+  Object.hasOwn(ROLE_HIERARCHY, value);
 
 export const hasMinimumRole = (
   role: OrgRole | null,
@@ -163,6 +164,8 @@ export const canManageWorkspace = async (
  * can never rescue them), and an owner/admin is allowed without one.
  */
 export const eeWorkspaceAccessChecker: WorkspaceAccessChecker = {
+  // `workspace` is trusted as-is per the slot contract: the caller must have
+  // read the (id, organizationId) pair from the database, never from input.
   canAccessWorkspaceAsUser: async (userId, workspace) => {
     const role = await getUserRole(userId, workspace.organizationId);
     if (!role) return false;

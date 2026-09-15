@@ -31,6 +31,9 @@ const OWNER = `${P}owner`;
 const MEMBER = `${P}member`;
 const OWNER_EMAIL = `${OWNER}@example.invalid`;
 const MEMBER_EMAIL = `${MEMBER}@example.invalid`;
+const OTHER_ORG = `${P}org-b`;
+const OTHER_OWNER = `${P}owner-b`;
+const OTHER_OWNER_EMAIL = `${OTHER_OWNER}@example.invalid`;
 
 beforeAll(async () => {
   if (!PROOF_URL) return;
@@ -52,27 +55,40 @@ afterAll(async () => {
 
 const resetAll = async () => {
   const rows = await db.workspace.findMany({
-    where: { organizationId: ORG },
+    where: { organizationId: { in: [ORG, OTHER_ORG] } },
     select: { id: true },
   });
   const ids = rows.map((row) => row.id);
   await db.agent.deleteMany({ where: { workspaceId: { in: ids } } });
+  const orgs = [ORG, OTHER_ORG];
   await db.apiKey.deleteMany({
-    where: { OR: [{ workspaceId: { in: ids } }, { organizationId: ORG }] },
+    where: {
+      OR: [{ workspaceId: { in: ids } }, { organizationId: { in: orgs } }],
+    },
   });
   await db.secret.deleteMany({
-    where: { OR: [{ workspaceId: { in: ids } }, { organizationId: ORG }] },
+    where: {
+      OR: [{ workspaceId: { in: ids } }, { organizationId: { in: orgs } }],
+    },
   });
   await db.appConnection.deleteMany({
-    where: { OR: [{ workspaceId: { in: ids } }, { organizationId: ORG }] },
+    where: {
+      OR: [{ workspaceId: { in: ids } }, { organizationId: { in: orgs } }],
+    },
   });
   await db.auditLog.deleteMany({
-    where: { OR: [{ workspaceId: { in: ids } }, { organizationId: ORG }] },
+    where: {
+      OR: [{ workspaceId: { in: ids } }, { organizationId: { in: orgs } }],
+    },
   });
-  await db.workspace.deleteMany({ where: { organizationId: ORG } });
-  await db.organizationMember.deleteMany({ where: { organizationId: ORG } });
-  await db.organization.deleteMany({ where: { id: ORG } });
-  await db.user.deleteMany({ where: { id: { in: [OWNER, MEMBER] } } });
+  await db.workspace.deleteMany({ where: { organizationId: { in: orgs } } });
+  await db.organizationMember.deleteMany({
+    where: { organizationId: { in: orgs } },
+  });
+  await db.organization.deleteMany({ where: { id: { in: orgs } } });
+  await db.user.deleteMany({
+    where: { id: { in: [OWNER, MEMBER, OTHER_OWNER] } },
+  });
 };
 
 beforeEach(async () => {
@@ -104,6 +120,70 @@ beforeEach(async () => {
 });
 
 describe.skipIf(!PROOF_URL)("workspace service on PostgreSQL", () => {
+  it("the org fence: an owner of one org holds nothing in another", async () => {
+    await db.user.create({
+      data: {
+        id: OTHER_OWNER,
+        email: OTHER_OWNER_EMAIL,
+        externalAuthId: `${P}auth-owner-b`,
+      },
+    });
+    await db.organization.create({
+      data: {
+        id: OTHER_ORG,
+        name: "WP3 Org B",
+        slug: OTHER_ORG,
+        members: {
+          create: {
+            userId: OTHER_OWNER,
+            userEmail: OTHER_OWNER_EMAIL,
+            role: "owner",
+          },
+        },
+      },
+    });
+    const wsA = await workspaces.createWorkspace(
+      OWNER,
+      OWNER_EMAIL,
+      "In A",
+      ORG,
+    );
+    const wsB = await workspaces.createWorkspace(
+      OTHER_OWNER,
+      OTHER_OWNER_EMAIL,
+      "In B",
+      OTHER_ORG,
+    );
+
+    // Org A's owner against org B's workspace: nothing, through every door.
+    await expect(authz.canAccessWorkspace(OWNER, wsB.id)).resolves.toBe(false);
+    await expect(authz.canManageWorkspace(OWNER, wsB.id)).resolves.toBe(false);
+    await expect(
+      authz.eeWorkspaceAccessChecker.canAccessWorkspaceAsUser(OWNER, {
+        id: wsB.id,
+        organizationId: OTHER_ORG,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      workspaces.getWorkspaceById(OWNER, ORG, wsB.id, "owner"),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      workspaces.listOrgWorkspacesForUser(OWNER, ORG, "owner"),
+    ).resolves.toEqual([expect.objectContaining({ id: wsA.id })]);
+    await expect(
+      workspaces.updateOrgWorkspace(ORG, wsB.id, { name: "Hijack" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    // And symmetrically for org B's owner.
+    await expect(authz.canAccessWorkspace(OTHER_OWNER, wsA.id)).resolves.toBe(
+      false,
+    );
+    await expect(authz.getUserRole(OTHER_OWNER, ORG)).resolves.toBeNull();
+    await expect(
+      workspaces.listWorkspaces(OTHER_OWNER, OTHER_ORG, "owner"),
+    ).resolves.toEqual([expect.objectContaining({ id: wsB.id })]);
+  });
+
   it("createWorkspace seeds the key and the owner binding; the creator can manage", async () => {
     const created = await workspaces.createWorkspace(
       MEMBER,

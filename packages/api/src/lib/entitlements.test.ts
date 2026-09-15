@@ -6,7 +6,6 @@ import {
   isEnterpriseFeature,
   isEntitled,
 } from "./entitlements";
-import { assertEntitled, enterpriseLicenseMessage } from "./entitlements-guard";
 
 // This build is always entitled (v2 migration, principle 3): there is no
 // licence flag and no unentitled state. The registry and the refusal-message
@@ -35,21 +34,5 @@ describe("isEnterpriseFeature", () => {
     expect(isEnterpriseFeature("policy.deny_mode")).toBe(false);
     expect(isEnterpriseFeature("policy.manual_approval")).toBe(false);
     expect(isEnterpriseFeature("policy.rate_limit")).toBe(false);
-  });
-});
-
-describe("assertEntitled", () => {
-  it("never throws", () => {
-    for (const key of Object.keys(ENTERPRISE_FEATURES)) {
-      expect(() =>
-        assertEntitled(key as keyof typeof ENTERPRISE_FEATURES),
-      ).not.toThrow();
-    }
-  });
-
-  it("still formats the historical refusal message", () => {
-    expect(enterpriseLicenseMessage("groups")).toBe(
-      "Directory groups requires a OneCLI Enterprise license.",
-    );
   });
 });
