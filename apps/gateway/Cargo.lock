@@ -216,6 +216,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arc-swap"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2530,6 +2539,7 @@ dependencies = [
  "db",
  "ee",
  "percent-encoding",
+ "relay",
  "reqwest",
  "rustls 0.23.37",
  "server",
@@ -3050,6 +3060,27 @@ name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
+
+[[package]]
+name = "relay"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "base64",
+ "clap",
+ "client-ca",
+ "rcgen",
+ "reqwest",
+ "rustls 0.23.37",
+ "rustls-pemfile",
+ "serde",
+ "shutdown",
+ "tempfile",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tracing",
+]
 
 [[package]]
 name = "reqwest"

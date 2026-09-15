@@ -51,6 +51,29 @@ struct Cli {
     /// image healthcheck run without curl/wget in the runtime image.
     #[arg(long)]
     healthcheck: bool,
+
+    /// Optional subcommand. With none given, `onecli-gateway` (optionally
+    /// with `--port`/`--data-dir`) parses exactly as it always has and runs
+    /// the MITM gateway server — see the module doc on `Command` below for
+    /// why that byte-for-byte compatibility matters.
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+/// Subcommands layered onto the historically flag-only `onecli-gateway` CLI.
+///
+/// `command` on [`Cli`] is `Option<Command>`, not `Command`, specifically so
+/// that omitting it entirely — the only way this binary has ever been
+/// invoked before this change — continues to select the server, not a clap
+/// error demanding a subcommand. `main` dispatches on it before any of the
+/// server's own CA/DB/crypto/vault bootstrapping runs, so `relay` never pays
+/// for (or requires) any of that.
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// Run a local mTLS relay: a blind byte-splice between a plain
+    /// HTTP-proxy agent and a remote OneCLI gateway. See the `relay` crate's
+    /// module doc for the security property this preserves.
+    Relay(relay::RelayArgs),
 }
 
 /// Cap on the final telemetry flush, inside the overall shutdown budget.
@@ -106,6 +129,15 @@ async fn main() -> Result<()> {
     // the startup below simply sets the flag, and the accept loop exits on its
     // first poll.
     shutdown::install();
+
+    // Relay mode is an entirely separate program sharing only the process's
+    // signal handling and rustls crypto provider install above: no CA, no
+    // database, no crypto service, no vault. Dispatched here, before any of
+    // the server-only bootstrapping below runs, so it never pays for (or
+    // requires) any of it.
+    if let Some(Command::Relay(args)) = cli.command {
+        return relay::run(args).await;
+    }
 
     let data_dir = expand_tilde(&cli.data_dir);
 
