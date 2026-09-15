@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs";
+import { request as httpsRequest } from "node:https";
 import { createServer } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 
@@ -112,11 +113,15 @@ const mtlsBoundPort = async (gw: GatewayHandle): Promise<number> => {
   }
   const addr = line["addr"];
   if (typeof addr !== "string") {
-    throw new Error(`mTLS boot line missing a usable addr: ${JSON.stringify(line)}`);
+    throw new Error(
+      `mTLS boot line missing a usable addr: ${JSON.stringify(line)}`,
+    );
   }
   const port = Number.parseInt(addr.split(":").pop() ?? "", 10);
   if (!Number.isInteger(port) || port <= 0) {
-    throw new Error(`could not parse a port out of the mTLS bound address ${addr}`);
+    throw new Error(
+      `could not parse a port out of the mTLS bound address ${addr}`,
+    );
   }
   return port;
 };
@@ -179,12 +184,18 @@ const connectThroughMtlsProxy = (
     );
 
     socket.setTimeout(options.timeoutMs ?? 15_000, () => {
-      socket.destroy(new Error(`CONNECT ${DEAD_AUTHORITY} over mTLS timed out`));
+      socket.destroy(
+        new Error(`CONNECT ${DEAD_AUTHORITY} over mTLS timed out`),
+      );
     });
 
     let buffered = "";
     let head:
-      | { statusLine: string; headers: Record<string, string>; bodyStart: number }
+      | {
+          statusLine: string;
+          headers: Record<string, string>;
+          bodyStart: number;
+        }
       | undefined;
 
     const settle = (result: MtlsConnectResult): void => {
@@ -223,7 +234,10 @@ const connectThroughMtlsProxy = (
       );
       const bodySoFar = buffered.length - head.bodyStart;
       if (contentLength === 0 || bodySoFar >= contentLength) {
-        const status = Number.parseInt(head.statusLine.split(" ")[1] ?? "0", 10);
+        const status = Number.parseInt(
+          head.statusLine.split(" ")[1] ?? "0",
+          10,
+        );
         settle({
           status,
           statusLine: head.statusLine,
@@ -234,6 +248,86 @@ const connectThroughMtlsProxy = (
     });
 
     socket.on("error", reject);
+  });
+
+// ── Absolute-form over the mTLS listener ────────────────────────────────
+
+interface MtlsAbsoluteFormResult {
+  readonly status: number;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: string;
+}
+
+/**
+ * Issue `GET <url>` in absolute-form over a TLS connection presenting
+ * `client`'s certificate — the mTLS-listener counterpart of `proxy.ts`'s
+ * `throughProxy`. `handle_http_proxy` is a SEPARATE call site from
+ * `handle_connect` (the other way a client reaches an arbitrary host through
+ * this proxy), and until this test existed it was verified only by reading
+ * that both call the same `enforce_binding` — this drives it directly.
+ *
+ * Uses Node's own TLS-aware HTTP client (`https.request`) rather than a
+ * hand-rolled parser: unlike a bare CONNECT tunnel handshake, an
+ * absolute-form response is an ordinary HTTP response (chunked or
+ * `Content-Length`, from either the gateway itself or the relayed upstream),
+ * which `https.request` already parses correctly.
+ */
+const absoluteFormThroughMtlsProxy = (
+  port: number,
+  client: ClientCert,
+  options: {
+    readonly url: string;
+    readonly token?: string;
+    readonly timeoutMs?: number;
+  },
+): Promise<MtlsAbsoluteFormResult> =>
+  new Promise((resolve, reject) => {
+    const target = new URL(options.url);
+    const headers: Record<string, string> = { host: target.host };
+    if (options.token !== undefined) {
+      headers["proxy-authorization"] = proxyAuthHeader(options.token);
+    }
+
+    const req = httpsRequest(
+      {
+        host: "127.0.0.1",
+        port,
+        method: "GET",
+        // Absolute-form request-target — this is what marks it as proxy
+        // traffic rather than a request for something on the gateway itself.
+        path: options.url,
+        headers,
+        rejectUnauthorized: false,
+        cert: client.cert,
+        key: client.key,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          const flat: Record<string, string> = {};
+          for (const [k, v] of Object.entries(res.headers)) {
+            if (typeof v === "string") flat[k.toLowerCase()] = v;
+            else if (Array.isArray(v)) flat[k.toLowerCase()] = v.join(", ");
+          }
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: flat,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+
+    req.setTimeout(options.timeoutMs ?? 15_000, () => {
+      req.destroy(
+        new Error(
+          `absolute-form request to ${options.url} over mTLS timed out`,
+        ),
+      );
+    });
+    req.on("error", reject);
+    req.end();
   });
 
 // ── `client_hosts` fixture (raw SQL — see the module doc) ──────────────
@@ -451,6 +545,103 @@ describe("cert/token tenant binding enforcement", () => {
           { token: cx.ids.agentToken },
         );
         expect(result.status).toBe(502);
+      } finally {
+        rmSync(pki.dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // ── The absolute-form call site (handle_http_proxy) ────────────────────
+  //
+  // Everything above drives CONNECT (handle_connect). `enforce_binding` is
+  // called from both, but until these two scenarios existed that was pinned
+  // only by reading the source — a regression that broke just the
+  // absolute-form call site (or dropped it entirely) would have shipped
+  // green. These two pin the SAME mismatch/allow pair the CONNECT scenarios
+  // above cover, on the other path.
+
+  scenario(
+    "enforce mode denies a mismatched tenant on the absolute-form path with 403",
+    async (cx) => {
+      const pki = setupPki();
+      try {
+        await cx.seed();
+        const otherWorkspaceId = `${cx.ids.workspace}-other`;
+        await cx.db.prisma.workspace.create({
+          data: {
+            id: otherWorkspaceId,
+            name: otherWorkspaceId,
+            organizationId: cx.ids.org,
+          },
+        });
+        const spiffe = `spiffe://onecli/host/${cx.ids.nonce}`;
+        await insertClientHost(cx.db.prisma, {
+          id: `${cx.ids.nonce}-host`,
+          workspaceId: otherWorkspaceId,
+          spiffeUri: spiffe,
+        });
+        const leaf = generateClientLeaf(pki.dir, pki.clientCa, {
+          cn: "relay-1",
+          uriSan: spiffe,
+        });
+
+        const gw = await cx.startGateway({
+          env: await mtlsEnv(pki, { GATEWAY_BINDING_ENFORCEMENT: "enforce" }),
+        });
+        const upstream = await cx.upstream();
+        const port = await mtlsBoundPort(gw);
+
+        const result = await absoluteFormThroughMtlsProxy(
+          port,
+          { cert: leaf.certPem, key: leaf.keyPem },
+          { url: upstream.url("/v1/models"), token: cx.ids.agentToken },
+        );
+        expect(result.status).toBe(403);
+        expect(JSON.parse(result.body)).toMatchObject({
+          error: "identity_not_permitted",
+        });
+        expect(result.body).not.toContain("workspace_mismatch");
+        // Denied before forwarding — same as the CONNECT path, the
+        // absolute-form path must not be a bypass that reaches the upstream.
+        expect(upstream.requests()).toHaveLength(0);
+      } finally {
+        rmSync(pki.dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  scenario(
+    "enforce mode allows a matching tenant on the absolute-form path",
+    async (cx) => {
+      const pki = setupPki();
+      try {
+        await cx.seed();
+        const spiffe = `spiffe://onecli/host/${cx.ids.nonce}`;
+        await insertClientHost(cx.db.prisma, {
+          id: `${cx.ids.nonce}-host`,
+          workspaceId: cx.ids.workspace,
+          spiffeUri: spiffe,
+        });
+        const leaf = generateClientLeaf(pki.dir, pki.clientCa, {
+          cn: "relay-1",
+          uriSan: spiffe,
+        });
+
+        const gw = await cx.startGateway({
+          env: await mtlsEnv(pki, { GATEWAY_BINDING_ENFORCEMENT: "enforce" }),
+        });
+        const upstream = await cx.upstream();
+        const port = await mtlsBoundPort(gw);
+
+        const result = await absoluteFormThroughMtlsProxy(
+          port,
+          { cert: leaf.certPem, key: leaf.keyPem },
+          { url: upstream.url("/v1/models"), token: cx.ids.agentToken },
+        );
+        expect(result.status).toBe(200);
+        // Reached the upstream — a matching tenant is not merely "not
+        // denied", the request actually goes through.
+        expect(upstream.requests()).toHaveLength(1);
       } finally {
         rmSync(pki.dir, { recursive: true, force: true });
       }

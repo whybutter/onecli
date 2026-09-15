@@ -16,8 +16,15 @@
 pub mod authority;
 pub mod identity;
 pub mod mtls;
+// `pub`, not gated at all, would ship the loopback-handshake harness inside
+// every production binary that depends on this crate. `cfg(test)` covers
+// this crate's own `cargo test -p client-ca`; the `test-support` feature
+// covers `relay`/`server`, whose test binaries dev-depend on this crate with
+// the feature enabled (see this crate's Cargo.toml) to reuse the same
+// harness rather than duplicating it.
+#[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
 pub use authority::{ClientCa, IssuedCert, SignCsrError};
 pub use identity::{identity_from_peer_certs, ClientIdentity};
-pub use mtls::{load_client_ca_roots, pem_from_value, MtlsConfig};
+pub use mtls::{load_client_ca_roots, load_root_store, pem_from_value, MtlsConfig};

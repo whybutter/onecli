@@ -22,6 +22,20 @@ const INITIAL_RETRY_BACKOFF: Duration = Duration::from_secs(5);
 /// Ceiling on the retry backoff.
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(300);
 
+/// Floor on the outer loop's delay between two SUCCESSFUL enrolments.
+///
+/// `next_renewal` trusts the server's `notAfter` completely — a skewed clock
+/// (on the issuing side, or the relay's own) can hand back a `notAfter` that
+/// is already at or just past "now" even though the enrolment itself
+/// succeeded. Without this floor, that schedules the very next renewal
+/// immediately too, and if the skew persists (a stuck clock, not a one-off
+/// glitch) every one of those immediate renewals "succeeds" the same way —
+/// a tight loop hammering the enrolment endpoint, never actually recovering.
+/// This never delays the FIRST renewal in a fresh `renewal_loop` (there is
+/// no prior in-loop success yet to floor against); it only kicks in once
+/// this loop has itself completed a renewal.
+const MIN_INTER_RENEWAL_INTERVAL: Duration = Duration::from_secs(60);
+
 /// When to renew a certificate whose expiry is `not_after_unix` (unix
 /// seconds) and whose total issued `lifetime` is known, relative to `now`.
 ///
@@ -66,9 +80,16 @@ pub(crate) async fn renewal_loop(
     state: Arc<ArcSwap<RelayCertState>>,
 ) {
     let mut shutdown_signal = shutdown::subscribe();
+    // Set only after this loop completes a renewal of its own — see
+    // `MIN_INTER_RENEWAL_INTERVAL`'s doc for why the very first iteration is
+    // deliberately exempt.
+    let mut last_renewed_at: Option<Instant> = None;
 
     loop {
-        let deadline = next_renewal(not_after_unix, SystemTime::now(), lifetime);
+        let mut deadline = next_renewal(not_after_unix, SystemTime::now(), lifetime);
+        if let Some(last) = last_renewed_at {
+            deadline = deadline.max(last + MIN_INTER_RENEWAL_INTERVAL);
+        }
         tokio::select! {
             _ = tokio::time::sleep_until(deadline.into()) => {},
             _ = shutdown_signal.wait() => return,
@@ -117,6 +138,9 @@ pub(crate) async fn renewal_loop(
                                 not_after = not_after_unix,
                                 "relay certificate renewed"
                             );
+                            // Floors the NEXT outer-loop iteration's delay —
+                            // see `MIN_INTER_RENEWAL_INTERVAL`'s doc.
+                            last_renewed_at = Some(Instant::now());
                             // Only the success path exits the retry loop —
                             // see the `Err` arm just below for why a rebuild
                             // failure must NOT also `break` here.
@@ -395,6 +419,115 @@ mod tests {
             "expected the backoff to gate retries within {window:?} (at most one hit), got {} \
              -- a rebuild failure must not hot-loop",
             hits.load(Ordering::SeqCst)
+        );
+    }
+
+    /// Regression guard for [`MIN_INTER_RENEWAL_INTERVAL`]: a SUCCESSFUL
+    /// renewal whose reported `notAfter` is skewed (already at/near "now",
+    /// e.g. from a clock-skewed issuer) must not schedule the very next
+    /// renewal immediately -- an unguarded schedule would "succeed" the
+    /// same way every time and hammer the enrolment endpoint in a tight
+    /// loop. Drives the real `renewal_loop` against a fake enrolment
+    /// endpoint that always succeeds with a valid certificate but a
+    /// `notAfter` only 1 second away, and asserts exactly one renewal
+    /// happens within a short window: the first (unfloored -- no prior
+    /// in-loop success yet), never a second fired immediately off its own
+    /// skewed `notAfter`.
+    #[tokio::test]
+    async fn renewal_loop_floors_the_delay_after_a_successful_renewal_with_a_skewed_not_after() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use client_ca::test_support::{ensure_crypto_provider, new_test_ca, sign_client_leaf};
+
+        use crate::enroll::build_client_tls_config;
+
+        ensure_crypto_provider();
+
+        let ca = new_test_ca("Skew Test CA");
+        let (cert_pem, key_pem) = sign_client_leaf(&ca, Some("relay-1"), &[], -1, 24);
+        // A syntactically valid starting config -- never dialed in this test.
+        let initial_config =
+            build_client_tls_config(&cert_pem, &key_pem, &ca.cert.pem()).expect("initial config");
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        listener.set_nonblocking(true).expect("nonblocking");
+
+        let hits_server = Arc::clone(&hits);
+        let window = Duration::from_millis(400);
+        let response_cert_pem = cert_pem.clone();
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let deadline = std::time::Instant::now() + window + Duration::from_millis(200);
+            while std::time::Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).ok();
+                        let mut buf = [0u8; 4096];
+                        let _ = stream.read(&mut buf);
+                        hits_server.fetch_add(1, Ordering::SeqCst);
+                        // Every response "succeeds" but reports a
+                        // `notAfter` just 1 second away -- the skew this
+                        // test is about.
+                        let escaped = response_cert_pem.replace('\n', "\\n");
+                        let body = format!(
+                            "{{\"identity\":\"spiffe://onecli/host/x\",\"hostId\":\"x\",\
+                             \"certPem\":\"{escaped}\",\"caPem\":\"CA\",\"serial\":\"aa\",\
+                             \"notAfter\":{}}}",
+                            unix_now() + 1
+                        );
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(resp.as_bytes());
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // Already past due, so the FIRST renewal (unfloored -- no prior
+        // in-loop success yet) fires almost immediately.
+        let already_expired = unix_now() - 10;
+        let state = Arc::new(ArcSwap::from_pointee(RelayCertState {
+            tls_config: initial_config,
+            not_after_unix: already_expired,
+        }));
+
+        let renewal_args = RenewalArgs {
+            api_url: format!("http://{addr}"),
+            api_key: "oc_test".to_string(),
+            label: None,
+            host_id: "host-x".to_string(),
+            csr_pem: "csr".to_string(),
+            key_pem,
+            server_ca_pem: ca.cert.pem(),
+            state_dir: None,
+        };
+
+        let loop_task = tokio::spawn(renewal_loop(
+            renewal_args,
+            Duration::from_secs(3600),
+            already_expired,
+            state,
+        ));
+
+        tokio::time::sleep(window).await;
+        loop_task.abort();
+        let _ = loop_task.await;
+        let _ = server.join();
+
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "expected exactly one renewal within {window:?}: the first (unfloored) success, \
+             never a second fired immediately off its own skewed notAfter"
         );
     }
 }
