@@ -13,6 +13,7 @@ members = [
   "crates/binding",
   "crates/ca",
   "crates/cache",
+  "crates/client-ca",
   "crates/common",
   "crates/context",
   "crates/crypto",
@@ -87,6 +88,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4"] }
 webpki-roots = "0.26"
+x509-parser = "0.16"
 
 # Profiles are only honored at the workspace root.
 [profile.release]

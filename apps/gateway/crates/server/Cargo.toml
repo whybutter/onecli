@@ -13,6 +13,7 @@ approval = { path = "../approval" }
 apps = { path = "../apps" }
 ca = { path = "../ca" }
 cache = { path = "../cache" }
+client-ca = { path = "../client-ca" }
 common = { path = "../common" }
 context = { path = "../context" }
 db = { path = "../db" }

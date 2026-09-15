@@ -60,6 +60,12 @@ pub struct GatewayState {
     pub vault_service: Arc<vault::VaultService>,
     /// Manual approval store for held requests.
     pub approval_store: Arc<dyn ApprovalStore>,
+    /// The client-certificate minting authority — `None` when
+    /// `GATEWAY_CLIENT_CA` is operator-set (an externally managed trust
+    /// anchor whose private key this process never holds), in which case the
+    /// internal CSR-issuance endpoint 503s. `Some` when the gateway generated
+    /// or was handed its own client CA (see `onecli-gateway`'s `main`).
+    pub client_ca: Option<Arc<client_ca::ClientCa>>,
 }
 
 /// Resolves CONNECT policy by querying the database directly via SQLx
