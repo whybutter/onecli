@@ -187,18 +187,26 @@ export interface WorldSpec {
   /**
    * The org role backing `withOrgApiKey`'s user (`ee::rbac::user_is_org_admin`'s
    * recheck). Defaults to `"owner"`, preserving today's behaviour. Only
-   * meaningful with `withOrgApiKey: true`.
+   * meaningful with `withOrgApiKey: true`. Lands on the SAME
+   * `organizationMember` row as `apiKeyMembership.role` (both keys share one
+   * seeded user) — providing both throws rather than picking a silent
+   * winner.
    */
   readonly orgApiKeyRole?: "owner" | "admin" | "member";
   /**
-   * The org membership + workspace binding backing `withApiKey`'s user
+   * The org membership + workspace binding backing the seeded user
    * (`ee::rbac::user_can_manage_workspace`'s recheck). Every field defaults
    * to today's behaviour: `role: "owner"` (which alone satisfies the
    * recheck), `status: "active"`, `workspaceBinding: "none"` (no
    * `workspace_access` row — unneeded while the role is owner/admin).
    * `workspaceBinding: "group"` grants the workspace to a group the user
-   * belongs to, instead of a direct row. Only meaningful with
-   * `withApiKey: true`.
+   * belongs to, instead of a direct row.
+   *
+   * `role`/`status` write the same `organizationMember` row `orgApiKeyRole`
+   * does, so they apply whichever of `withApiKey`/`withOrgApiKey` a world
+   * seeds (combining `role` with `orgApiKeyRole` throws — see above);
+   * `workspaceBinding` only does anything for `withApiKey`'s `oc_*` key (an
+   * org key's recheck never consults `workspace_access`).
    */
   readonly apiKeyMembership?: {
     readonly role?: "owner" | "admin" | "member";
@@ -734,6 +742,17 @@ export const seedWorld = async (
   }
 
   if (spec.withApiKey === true || spec.withOrgApiKey === true) {
+    // Both would otherwise write the same organizationMember row with a
+    // hidden precedence (orgApiKeyRole silently winning) — reject the
+    // ambiguity instead.
+    if (
+      spec.orgApiKeyRole !== undefined &&
+      spec.apiKeyMembership?.role !== undefined
+    ) {
+      throw new Error(
+        "WorldSpec: orgApiKeyRole and apiKeyMembership.role both write the same organizationMember row — set only one.",
+      );
+    }
     const email = `${ids.nonce}@e2e.invalid`;
     await prisma.user.create({
       data: { id: ids.user, email, externalAuthId: ids.user },
