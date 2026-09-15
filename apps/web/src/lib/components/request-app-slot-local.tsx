@@ -17,6 +17,8 @@ const ISSUE_BODY_TEMPLATE = `**Website:**
 **How you'd use this with OneCLI:**
 `;
 
+// Deliberately upstream (onecli/onecli), not this fork: the app catalog this
+// requests against is upstream's, and that's the repo that would ship it.
 const GITHUB_ISSUE_URL = `https://github.com/onecli/onecli/issues/new?${new URLSearchParams(
   {
     labels: "app request",

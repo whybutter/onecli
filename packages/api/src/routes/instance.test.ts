@@ -11,7 +11,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
   process.env.NEXT_PUBLIC_EDITION = "onprem";
-  delete process.env.ENTERPRISE_ENABLED;
 });
 
 const store = vi.hoisted(() => ({

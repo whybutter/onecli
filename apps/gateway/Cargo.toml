@@ -1,15 +1,12 @@
 # Workspace root for the gateway: a virtual manifest over a flat crates/
 # directory. The binary is crates/onecli-gateway (the composition root); every
 # other member is a library crate, layered so Cargo itself rejects a cycle.
-# See the "Gateway (Rust)" section of CLOUD-DEVELOPMENT.md for the layer map.
 [workspace]
 resolver = "2"
-# Members are listed explicitly, in two groups, because the split IS the
-# licence boundary and a glob would hide it: `crates/*` cannot express "except
-# the licensed ones", and `exclude` silently wins over an explicit glob (tried;
-# it dropped ee from the workspace).
-#
-# APACHE-2.0 — everything the free product needs.
+# Members are listed explicitly, in two groups, purely by history: `crates/ee/ee`
+# used to be a separately licensed crate (now Apache-2.0 like everything
+# else, see its own Cargo.toml) and stays a nested path because the other
+# crates depend on it there.
 members = [
   "crates/approval",
   "crates/apps",

@@ -47,7 +47,6 @@ describe("normalizeTestEnv", () => {
       "KMS_KEY_ARN",
       "DATABASE_URL",
       "REDIS_HOST",
-      "ENTERPRISE_ENABLED",
       "STRIPE_TEAM_BASE_PRICE_ID",
       "SLACK_CLIENT_ID",
       "MICROSOFT_CLIENT_ID",
