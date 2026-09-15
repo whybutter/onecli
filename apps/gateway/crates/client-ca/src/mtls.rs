@@ -62,9 +62,13 @@ fn spki_der(cert_der: &CertificateDer<'_>) -> Result<Vec<u8>> {
     Ok(cert.public_key().raw.to_vec())
 }
 
-/// Build a [`RootCertStore`] from a PEM bundle of one or more CA certificates.
-/// Reused by later phases (e.g. reloading the client CA bundle on rotation).
-pub fn load_client_ca_roots(pem: &str) -> Result<Arc<RootCertStore>> {
+/// Build a [`RootCertStore`] from a PEM bundle of one or more CA
+/// certificates. A generic PEM-bundle -> root-store builder with no
+/// client-specific behavior: the `relay` crate reuses it verbatim to build
+/// its trust anchor for the REMOTE GATEWAY'S SERVER certificate, which is
+/// why this is the primary name rather than [`load_client_ca_roots`] (kept
+/// as a thin alias below for that name's existing callers).
+pub fn load_root_store(pem: &str) -> Result<Arc<RootCertStore>> {
     let certs = pem_to_der_certs(pem)?;
     let mut store = RootCertStore::empty();
     for cert in certs {
@@ -73,6 +77,13 @@ pub fn load_client_ca_roots(pem: &str) -> Result<Arc<RootCertStore>> {
             .context("adding client CA certificate to root store")?;
     }
     Ok(Arc::new(store))
+}
+
+/// Alias for [`load_root_store`] — this crate's original name for it, from
+/// when its only caller was the gateway's own mTLS-listener client-cert
+/// verification. Kept for those existing callers rather than churning them.
+pub fn load_client_ca_roots(pem: &str) -> Result<Arc<RootCertStore>> {
+    load_root_store(pem)
 }
 
 // ── Server config ─────────────────────────────────────────────────────────

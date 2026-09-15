@@ -17,7 +17,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ClientConfig;
 use serde::{Deserialize, Serialize};
 
-use client_ca::load_client_ca_roots;
+use client_ca::load_root_store;
 
 /// Generate a fresh ECDSA P-256 keypair and a CSR for it.
 ///
@@ -168,7 +168,7 @@ pub(crate) fn build_client_tls_config(
     key_pem: &str,
     server_ca_pem: &str,
 ) -> Result<Arc<ClientConfig>> {
-    let roots = load_client_ca_roots(server_ca_pem).context("RELAY_GATEWAY_SERVER_CA")?;
+    let roots = load_root_store(server_ca_pem).context("RELAY_GATEWAY_SERVER_CA")?;
 
     let cert_chain = pem_to_der_certs(cert_pem)?;
     let mut key_reader = key_pem.as_bytes();

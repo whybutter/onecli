@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use arc_swap::ArcSwap;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
@@ -88,6 +88,13 @@ pub async fn run(args: RelayArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| host_part(&args.gateway_addr).to_string());
 
+    // Fail-closed: `--api-url` carries the workspace's `oc_` key on every
+    // enrolment AND every renewal (`Authorization: Bearer`) — plaintext
+    // HTTP to anything but loopback would put that key on the wire in the
+    // clear. Loopback is exempt for local dev/testing (a fake api-server on
+    // 127.0.0.1, same posture the e2e suite relies on).
+    validate_api_url(&args.api_url)?;
+
     // Fail-closed: the trust anchor for the REMOTE GATEWAY'S server
     // certificate is mandatory. An unreadable or unparseable value must
     // refuse to start — never fall back to trusting nothing (which, for a
@@ -98,7 +105,7 @@ pub async fn run(args: RelayArgs) -> Result<()> {
             .context("RELAY_GATEWAY_SERVER_CA must not be empty")?;
     // Parse it now, at startup, so a garbage CA bundle fails here — before
     // any connection is ever accepted — rather than on the first dial.
-    client_ca::load_client_ca_roots(&server_ca_pem).context("RELAY_GATEWAY_SERVER_CA")?;
+    client_ca::load_root_store(&server_ca_pem).context("RELAY_GATEWAY_SERVER_CA")?;
 
     let stored = load_stored_state(args.state_dir.as_deref()).await?;
 
@@ -243,6 +250,43 @@ fn build_csr(key: &rcgen::KeyPair) -> Result<String> {
     csr.pem().context("encoding relay CSR as PEM")
 }
 
+/// Fail closed unless `api_url`'s scheme is `https`, or its host is loopback
+/// (`localhost`, `127.0.0.1`, `::1`).
+///
+/// `--api-url`/`RELAY_API_URL` is where every enrolment AND every renewal
+/// sends `Authorization: Bearer <oc_ workspace key>` — a plain `http://` to
+/// anything reachable over a real network puts that key on the wire in the
+/// clear, to be replayed by anyone who can see it. Loopback is exempt
+/// because that's exactly what a local dev setup or this crate's own e2e
+/// suite talks to (a fake api-server on `127.0.0.1`), where there is no
+/// network hop to sniff.
+fn validate_api_url(api_url: &str) -> Result<()> {
+    let parsed = reqwest::Url::parse(api_url)
+        .with_context(|| format!("--api-url {api_url:?} is not a valid URL"))?;
+    if parsed.scheme() == "https" {
+        return Ok(());
+    }
+    let is_loopback = parsed.host_str().is_some_and(|host| {
+        // `Url::host_str` returns an IPv6 host WITH its `[...]` brackets
+        // (it's a substring of the serialized URL, which always brackets
+        // IPv6 literals) — strip them before handing it to `IpAddr::parse`,
+        // which rejects them.
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    });
+    if is_loopback {
+        return Ok(());
+    }
+    bail!(
+        "--api-url {api_url:?} must be https, or a loopback address (localhost/127.0.0.1/::1) \
+         for local development -- otherwise the workspace API key would ride in cleartext on \
+         every enrollment and renewal"
+    );
+}
+
 /// The host part of a `host:port` string — everything before the last `:`.
 /// Falls back to the whole string if there's no colon. Good enough for the
 /// `host:port` shape `--gateway-addr` always takes; not meant to handle
@@ -314,32 +358,53 @@ async fn persist_state(dir: &Path, key_pem: &str, cert_pem: &str, host_id: &str)
     Ok(())
 }
 
-/// Write the relay's private key to `path` at 0600 from the instant the
-/// file exists — never briefly created under the process umask (commonly
-/// 0644, world-readable) and chmod'd afterward. `OpenOptions::mode` applies
-/// the permission bits atomically as part of the same `O_CREAT`, so there is
-/// no window in which the key sits on disk world-readable.
+/// Write the relay's private key to `path` at 0600, guaranteed — even when
+/// `path` already exists with looser permissions.
+///
+/// `OpenOptions::mode` only applies the permission bits at the moment a file
+/// is CREATED: opening an already-existing file with `.create(true)` (the
+/// old pattern here) leaves that file's existing mode untouched, so a
+/// pre-existing world-readable `path` (left over from an old bug, a manual
+/// copy, whatever) would silently keep receiving the key at its old, wider
+/// permissions forever. Writing to a fresh scratch file instead — created
+/// with `create_new(true)` (so `.mode(0o600)` unconditionally applies) —
+/// then atomically renaming it over `path` sidesteps that: `rename(2)`
+/// replaces the whole directory entry, so the file left at `path` is always
+/// the one just created at 0600, never the old one with its old mode.
 ///
 /// SECURITY: every failure here — including the create-with-mode call
 /// itself — is a hard error, never a best-effort `.ok()`. A private key must
 /// not be able to silently end up on disk with looser permissions (or not
-/// written at all) than intended.
+/// written at all) than intended. The scratch file is best-effort cleaned up
+/// on any failure path, but that cleanup is never allowed to mask the real
+/// error.
 #[cfg(unix)]
 async fn write_private_key(path: &Path, key_pem: &str) -> Result<()> {
     use tokio::io::AsyncWriteExt;
 
-    let mut file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .await
-        .with_context(|| format!("creating {} with 0600 permissions", path.display()))?;
-    file.write_all(key_pem.as_bytes())
-        .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
+    let tmp_path = scratch_path_for(path);
+    let result: Result<()> = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp_path)
+            .await
+            .with_context(|| format!("creating {} with 0600 permissions", tmp_path.display()))?;
+        file.write_all(key_pem.as_bytes())
+            .await
+            .with_context(|| format!("writing {}", tmp_path.display()))?;
+        drop(file);
+        tokio::fs::rename(&tmp_path, path)
+            .await
+            .with_context(|| format!("renaming {} to {}", tmp_path.display(), path.display()))?;
+        Ok(())
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+    }
+    result
 }
 
 /// Non-unix fallback: no POSIX permission bits to set atomically at create
@@ -349,6 +414,17 @@ async fn write_private_key(path: &Path, key_pem: &str) -> Result<()> {
     tokio::fs::write(path, key_pem)
         .await
         .with_context(|| format!("writing {}", path.display()))
+}
+
+/// The scratch path [`write_private_key`] creates before atomically renaming
+/// it over `path` — a `.tmp` suffix on the SAME filename, so it always lands
+/// beside the real file in the same directory (and therefore the same
+/// filesystem, which `rename(2)` requires to stay atomic).
+#[cfg(unix)]
+fn scratch_path_for(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".tmp");
+    PathBuf::from(name)
 }
 
 #[cfg(test)]
@@ -364,6 +440,34 @@ mod tests {
     #[test]
     fn host_part_falls_back_to_whole_string_with_no_colon() {
         assert_eq!(host_part("localhost"), "localhost");
+    }
+
+    #[test]
+    fn validate_api_url_accepts_https_anywhere() {
+        assert!(validate_api_url("https://api.example.com").is_ok());
+        assert!(validate_api_url("https://api.example.com:8443/v1").is_ok());
+    }
+
+    #[test]
+    fn validate_api_url_accepts_plain_http_on_loopback() {
+        assert!(validate_api_url("http://127.0.0.1:3000").is_ok());
+        assert!(validate_api_url("http://localhost:3000").is_ok());
+        assert!(validate_api_url("http://LOCALHOST:3000").is_ok());
+        assert!(validate_api_url("http://[::1]:3000").is_ok());
+    }
+
+    #[test]
+    fn validate_api_url_refuses_plain_http_on_a_remote_host() {
+        let err = validate_api_url("http://api.example.com").unwrap_err();
+        assert!(
+            format!("{err:#}").contains("--api-url"),
+            "error must name --api-url so an operator knows what to fix: {err:#}"
+        );
+    }
+
+    #[test]
+    fn validate_api_url_errs_on_garbage() {
+        assert!(validate_api_url("not a url").is_err());
     }
 
     #[tokio::test]
@@ -411,11 +515,12 @@ mod tests {
         assert_eq!(perms.mode() & 0o777, 0o600);
     }
 
-    /// A failure creating the key file must propagate as a hard `Err`, never
-    /// be swallowed the way the old write-then-`.ok()`-chmod pattern would
-    /// have (which could leave a world-readable key on disk with no error
-    /// at all). Forced here by putting a directory exactly where the key
-    /// file needs to go, so `open()` fails with `EISDIR`.
+    /// A failure writing the key must propagate as a hard `Err`, never be
+    /// swallowed the way the old write-then-`.ok()`-chmod pattern would have
+    /// (which could leave a world-readable key on disk with no error at
+    /// all). Forced here by putting a directory exactly where the key file
+    /// needs to go: the scratch file (`relay-key.pem.tmp`) is created fine
+    /// beside it, but the final `rename()` over a directory always fails.
     #[tokio::test]
     async fn persist_state_hard_errors_when_the_key_file_cannot_be_created() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -427,6 +532,62 @@ mod tests {
             .await
             .expect_err("must hard-error rather than silently succeed or silently drop the key");
         assert!(format!("{err:#}").contains("relay-key.pem"));
+    }
+
+    /// The whole point of the create-scratch-then-rename pattern: a
+    /// pre-existing key file with wide (world-readable) permissions must
+    /// end up at 0600 after a write, not keep its old mode. `OpenOptions`'s
+    /// `.mode()` only applies at file CREATION, so opening the existing
+    /// file directly (the old implementation) would silently leave it at
+    /// 0644 forever; renaming a freshly-created 0600 scratch file over it
+    /// fixes that unconditionally.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_private_key_fixes_a_pre_existing_wide_mode_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("relay-key.pem");
+        tokio::fs::write(&path, "OLD-KEY-PEM")
+            .await
+            .expect("seed a pre-existing key file");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("widen its permissions");
+
+        write_private_key(&path, "NEW-KEY-PEM")
+            .await
+            .expect("write");
+
+        let perms = std::fs::metadata(&path).expect("metadata").permissions();
+        assert_eq!(
+            perms.mode() & 0o777,
+            0o600,
+            "a pre-existing wide-mode file must not keep its old permissions"
+        );
+        let contents = tokio::fs::read_to_string(&path).await.expect("read back");
+        assert_eq!(contents, "NEW-KEY-PEM");
+    }
+
+    /// No scratch file must survive a failed write -- confirmed directly
+    /// (not just inferred from the error) since a leaked `.tmp` would keep
+    /// failing every subsequent write attempt with `create_new(true)`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_private_key_cleans_up_its_scratch_file_on_failure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("relay-key.pem");
+        tokio::fs::create_dir_all(&path)
+            .await
+            .expect("create a directory blocking the key file's path");
+
+        write_private_key(&path, "KEY-PEM")
+            .await
+            .expect_err("must hard-error");
+
+        assert!(
+            !scratch_path_for(&path).exists(),
+            "a failed write must not leave its scratch file behind"
+        );
     }
 
     /// `run()` must fail closed BEFORE binding a listener or attempting

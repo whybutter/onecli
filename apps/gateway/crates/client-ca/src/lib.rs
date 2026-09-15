@@ -20,4 +20,4 @@ pub mod test_support;
 
 pub use authority::{ClientCa, IssuedCert, SignCsrError};
 pub use identity::{identity_from_peer_certs, ClientIdentity};
-pub use mtls::{load_client_ca_roots, pem_from_value, MtlsConfig};
+pub use mtls::{load_client_ca_roots, load_root_store, pem_from_value, MtlsConfig};
