@@ -148,10 +148,18 @@ export const createOnpremAuth = (options: OnpremAuthOptions) => {
             //     instance's `ONECLI_REGISTRATION` policy — "open" admits
             //     anyone, "invite" (default) requires a pending invitation
             //     for this email or that the instance has no real users yet.
-            // This hook is the only place every route that can create a user
-            // passes through — the password sign-up and the social callback
-            // both reach the adapter here — so a configured Google provider
-            // cannot become a way around either check.
+            // This hook is the only place every BETTER-AUTH route that can
+            // create a user passes through — the password sign-up and the
+            // social callback both reach the adapter here — so a configured
+            // Google provider cannot become a way around either check. It is
+            // NOT the only door in the codebase: org-admin-gated member
+            // provisioning (`createMember`, `ee/services/team-service.ts`,
+            // reached via `POST /v1/org/members`) calls `db.user.create`
+            // directly for an invited teammate who has no account yet, and
+            // does not run through this hook or this policy — an
+            // already-authenticated admin adding a known member is a
+            // different threat model than an anonymous stranger
+            // self-registering, which is what this gate exists to police.
             //
             // Both throw rather than returning `false`; see
             // `signupBlockedByUpgradeError` for why that distinction is
