@@ -12,12 +12,15 @@ import type { ApiEnv } from "../types";
  * still holds an ACTIVE membership — a departed member's key reads nothing.
  *
  * PATCH /v1/org — rename (name only; `slug` is immutable). Owner-only: an
- * admin or plain member 403s before the service ever runs, audited
+ * admin 403s at the route's role gate before the service ever runs, a
+ * workspace-scoped credential 403s at the org-scope guard, audited
  * UPDATE/ORGANIZATION on success.
  */
 
 const ORG = "org-1";
+const WORKSPACE = "ws-1";
 const ORG_KEY = "oc_org_test-key";
+const WORKSPACE_KEY = "oc_workspace-key";
 
 // Pinned onprem. RBAC is on in every edition of this build, so the org-key
 // auth re-checks the holder's role through the membership row and a departed
@@ -39,10 +42,17 @@ const state = vi.hoisted(() => ({
 vi.mock("@onecli/db", () => ({
   db: {
     apiKey: {
-      findUnique: async ({ where }: { where: { key?: string } }) =>
-        where.key === ORG_KEY
-          ? { userId: "user-1", organizationId: ORG, scope: "organization" }
-          : null,
+      findUnique: async ({ where }: { where: { key?: string } }) => {
+        if (where.key === ORG_KEY)
+          return {
+            userId: "user-1",
+            organizationId: ORG,
+            scope: "organization",
+          };
+        if (where.key === WORKSPACE_KEY)
+          return { userId: "user-1", workspaceId: WORKSPACE, kind: "user" };
+        return null;
+      },
     },
     user: {
       findUnique: async () => ({ id: "user-1", email: "admin@example.com" }),
@@ -51,10 +61,19 @@ vi.mock("@onecli/db", () => ({
       findFirst: async () =>
         state.membershipActive ? { userId: "user-1" } : null,
       // The role resolver's read (and renameOrganization's own re-check):
-      // active at `state.role`, or no row once departed.
+      // active at `state.role`, or no row once departed. Also satisfies the
+      // workspace-key branch's `canAccessWorkspaceAsUser` check (an
+      // owner/admin reaches every workspace), so the workspace-scoped key
+      // case fails at the ROUTE's scope guard, not earlier at key auth.
       findUnique: async () =>
         state.membershipActive ? { role: state.role, status: "active" } : null,
     },
+    workspace: {
+      findUnique: async ({ where }: { where: { id?: string } }) =>
+        where.id === WORKSPACE ? { id: WORKSPACE, organizationId: ORG } : null,
+      findFirst: async () => ({ id: WORKSPACE, organizationId: ORG }),
+    },
+    workspaceAccess: { findFirst: async () => null },
     organization: {
       findUnique: async ({ where }: { where: { id: string } }) => {
         state.orgQueries.push(where);
@@ -209,6 +228,43 @@ describe("PATCH /v1/org", () => {
     const res = await rename("Nope");
 
     expect(res.status).toBe(403);
+    expect(state.orgName).toBe("Acme");
+    expect(state.auditEvents).toHaveLength(0);
+  });
+
+  it("401s an org key whose user is below admin (a plain member never authenticates as an org key at all)", async () => {
+    // Org keys are an admin capability by construction: the api-key resolver
+    // re-checks admin+ before an org key authenticates at all, independent of
+    // any route's own role requirement. A "member" therefore never reaches
+    // this route's owner-only gate to 403 there — it 401s one layer earlier,
+    // the same shape org-budgets.test.ts and org-usage.test.ts pin.
+    state.role = "member";
+
+    const res = await rename("Nope");
+
+    expect(res.status).toBe(401);
+    expect(state.orgName).toBe("Acme");
+    expect(state.auditEvents).toHaveLength(0);
+  });
+
+  it("403s a workspace-scoped credential — org settings require an organization-scoped credential", async () => {
+    const res = await app.request("/v1/org", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${WORKSPACE_KEY}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ name: "Nope" }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: {
+        message:
+          "Organization settings require an organization-scoped credential.",
+        type: "authentication_error",
+      },
+    });
     expect(state.orgName).toBe("Acme");
     expect(state.auditEvents).toHaveLength(0);
   });
