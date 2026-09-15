@@ -246,3 +246,23 @@ Accepted as written, with these decisions:
 6. **Operator path without email.** WP-A confirms (report, do not change) that an admin on an instance with no email provider configured can still obtain the invite link from the members UI after `POST /invitations` returns `emailed: false`; if that is not the case, say so in the report so it becomes a QA finding, not a silent gap.
 7. **Ordering test.** WP-A adds one unit case asserting the hook's refusal order: with the upgrade window open AND no invitation, the thrown code is `SIGNUP_BLOCKED_BY_UPGRADE`, not `SIGNUP_REQUIRES_INVITATION`.
 8. **Free-file surface** stays exactly the two lists in §1.2 and §1.3 plus their tests. Anything beyond that is a plan change, not a developer call.
+
+## Senior review and QA record (2026-09-15, orchestrator)
+
+**Review verdict: REQUEST CHANGES → fixed.** The one must-fix was real: Prisma's `mode: "insensitive"` equality compiles to `ILIKE` with the caller's email as the pattern, so `_` (legal in an email, accepted by better-auth's `z.email()`) is a single-character wildcard and `_____@corp.example` matched a pending invitation for `alice@corp.example`. Fixed by keeping the insensitive filter as a pre-filter only and deciding on a strict lower-cased equality post-check; pinned by a unit case whose mock simulates `ILIKE` and by a real-Postgres sign-up proof. Should-fixes applied: stub/unstub in `try/finally`, the creation-hook comment scoped to better-auth routes and naming the admin-provisioning door (`POST /v1/org/members` → `db.user.create`), `.env.example` says both processes read the variable.
+
+Reviewer notes accepted as product facts, not defects: invite mode is vouching, not seat control (every account owns a personal org and can invite); a pre-2.0 placeholder instance is open until claimed (irrelevant on a fresh database); plus-addressing is not normalised anywhere; the first-account race is pre-existing.
+
+**Gate on the assembled branch** (`pnpm check` 30/30 tasks + 139 script tests; web 863 passed / 8 skipped; API 3192 passed with a proof database, the only failures being the 7 upstream hosted-agent pg suites that fail identically on pristine v2 because the local Postgres runs `TimeZone=America/Mexico_City` against timezone-naive columns).
+
+**Live QA** (web :10354 / api :10356 from this worktree, database `onecli_phase3_qa`, which has existing users):
+
+| Check                                                                                             | Result                                                                 |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `POST /auth/sign-up/email` for a stranger                                                         | 403 `SIGNUP_REQUIRES_INVITATION`, no user row                          |
+| Same with a pending invitation for `Invitee@example.test` seeded and email `_______@example.test` | 403, no user row (wildcard closed)                                     |
+| `invitee@example.test` (lower-case) with that invitation                                          | 200, user created (case-insensitive admit works)                       |
+| `/auth/signup` signed out                                                                         | "Invite only" screen with the approved copy, no form, no Google button |
+| `/auth/login` signed out                                                                          | no "Create an account" link                                            |
+
+Test rows removed afterwards. Not exercised live: the Google path (no client configured on the QA stack); it goes through the same hook and its redirect surfacing is verified in the pinned library source by the reviewer.
