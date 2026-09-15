@@ -10,6 +10,10 @@ import type { ApiEnv } from "../types";
  * else; the org is resolved from the membership-fenced auth context, never
  * from input; and the `role: "member"` fence re-checks an API key's user
  * still holds an ACTIVE membership — a departed member's key reads nothing.
+ *
+ * PATCH /v1/org — rename (name only; `slug` is immutable). Owner-only: an
+ * admin or plain member 403s before the service ever runs, audited
+ * UPDATE/ORGANIZATION on success.
  */
 
 const ORG = "org-1";
@@ -26,7 +30,10 @@ vi.hoisted(() => {
 
 const state = vi.hoisted(() => ({
   membershipActive: true,
+  role: "owner" as string,
   orgQueries: [] as { id?: string }[],
+  orgName: "Acme",
+  auditEvents: [] as Record<string, unknown>[],
 }));
 
 vi.mock("@onecli/db", () => ({
@@ -43,9 +50,12 @@ vi.mock("@onecli/db", () => ({
     organizationMember: {
       findFirst: async () =>
         state.membershipActive ? { userId: "user-1" } : null,
-      // The role resolver's read: an active owner, or no row once departed.
+      // The role resolver's read (and renameOrganization's own re-check):
+      // active at `state.role`, or no row once departed.
       findUnique: async () =>
-        state.membershipActive ? { role: "owner", status: "active" } : null,
+        state.membershipActive
+          ? { role: state.role, status: "active" }
+          : null,
     },
     organization: {
       findUnique: async ({ where }: { where: { id: string } }) => {
@@ -53,15 +63,44 @@ vi.mock("@onecli/db", () => ({
         return where.id === ORG
           ? {
               id: ORG,
-              name: "Acme",
+              name: state.orgName,
               slug: "acme",
               byoLegacy: true,
               byoEnabled: false,
             }
           : null;
       },
+      update: async ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: { name: string };
+      }) => {
+        if (where.id !== ORG) throw new Error("not found");
+        state.orgName = data.name;
+        return {
+          id: ORG,
+          name: state.orgName,
+          slug: "acme",
+          byoLegacy: true,
+          byoEnabled: false,
+        };
+      },
+    },
+    auditLog: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        state.auditEvents.push(data);
+        return data;
+      },
     },
   },
+}));
+
+vi.mock("../lib/gateway-invalidate", () => ({
+  invalidateGatewayCacheForAccount: () => {},
+  invalidateGatewayCacheForOrg: () => {},
+  invalidateGatewayCache: () => {},
 }));
 
 let app: Hono<ApiEnv>;
@@ -73,7 +112,10 @@ beforeAll(async () => {
 
 beforeEach(() => {
   state.membershipActive = true;
+  state.role = "owner";
   state.orgQueries = [];
+  state.orgName = "Acme";
+  state.auditEvents = [];
 });
 
 const authed = { headers: { Authorization: `Bearer ${ORG_KEY}` } };
@@ -124,5 +166,75 @@ describe("GET /v1/org", () => {
     expect(res.status).toBe(401);
     // And the org row was never read.
     expect(state.orgQueries).toEqual([]);
+  });
+});
+
+describe("PATCH /v1/org", () => {
+  const rename = (name: string) =>
+    app.request("/v1/org", {
+      method: "PATCH",
+      headers: { ...authed.headers, "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+
+  it("renames as the owner and returns the updated org", async () => {
+    const res = await rename("New Name");
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      id: ORG,
+      name: "New Name",
+      slug: "acme",
+      byoLegacy: true,
+      byoEnabled: false,
+    });
+    expect(state.orgName).toBe("New Name");
+  });
+
+  it("audits the rename as UPDATE/ORGANIZATION", async () => {
+    await rename("Audited Co");
+
+    expect(state.auditEvents).toHaveLength(1);
+    expect(state.auditEvents[0]).toMatchObject({
+      organizationId: ORG,
+      userId: "user-1",
+      action: "update",
+      service: "organization",
+      source: "api",
+      metadata: { organizationId: ORG, change: "name", name: "Audited Co" },
+    });
+  });
+
+  it("403s an admin — rename is owner-only", async () => {
+    state.role = "admin";
+
+    const res = await rename("Nope");
+
+    expect(res.status).toBe(403);
+    expect(state.orgName).toBe("Acme");
+    expect(state.auditEvents).toHaveLength(0);
+  });
+
+  it("401s an anonymous caller", async () => {
+    const res = await app.request("/v1/org", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Nope" }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("400s an empty name without touching the service", async () => {
+    const res = await rename("");
+
+    expect(res.status).toBe(400);
+    expect(state.orgName).toBe("Acme");
+  });
+
+  it("400s a name over 255 characters", async () => {
+    const res = await rename("x".repeat(256));
+
+    expect(res.status).toBe(400);
+    expect(state.orgName).toBe("Acme");
   });
 });

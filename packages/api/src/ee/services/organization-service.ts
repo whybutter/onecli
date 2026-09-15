@@ -107,3 +107,50 @@ export const deleteOrganization = async (
     "organization deleted",
   );
 };
+
+/**
+ * Rename the organization (name only; `slug` is immutable). Owner-only —
+ * enforced primarily by the route's `role: "owner"` auth gate, re-checked
+ * here (same defense-in-depth as `deleteOrganization` above) so a direct
+ * service caller can't skip it.
+ */
+export const renameOrganization = async (
+  organizationId: string,
+  userId: string,
+  name: string,
+) => {
+  const membership = await db.organizationMember.findUnique({
+    where: { organizationId_userId: { organizationId, userId } },
+    select: { role: true, status: true },
+  });
+  if (
+    !membership ||
+    membership.role !== "owner" ||
+    membership.status === "suspended"
+  ) {
+    throw new ServiceError(
+      "FORBIDDEN",
+      "Only the organization owner can rename it",
+    );
+  }
+
+  const trimmed = name.trim();
+  if (trimmed.length === 0 || trimmed.length > 255) {
+    throw new ServiceError(
+      "BAD_REQUEST",
+      "Name must be between 1 and 255 characters",
+    );
+  }
+
+  return db.organization.update({
+    where: { id: organizationId },
+    data: { name: trimmed },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      byoLegacy: true,
+      byoEnabled: true,
+    },
+  });
+};
