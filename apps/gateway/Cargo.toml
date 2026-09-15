@@ -22,6 +22,7 @@ members = [
   "crates/policy",
   "crates/policy-engine",
   "crates/proxy",
+  "crates/relay",
   "crates/server",
   "crates/shutdown",
   "crates/summary",
@@ -50,6 +51,10 @@ ap-client = "0.9.0"
 ap-noise = "0.9.0"
 ap-proxy-client = "0.9.0"
 ap-proxy-protocol = "0.9.0"
+# `relay`'s ArcSwap<RelayCertState>: lets the renewal loop swap in a fresh TLS
+# config without a lock while in-flight tunnels keep their own Arc snapshot.
+# No existing transitive pin found via `cargo tree` before adding this.
+arc-swap = "1"
 async-trait = "0.1"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = "1"
