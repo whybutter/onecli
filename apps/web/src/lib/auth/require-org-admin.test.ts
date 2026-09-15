@@ -42,7 +42,9 @@ describe("requireOrgAdmin", () => {
       userEmail: "u1@example.test",
       organizationId: "org-1",
     });
-    state.requireRole.mockRejectedValueOnce(new Error("Insufficient permissions"));
+    state.requireRole.mockRejectedValueOnce(
+      new Error("Insufficient permissions"),
+    );
     await expect(requireOrgAdmin()).rejects.toThrow(
       "NEXT_REDIRECT:/org/org-1/workspaces",
     );

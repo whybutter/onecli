@@ -61,7 +61,7 @@ for (const [k, v] of Object.entries({
 const CONTEXT = `
 You are reviewing an UPSTREAM SYNC for a fork.
 
-- Upstream: github.com/onecli/onecli (OSS). Fork: github.com/CarbonoDev/onecli.
+- Upstream: github.com/onecli/onecli (OSS). Fork: github.com/whybutter/onecli.
 - Fork working branch: \`${oursBranch}\` (${ours}).
 - Last reviewed upstream commit (the base): ${base}. Upstream now at ${upstream}.
 - The delta under review is \`${base}..${upstream}\`.
