@@ -23,7 +23,7 @@ import {
   resolveOriginsFromEnv,
 } from "./public-origins";
 import { resolveCookieDomain } from "./cookie-domain";
-import { assertUpgradeWindowClear } from "./registration";
+import { assertRegistrationAllowed, assertUpgradeWindowClear } from "./registration";
 import { sendPasswordResetEmail } from "../services/password-reset-email";
 
 /**
@@ -139,17 +139,22 @@ export const createOnpremAuth = (options: OnpremAuthOptions) => {
       user: {
         create: {
           before: async (user) => {
-            // Registration is open on self-host; the ONE refusal left is the
-            // pre-2.0 upgrade window (`registration.ts`). This hook is the
-            // only place every route that can create a user passes through —
-            // the password sign-up and the social callback both reach the
-            // adapter here — so a configured Google provider cannot become a
-            // way around it.
+            // Two refusals gate every new account, in this order:
+            // (1) the pre-2.0 upgrade window (`registration.ts`) — protects
+            //     an upgrading operator's data and must win first; (2) the
+            //     instance's `ONECLI_REGISTRATION` policy — "open" admits
+            //     anyone, "invite" (default) requires a pending invitation
+            //     for this email or that the instance has no real users yet.
+            // This hook is the only place every route that can create a user
+            // passes through — the password sign-up and the social callback
+            // both reach the adapter here — so a configured Google provider
+            // cannot become a way around either check.
             //
-            // It throws rather than returning `false`; see
+            // Both throw rather than returning `false`; see
             // `signupBlockedByUpgradeError` for why that distinction is
             // load-bearing.
             await assertUpgradeWindowClear(options.prisma ?? db);
+            await assertRegistrationAllowed(user.email, options.prisma ?? db);
 
             // Merged into the insert (better-auth spreads the returned
             // `data`), which is the only point where a value can reach a
@@ -174,11 +179,14 @@ export const createOnpremAuth = (options: OnpremAuthOptions) => {
     },
 
     emailAndPassword: {
-      // Registration is open on self-host, so there is nothing for
-      // `disableSignUp` to do — and the one refusal that does exist (the
-      // pre-2.0 upgrade window) is a per-REQUEST question the user-creation
-      // hook above answers, for the social path too, which `disableSignUp`
-      // would not have covered at all.
+      // `disableSignUp` is a static, request-blind switch flipped at startup;
+      // it is never set here even though `ONECLI_REGISTRATION=invite` can
+      // refuse sign-ups, because both refusals this instance can make (the
+      // pre-2.0 upgrade window, and the invite-mode policy) are per-REQUEST
+      // questions — they depend on the email being created and the current
+      // DB state — which only the user-creation hook above has access to,
+      // for the social path too, which `disableSignUp` would not have
+      // covered at all.
       //
       // Neither `requireEmailVerification` nor `autoSignIn: false` is set,
       // and both must stay unset: either one makes a sign-up for a taken
