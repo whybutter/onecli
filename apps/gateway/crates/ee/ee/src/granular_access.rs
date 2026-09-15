@@ -77,6 +77,18 @@ pub fn enforce_request(
 /// The two resource-policy axes this build recognises, in priority order
 /// (also the tie-break order `denies_everything`/`intersect_policies` use
 /// when a policy object happens to carry more than one).
+///
+/// The two functions below deliberately use this list differently:
+/// `denies_everything` checks EVERY recognised axis key present and denies if
+/// ANY of them is an explicitly empty array, while `axis_of` (used by
+/// `intersect_policies`) picks only the FIRST recognised key it finds and
+/// ignores the rest. So a policy naming more than one axis, e.g.
+/// `{"repositories": ["org/a"], "folders": []}`, is refused at connect time
+/// (the empty `folders` array denies everything) even though `intersect_policies`
+/// would only ever have looked at the `repositories` entry — conservative by
+/// design: `denies_everything` runs first on the request path
+/// (`hooks::refuse_empty_scope`), so `axis_of`'s narrower view never gets a
+/// chance to be the more permissive final word.
 const AXES: [&str; 2] = ["repositories", "folders"];
 
 /// Whether `policy` is a recognised resource policy, and if so, its axis key
@@ -421,6 +433,38 @@ mod tests {
             intersect_policies(Some(&root), Some(&scoped)),
             Some(json!({"folders": ["/clients"]}))
         );
+    }
+
+    #[test]
+    fn intersect_root_with_root_yields_empty_string_entry_not_deny_all() {
+        // `[/] ∩ [/]` normalizes both sides to the empty-string root sentinel
+        // and returns it unchanged: `{"folders": [""]}`. This is NOT the
+        // deny-all shape (`{"folders": []}`, an empty ARRAY containing zero
+        // entries) — it is a one-entry array whose entry happens to be the
+        // empty string. Downstream, `granular_access::dropbox::allowed_folders`
+        // treats a folders list made only of the root sentinel as "no
+        // restriction", exactly like a raw `["/"]` input. Do NOT "simplify"
+        // this result to `[]` — that would silently turn an unrestricted
+        // root-boundary intersection into deny-all.
+        let root = json!({"folders": ["/"]});
+        assert_eq!(
+            intersect_policies(Some(&root), Some(&root)),
+            Some(json!({"folders": [""]}))
+        );
+    }
+
+    #[test]
+    fn intersect_non_array_axis_value_and_none_clones_verbatim() {
+        // The "folders" key is present but its value isn't an array — axis_of
+        // still recognises the key, but against `None` neither side's
+        // array-ness matters: the whole (Some, None) branch returns the Some
+        // side cloned, untouched, before axis_of/string_entries ever run.
+        let garbage = json!({"folders": "x"});
+        assert_eq!(
+            intersect_policies(Some(&garbage), None),
+            Some(garbage.clone())
+        );
+        assert_eq!(intersect_policies(None, Some(&garbage)), Some(garbage));
     }
 
     #[test]
