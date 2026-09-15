@@ -185,6 +185,27 @@ export interface WorldSpec {
    */
   readonly withOrgApiKey?: boolean;
   /**
+   * The org role backing `withOrgApiKey`'s user (`ee::rbac::user_is_org_admin`'s
+   * recheck). Defaults to `"owner"`, preserving today's behaviour. Only
+   * meaningful with `withOrgApiKey: true`.
+   */
+  readonly orgApiKeyRole?: "owner" | "admin" | "member";
+  /**
+   * The org membership + workspace binding backing `withApiKey`'s user
+   * (`ee::rbac::user_can_manage_workspace`'s recheck). Every field defaults
+   * to today's behaviour: `role: "owner"` (which alone satisfies the
+   * recheck), `status: "active"`, `workspaceBinding: "none"` (no
+   * `workspace_access` row — unneeded while the role is owner/admin).
+   * `workspaceBinding: "group"` grants the workspace to a group the user
+   * belongs to, instead of a direct row. Only meaningful with
+   * `withApiKey: true`.
+   */
+  readonly apiKeyMembership?: {
+    readonly role?: "owner" | "admin" | "member";
+    readonly status?: "active" | "suspended";
+    readonly workspaceBinding?: "direct" | "group" | "none";
+  };
+  /**
    * `restricted` gates every identifiable app provider on an explicit
    * availability grant; with no grants seeded, that blocks all of them.
    */
@@ -717,14 +738,20 @@ export const seedWorld = async (
     await prisma.user.create({
       data: { id: ids.user, email, externalAuthId: ids.user },
     });
-    // Cloud re-checks workspace access (and org-key admin role) on every
-    // request, and an owner row is the simplest thing that satisfies both.
+    // The gateway re-checks workspace access (and org-key admin role) on
+    // every request (`ee::rbac`); an owner row is the default that satisfies
+    // both without a caller having to opt in. `orgApiKeyRole` /
+    // `apiKeyMembership` let a test dial the role/status/binding down to
+    // exercise the recheck's other arms.
+    const role = spec.orgApiKeyRole ?? spec.apiKeyMembership?.role ?? "owner";
+    const status = spec.apiKeyMembership?.status ?? "active";
     await prisma.organizationMember.create({
       data: {
         organizationId: ids.org,
         userId: ids.user,
         userEmail: email,
-        role: "owner",
+        role,
+        status,
       },
     });
     if (spec.withApiKey === true) {
@@ -738,6 +765,37 @@ export const seedWorld = async (
           userEmail: email,
         },
       });
+      // Defaults to "none": an owner/admin role alone satisfies the
+      // recheck, so no workspace_access row is needed unless a test asks
+      // for one (e.g. to exercise a plain member's direct/group binding).
+      const binding = spec.apiKeyMembership?.workspaceBinding ?? "none";
+      if (binding === "direct") {
+        await prisma.workspaceAccess.create({
+          data: {
+            id: `${ids.workspace}-pa-apikey`,
+            workspaceId: ids.workspace,
+            userId: ids.user,
+          },
+        });
+      } else if (binding === "group") {
+        await prisma.group.create({
+          data: {
+            id: `${ids.group}-apikey`,
+            organizationId: ids.org,
+            name: `${ids.group}-apikey`,
+          },
+        });
+        await prisma.groupMember.create({
+          data: { groupId: `${ids.group}-apikey`, userId: ids.user },
+        });
+        await prisma.workspaceAccess.create({
+          data: {
+            id: `${ids.workspace}-pa-apikey-group`,
+            workspaceId: ids.workspace,
+            groupId: `${ids.group}-apikey`,
+          },
+        });
+      }
     }
     if (spec.withOrgApiKey === true) {
       await prisma.apiKey.create({
