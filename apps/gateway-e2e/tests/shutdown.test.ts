@@ -158,7 +158,10 @@ const APPROVAL_WORLD = {
 };
 
 describe("shutdown with work held for approval", () => {
-  scenario("releases a frozen request and clears its card", async (cx) => {
+  // Two-instance scenario; requires the Redis-backed approval store, which
+  // this fork removed with HA. Single-instance shutdown behaviour is covered
+  // by the other scenarios in this file.
+  scenario.skip("releases a frozen request and clears its card", async (cx) => {
     const upstream = await cx.upstream();
     await cx.seed(APPROVAL_WORLD);
     const first = await cx.startGateway();
