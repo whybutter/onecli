@@ -5,15 +5,18 @@ import type { HostedAvailability } from "./availability";
 const byo = { kind: "byo" as const };
 const hosted = { kind: "hosted" as const };
 
-// The self-host / fallback arm: no org world in play.
+// The self-host / fallback arm: no org world in play. BYO-first (Nanoclaw —
+// a self-host-only decision): hosted is never primary here, and — unlike the
+// cloud arms below — the workspace's own agent history no longer decides
+// anything. The only input that matters is whether a hosted surface exists.
 const open = { orgByoLegacy: null, orgByoEnabled: null };
 
-describe("createDoor (self-host / org world unknown — the workspace-derived arm)", () => {
-  it("gives a brand-new user the hosted door alone", () => {
-    // The whole point: someone who has never made an agent never meets the
-    // word "BYO".
+describe("createDoor (self-host / org world unknown — BYO-first)", () => {
+  it("gives a brand-new user the BYO door, with hosted a click away once a runner exists", () => {
+    // BYO-first: even a user who has never made an agent, on a deployment
+    // with a live runner, gets BYO as the primary button.
     expect(createDoor({ agents: [], availability: "ready", ...open })).toBe(
-      "hosted",
+      "byo-with-hosted",
     );
   });
 
@@ -23,13 +26,13 @@ describe("createDoor (self-host / org world unknown — the workspace-derived ar
     );
   });
 
-  it("treats a hosted-only workspace as new — it is already in the new world", () => {
+  it("treats a hosted-only workspace the same as any other — agent history is not a factor", () => {
     expect(
       createDoor({ agents: [hosted], availability: "ready", ...open }),
-    ).toBe("hosted");
+    ).toBe("byo-with-hosted");
   });
 
-  it("sees one legacy agent among hosted ones and keeps the split door", () => {
+  it("ignores the agent mix entirely once a hosted surface exists", () => {
     expect(
       createDoor({
         agents: [hosted, hosted, byo],
@@ -39,14 +42,14 @@ describe("createDoor (self-host / org world unknown — the workspace-derived ar
     ).toBe("byo-with-hosted");
   });
 
-  it("offers hosted while agents are OFFLINE — they exist, they are just down", () => {
+  it("offers hosted as a secondary door while agents are OFFLINE — they exist, they are just down", () => {
     // Offline is a runtime state, not "the surface doesn't exist"; the dialog
     // itself explains the outage.
     expect(
       createDoor({ agents: [byo], availability: "offline", ...open }),
     ).toBe("byo-with-hosted");
     expect(createDoor({ agents: [], availability: "offline", ...open })).toBe(
-      "hosted",
+      "byo-with-hosted",
     );
   });
 
@@ -75,7 +78,7 @@ describe("createDoor (self-host / org world unknown — the workspace-derived ar
     }
   });
 
-  it("hides hosted while availability is still loading, even with agents known", () => {
+  it("hides hosted while availability is still loading, regardless of agent history", () => {
     expect(createDoor({ agents: [], availability: "loading", ...open })).toBe(
       "byo",
     );
