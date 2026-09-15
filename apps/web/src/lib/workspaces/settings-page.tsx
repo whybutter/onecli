@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { db } from "@onecli/db";
-import { getWorkspaceQuota } from "@onecli/api/ee/services/quota-service";
 import { canManageWorkspace } from "@onecli/api/ee/services/authorization-service";
 import { getServerSession } from "@/lib/auth/server";
 import { PageHeader } from "@dashboard/page-header";
 import { RenameWorkspaceForm } from "./_components/rename-workspace-form";
 import { WorkspaceAccessCard } from "@/ee/workspaces/_components/workspace-access-card";
+import { AgentDefaultsCard } from "@/ee/workspaces/_components/agent-defaults-card";
 import { DeleteWorkspaceButton } from "./_components/delete-workspace-button";
 
 export const metadata: Metadata = {
@@ -49,7 +49,8 @@ export default async function WorkspaceSettingsPage({ params }: Props) {
   // Manage-only pane (rename / share / delete). A member who can't manage is
   // sent to Install rather than out of the workspace: it is the other pane in
   // this section and the one they ARE entitled to.
-  if (!(await canManageWorkspace(user.id, workspace.id))) {
+  const canManage = await canManageWorkspace(user.id, workspace.id);
+  if (!canManage) {
     redirect(`/w/${workspace.id}/settings/install`);
   }
 
@@ -59,14 +60,6 @@ export default async function WorkspaceSettingsPage({ params }: Props) {
   const orgWorkspaceCount = await db.workspace.count({
     where: { organizationId: workspace.organizationId },
   });
-
-  // The plan comes from the quota service, NOT raw subscriptionStatus: on
-  // non-billing editions the service reports the top tier, keeping this page
-  // in agreement with the workspaces list. Deriving "free" from the null
-  // status here showed a licensed self-host a dead-end Stripe upgrade CTA
-  // instead of Manage access (the license gate inside the card handles the
-  // unlicensed arm).
-  const { plan } = await getWorkspaceQuota(workspace.organizationId);
 
   return (
     <div className="flex flex-1 flex-col gap-6">
@@ -78,7 +71,8 @@ export default async function WorkspaceSettingsPage({ params }: Props) {
         workspaceId={workspace.id}
         currentName={workspace.name}
       />
-      <WorkspaceAccessCard workspaceId={workspace.id} plan={plan} />
+      <WorkspaceAccessCard workspaceId={workspace.id} />
+      <AgentDefaultsCard workspaceId={workspace.id} canManage={canManage} />
       <DeleteWorkspaceButton
         workspaceId={workspace.id}
         workspaceName={workspace.name}

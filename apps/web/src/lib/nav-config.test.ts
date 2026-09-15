@@ -131,3 +131,22 @@ describe("Install moved into Workspace Settings", () => {
     ]);
   });
 });
+
+describe("Usage is unconditional — no billing capability needed", () => {
+  it("appears whether or not entitlement is known", () => {
+    const titles = (opts?: Parameters<typeof getNavItems>[1]) =>
+      getNavItems("org-1", opts)
+        .flat()
+        .map((item) => item.title);
+    expect(titles()).toContain("Usage");
+    expect(titles({ entitled: true })).toContain("Usage");
+    expect(titles({ entitled: false })).toContain("Usage");
+  });
+
+  it("points at the org-level usage URL", () => {
+    const item = getNavItems("org-1")
+      .flat()
+      .find((entry) => entry.title === "Usage");
+    expect(item?.url).toBe("/org/org-1/usage");
+  });
+});
