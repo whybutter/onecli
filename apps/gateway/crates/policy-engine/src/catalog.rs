@@ -90,14 +90,18 @@ fn single_host_family(provider_tools: &HashMap<String, CatalogTool>) -> bool {
 /// the owning rule, and `action` carries the owning rule's POLARITY (#999):
 /// it decides how an unknown body-condition result on a truncated body
 /// resolves — restrictive rules match (fail closed), permissive rules don't.
+/// `rule_id` carries the owning rule's real identity into `PolicyRule.name`
+/// so `condition_match`'s warn-once-per-rule log keys on it instead of an
+/// empty placeholder shared by every app-target variant.
 fn variant_rule(
     path_pattern: &str,
     method: Option<String>,
     conditions: &Option<serde_json::Value>,
     action: PolicyAction,
+    rule_id: &str,
 ) -> PolicyRule {
     PolicyRule {
-        name: String::new(),
+        name: rule_id.to_string(),
         path_pattern: path_pattern.to_string(),
         method,
         action,
@@ -193,6 +197,7 @@ pub(super) fn app_target_matches(
     headers: Option<&hyper::HeaderMap>,
     conditions: &Option<serde_json::Value>,
     polarity: PolicyAction,
+    rule_id: &str,
 ) -> bool {
     let Some(provider_tools) = catalog().get(provider) else {
         return false;
@@ -257,6 +262,7 @@ pub(super) fn app_target_matches(
                     method.map(str::to_string),
                     conditions,
                     polarity.clone(),
+                    rule_id,
                 );
                 matches_request(&rule, request_method, request_path, body, headers)
             })
@@ -488,6 +494,7 @@ mod tests {
             None,
             &None,
             PolicyAction::Allow,
+            "test-rule",
         )
     }
 
@@ -510,6 +517,7 @@ mod tests {
             None,
             &None,
             PolicyAction::Allow,
+            "test-rule",
         )
     }
 
@@ -889,6 +897,7 @@ mod tests {
             None,
             &conditions,
             PolicyAction::Allow,
+            "test-rule",
         ));
     }
 
@@ -1169,6 +1178,7 @@ mod tests {
                     None,
                     &None,
                     PolicyAction::Allow,
+                    "test-rule",
                 ),
                 "whole-app rule for `{provider}` must cover its injection host `{host}` (path `{path}`)"
             );
@@ -1216,6 +1226,7 @@ mod tests {
                             None,
                             &None,
                             PolicyAction::Allow,
+                            "test-rule",
                         );
                         if matched {
                             matched_cases += 1;

@@ -35,17 +35,21 @@ fn normalize(entry: &str) -> String {
 /// The three shapes a Dropbox folder scope decodes to (Phase 1 WP-C
 /// amendment, `gateway-ee-behaviour.md` §1.8):
 ///
-/// - `Unrestricted`: no `folders` key (absent, non-object policy, or the key
-///   holds something other than an array), or every string entry normalizes
-///   to the account root (`["/"]`) — the widest scope, i.e. "no guard".
-/// - `DenyAll`: the `folders` key holds an array with no in-scope entries —
-///   either explicitly empty (`[]`, ordinarily caught earlier by
-///   `denies_everything`, but handled here too as defence in depth) or
-///   non-empty with ZERO usable string entries (e.g. `{"folders": [42]}`).
-///   This second case is the amendment: Phase 0 read a non-empty-but-garbage
-///   array as `Unrestricted` (a spec gap), which would have handed out an
+/// - `Unrestricted`: no `folders` key at all — the key is absent, or the
+///   policy isn't a JSON object — or every string entry normalizes to the
+///   account root (`["/"]`) — the widest scope, i.e. "no guard".
+/// - `DenyAll`: the `folders` key is PRESENT but unusable — its value isn't
+///   an array at all (a string, number, `null`, object, or bool, e.g.
+///   `{"folders": "/clients"}` or `{"folders": null}`), or it's an array with
+///   no in-scope entries: either explicitly empty (`[]`, ordinarily caught
+///   earlier by `denies_everything`, but handled here too as defence in
+///   depth) or non-empty with ZERO usable string entries (e.g.
+///   `{"folders": [42]}`). Both the non-array-value and the
+///   non-empty-but-garbage-array cases are the amendment: Phase 0 read them
+///   as `Unrestricted` (a spec gap), which would have handed out an
 ///   unscoped credential for a policy an administrator wrote to restrict
-///   access. Denying is the fail-closed reading.
+///   access. A recognised key with an unusable shape denies, it does not
+///   fall back to "no restriction".
 /// - `Restricted(list)`: the normalized, non-empty allowlist.
 enum FolderPolicy {
     Unrestricted,
@@ -55,12 +59,18 @@ enum FolderPolicy {
 
 /// Decode a policy's `folders` scope into a [`FolderPolicy`].
 fn folder_policy(policy: Option<&Value>) -> FolderPolicy {
-    let Some(entries) = policy
+    let Some(folders_value) = policy
         .and_then(Value::as_object)
         .and_then(|obj| obj.get("folders"))
-        .and_then(Value::as_array)
     else {
+        // No object, or no `folders` key at all — the axis was never named.
         return FolderPolicy::Unrestricted;
+    };
+    let Some(entries) = folders_value.as_array() else {
+        // The key IS present but its value isn't an array — a recognised key
+        // in an unusable shape denies (the amendment), it is not treated the
+        // same as the key being absent.
+        return FolderPolicy::DenyAll;
     };
     if entries.is_empty() {
         return FolderPolicy::DenyAll;
@@ -310,10 +320,28 @@ mod tests {
             folder_policy(Some(&json!({}))),
             FolderPolicy::Unrestricted
         ));
-        assert!(matches!(
-            folder_policy(Some(&json!({"folders": "not-an-array"}))),
-            FolderPolicy::Unrestricted
-        ));
+    }
+
+    #[test]
+    fn folders_key_present_but_not_an_array_denies_all() {
+        // The amendment: a RECOGNISED key in an unusable shape must not fall
+        // back to "no restriction" — that would hand out an unscoped
+        // credential for a policy an administrator wrote to restrict access.
+        for value in [
+            json!("/clients"),
+            json!(null),
+            json!(42),
+            json!(true),
+            json!({}),
+        ] {
+            assert!(
+                matches!(
+                    folder_policy(Some(&json!({"folders": value}))),
+                    FolderPolicy::DenyAll
+                ),
+                "{value:?} should deny-all"
+            );
+        }
     }
 
     #[test]
@@ -456,6 +484,22 @@ mod tests {
             None,
         )
         .is_some());
+    }
+
+    #[test]
+    fn deny_all_from_a_non_array_folders_value_also_denies_pathless_endpoints() {
+        // The amendment: a `folders` key present but not an array (a string,
+        // here) must deny, not pass through as unrestricted.
+        let policy = json!({"folders": "/clients"});
+        let denial = enforce(
+            Some(&policy),
+            "api.dropboxapi.com",
+            "/2/users/get_current_account",
+            &hyper::HeaderMap::new(),
+            None,
+        )
+        .expect("denied");
+        assert!(denial.allowed.is_empty());
     }
 
     #[test]

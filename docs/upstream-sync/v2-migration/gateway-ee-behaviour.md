@@ -233,22 +233,27 @@ Applicability (all must hold, else pass-through / `None`):
 `folder_policy(policy)` (Phase 1 WP-C amendment) is a three-way decode, not a
 `Some`/`None` allowlist:
 
-- **`Unrestricted`** (no guard): the `folders` key is absent, the policy isn't an
-  object, or the key holds something other than an array; OR every string entry
-  normalizes to the account root (e.g. `{folders: ["/"]}`) — root is the widest
-  scope.
+- **`Unrestricted`** (no guard): the `folders` key is absent, or the policy isn't
+  an object at all; OR the key is present and holds an array where every string
+  entry normalizes to the account root (e.g. `{folders: ["/"]}`) — root is the
+  widest scope.
 - **`DenyAll`** (guard denies unconditionally, before the pathless allowlist and
-  every other check): the `folders` key holds an array with **zero in-scope
-  entries** — either explicitly empty (`{folders: []}`, ordinarily intercepted
-  earlier by `denies_everything`, but the guard denies it too as defence in
-  depth) **or** non-empty with zero usable STRING entries, e.g. `{folders: [42]}`.
-  This second case is the amendment: before it, a non-empty-but-garbage array
-  decoded as `Unrestricted` (a spec gap) — the fail-closed reading is to deny,
-  not to hand out an unscoped credential for a policy an administrator wrote to
-  restrict access. A raw array with a MIX of garbage and usable entries
-  (`{folders: [42, "/valid"]}`) decodes to `Restricted(["/valid"])` — the
-  non-string entry is dropped, not fatal, matching `denies_everything`'s "raw
-  entries that are not strings are ignored" rule elsewhere in this document.
+  every other check): the `folders` key is **present but unusable** — its value
+  isn't an array at all (a string, number, `null`, object, or bool, e.g.
+  `{folders: "/clients"}` or `{folders: null}`), **or** it's an array with
+  **zero in-scope entries**: either explicitly empty (`{folders: []}`,
+  ordinarily intercepted earlier by `denies_everything`, but the guard denies it
+  too as defence in depth) **or** non-empty with zero usable STRING entries,
+  e.g. `{folders: [42]}`. Both the non-array-value and the
+  non-empty-but-garbage-array readings are the amendment: before it, either
+  shape decoded as `Unrestricted` (a spec gap) — the fail-closed reading is to
+  deny a RECOGNISED key in an unusable shape, not to fall back to "no
+  restriction" and hand out an unscoped credential for a policy an
+  administrator wrote to restrict access. A raw array with a MIX of garbage and
+  usable entries (`{folders: [42, "/valid"]}`) decodes to
+  `Restricted(["/valid"])` — the non-string entry is dropped, not fatal,
+  matching `denies_everything`'s "raw entries that are not strings are ignored"
+  rule elsewhere in this document.
 - **`Restricted(list)`**: the normalized, non-empty allowlist — the only shape
   that triggers the guard above.
 
@@ -291,6 +296,7 @@ Shape table (provider × request × policy):
 | dropbox            | `folders: ["/"]`                      | anything                                                         | pass-through (unrestricted)                                                                                                                                                                                                                                                                                                                                               |
 | dropbox            | `folders: []`                         | anything                                                         | 403 empty-scope (step 3), before the guard; the guard itself also denies (`DenyAll`) if ever reached                                                                                                                                                                                                                                                                     |
 | dropbox            | `folders: [42]` (non-empty, no usable string entries) | anything                                             | 403 deny-all (Phase 1 amendment — denies before the pathless allowlist)                                                                                                                                                                                                                                                                                                   |
+| dropbox            | `folders: "/clients"` / `folders: null` (key present, not an array) | anything                              | 403 deny-all (Phase 1 amendment — a recognised key in an unusable shape denies, it does not fall back to unrestricted)                                                                                                                                                                                                                                                    |
 | dropbox            | `folders: [42, "/valid"]`             | api host, path inside `/valid`                                   | allow — the garbage entry is dropped, not fatal (`Restricted(["/valid"])`)                                                                                                                                                                                                                                                                                                |
 | dropbox            | `repositories: [...]` (axis mismatch) | anything                                                         | guard: `folders` absent → pass-through; but connect-time: scoping requested, no scoper for the cred type → shared refresh → not minted → `has_request_guard("dropbox")` is **true** so the stored token is **not** withheld → credential injects unrestricted. (Composition would already have produced `{repositories: []}` if an org boundary existed on another axis.) |
 | github-app         | `repositories` non-empty              | any request                                                      | no request-level check; scoped token minted after policy allow; injected                                                                                                                                                                                                                                                                                                  |

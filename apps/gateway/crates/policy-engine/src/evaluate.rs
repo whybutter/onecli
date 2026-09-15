@@ -32,15 +32,20 @@ fn identity_matches(rule: &NewRule, request: &PolicyRequest) -> bool {
 /// gateway's exact `matches_request`. `action` must be the owning rule's
 /// POLARITY (`polarity_of`), not a placeholder: it decides how an UNKNOWN
 /// body-condition result on a truncated body resolves (#999) — restrictive
-/// rules match (fail closed), permissive rules don't.
+/// rules match (fail closed), permissive rules don't. `rule_id` carries the
+/// OWNING rule's real identity into `PolicyRule.name` (an empty placeholder
+/// here would make `condition_match`'s warn-once-per-rule log key on the same
+/// empty string for every broken rule, defeating the per-rule dedup and
+/// misattributing the warning).
 fn pseudo_rule(
     path_pattern: Option<&str>,
     method: Option<String>,
     conditions: &Option<serde_json::Value>,
     action: PolicyAction,
+    rule_id: &str,
 ) -> PolicyRule {
     PolicyRule {
-        name: String::new(),
+        name: rule_id.to_string(),
         path_pattern: path_pattern.unwrap_or("*").to_string(),
         method,
         action,
@@ -80,6 +85,7 @@ fn target_matches(
                         method.clone(),
                         &rule.conditions,
                         polarity_of(rule),
+                        &rule.id,
                     ),
                     &request.method,
                     &request.path,
@@ -97,6 +103,7 @@ fn target_matches(
             headers,
             &rule.conditions,
             polarity_of(rule),
+            &rule.id,
         ),
         // A connection target binds to the account that won injection: it
         // matches only when this request's winning injected connection is
@@ -119,6 +126,7 @@ fn target_matches(
                     headers,
                     &rule.conditions,
                     polarity_of(rule),
+                    &rule.id,
                 )
         }
         // A secret gates its host: it matches when the request host matches ANY of
