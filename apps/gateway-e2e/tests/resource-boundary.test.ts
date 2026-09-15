@@ -249,17 +249,7 @@ describe("resource boundaries (org ∩ workspace)", () => {
  */
 
 const DROPBOX_HOST = "api.dropboxapi.com";
-const DROPBOX_BLOCK_RULE = "block-dropbox";
 const DROPBOX_CONNECTIONS = [{ provider: "dropbox", label: "acme-dropbox" }];
-
-/** Guarantees the request reached the ordinary policy engine (i.e. the
- * Dropbox guard did NOT deny it) — the discriminator between "unrestricted /
- * in scope" and "denied by the folder guard" for these scenarios. */
-const blockDropbox = {
-  name: DROPBOX_BLOCK_RULE,
-  action: "block" as const,
-  targets: [{ hostPattern: DROPBOX_HOST }],
-};
 
 const dropboxGrant = (resources?: { folders: string[] }) => ({
   name: "grant: agent → dropbox connection",
@@ -295,13 +285,6 @@ const expectDropboxDenied = (
   });
 };
 
-const expectDropboxScopeSurvived = (res: { status: number; body: string }) => {
-  expect(res.status).toBe(403);
-  expect(JSON.parse(res.body)).toMatchObject({
-    error: "blocked_by_policy",
-    rule_name: DROPBOX_BLOCK_RULE,
-  });
-};
 
 describe("Dropbox folder guard (FolderPolicy amendment)", () => {
   scenario(
@@ -356,11 +339,19 @@ describe("Dropbox folder guard (FolderPolicy amendment)", () => {
   );
 
   scenario(
-    "folders: ['/'] is unrestricted — the request reaches the ordinary policy engine",
+    "folders: ['/'] is unrestricted — the guard never denies it",
     async (cx) => {
+      // No `blockDropbox` here: the ordinary policy engine decides (step 6)
+      // before the granular guard ever runs (step 10, `gateway-ee-behaviour.md`
+      // §0.4), so a host-level block rule would answer `blocked_by_policy`
+      // for this request regardless of what the guard decided — it cannot
+      // discriminate "unrestricted" from "restricted but denied" (both would
+      // reach the same block). The only response shape that is unique to a
+      // GUARD denial is `resource_access_denied`, so the real assertion is
+      // its absence.
       await cx.seed({
         appConnections: DROPBOX_CONNECTIONS,
-        rules: [dropboxGrant({ folders: ["/"] }), blockDropbox],
+        rules: [dropboxGrant({ folders: ["/"] })],
       });
       const gw = await cx.startGateway();
 
@@ -370,7 +361,22 @@ describe("Dropbox folder guard (FolderPolicy amendment)", () => {
         "/2/files/list_folder",
         JSON.stringify({ path: "/anything/at/all" }),
       );
-      expectDropboxScopeSurvived(res);
+      // Whatever the request's eventual fate (forwarded, or refused for an
+      // unrelated reason such as no real network path to the real Dropbox
+      // API in this sandbox), it must not be the GUARD's own denial shape —
+      // that would mean the guard treated `["/"]` as restrictive.
+      let deniedByGuard = false;
+      try {
+        const parsed: unknown = JSON.parse(res.body);
+        deniedByGuard =
+          typeof parsed === "object" &&
+          parsed !== null &&
+          (parsed as Record<string, unknown>).error ===
+            "resource_access_denied";
+      } catch {
+        deniedByGuard = false;
+      }
+      expect(deniedByGuard).toBe(false);
     },
   );
 
