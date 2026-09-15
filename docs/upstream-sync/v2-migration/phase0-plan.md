@@ -583,3 +583,13 @@ Accepted as written, with these amendments. Where this section disagrees with th
 7. **Clean-room rule applies to the dev agents.** They implement from `phase0-plan.md`, the seam inventories, and the behaviour specs. They do not open files under the three `ee/` roots of the upstream tree (which are deleted in WP1's first commit anyway). The planner read them to write this plan; that is the intended division.
 8. **Sequencing:** WP1, WP2, WP3 start together in separate worktrees off `v2`. WP4 starts once WP3 has pushed its export surface (`packages/api/src/ee/**` index and service signatures), since WP4 imports `TeamMember`, `OrgRole`, `WorkspaceOwner` types from it. WP1's CLAUDE.md rewrite is its last commit.
 9. **Gate is unchanged:** `pnpm check`, `pnpm test`, `cargo test --workspace`, and the gateway-e2e free-surface suites green on the assembled `phase0/foundation` branch, with Redis absent.
+
+## Follow-ups recorded during Phase 0 execution
+
+Carried to Phase 1 (gateway) unless noted:
+
+- **WP2 deviation accepted:** the GitHub App token scoper and the Dropbox request guard were implemented in full in Phase 0 (not stubbed) because `proxy::connect` calls `has_token_scoper` / `scope_token` / `has_request_guard` unconditionally and stubbing `has_request_guard("dropbox")` to false would have served the stored Dropbox token unguarded. Phase 1's granular-access item is therefore reduced to the spec amendments below.
+- **Truncated body cannot fail closed inside the guard:** `crates/proxy/src/hooks.rs` passes only the buffered bytes to `enforce_request`, so a body over the buffer cap whose prefix parses as complete JSON passes. Phase 1: pass `None` when `BufferedBody.truncated` (free-crate edit).
+- **Spec amendment, Dropbox `folders`:** key present with a non-empty raw array but zero usable entries (`{"folders":[42]}`) currently reads as "no guard". Amend `gateway-ee-behaviour.md` §1.8 to deny-all in that case and implement.
+- **GitHub picker (web, Phase 3):** validate that each selected repository's owner equals the installation account; the shared mint strips owners, so a cross-owner entry silently scopes to the installation owner's same-named repo.
+- **Tidy:** upstream `list_folder/continue` is pathless by design, so a cursor minted outside the gateway lists whatever it was minted for. Documented, not changed.
