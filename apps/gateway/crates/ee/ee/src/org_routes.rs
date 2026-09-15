@@ -1,85 +1,70 @@
-//! Org-scoped gateway routes.
+//! `GET /v1/org/approvals/pending` — long-poll for approvals pending anywhere
+//! in the organization (a superset of the free per-workspace poll).
 //!
-//! Mounted unconditionally via `crate::ee` and compiled into every edition
-//! (the former `src/org_routes.rs` identity stub is gone); org keys — and the
-//! org auth/store surface these routes depend on — exist everywhere.
+//! Mounted unconditionally in every edition. The licensed original's only
+//! entitlement-specific behavior was an `enterprise_license_required` 403
+//! gate in front of this handler; per plan.md ("`org_routes`: KEEP minus the
+//! licence 403") that gate is simply gone — entitlement is always on in this
+//! fork, so the route now behaves exactly as the licensed arm always did.
+
+use std::collections::HashSet;
+use std::time::Duration;
 
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::Router;
+use axum::{Json, Router};
 use hyper::StatusCode;
-use tracing::{info, info_span, warn, Instrument};
+use tracing::{info, info_span, Instrument};
 
-use approval::APPROVAL_TIMEOUT_SECS;
-use approval::{pending_approval_row, PendingParams};
+use approval::{pending_approval_row, PendingParams, APPROVAL_TIMEOUT_SECS};
 use context::auth::OrgAuthUser;
 use context::GatewayState;
 
-/// Attach the org-scoped routes to the gateway router.
 pub fn mount(router: Router<GatewayState>) -> Router<GatewayState> {
     router.route("/v1/org/approvals/pending", get(get_org_pending_approvals))
 }
 
-/// Org-scoped counterpart of the workspace approvals poll: long-polls for pending
-/// approvals across **every** workspace in the caller's organization, each item
-/// carrying its own `workspaceId` so the handler can route a decision back to the
-/// right workspace via the existing `/v1/approvals/{id}/decision` route. Requires
-/// an org API key (a workspace key or workspace-scoped session → 403).
 async fn get_org_pending_approvals(
     auth: OrgAuthUser,
     State(state): State<GatewayState>,
     Query(params): Query<PendingParams>,
 ) -> impl IntoResponse {
-    // The org-wide approvals feed (#59) is licensed. A runtime 403 — not a
-    // mount skip — so the path answers with the reason instead of a bare 404.
-    if !common::edition::entitled() {
-        return (
-            StatusCode::FORBIDDEN,
-            axum::Json(serde_json::json!({ "error": "enterprise_license_required" })),
-        )
-            .into_response();
-    }
-
-    // Present only for an org key; a workspace key or session leaves it None.
+    // A workspace-scoped key, or any browser session, carries no
+    // organization scope — this route needs an org-scoped `oc_org_` API key.
     let Some(org_id) = auth.organization_id else {
-        warn!(auth_method = %auth.auth_method, "org approval poll: organization scope required");
         return (
             StatusCode::FORBIDDEN,
-            axum::Json(serde_json::json!({ "error": "organization_scope_required" })),
+            Json(serde_json::json!({"error": "organization_scope_required"})),
         )
             .into_response();
     };
 
-    let span = info_span!("org_approval_poll",
-        org_id = %org_id,
-        user_id = %auth.user_id,
+    let span = info_span!(
+        "org_approval_poll",
+        organization_id = %org_id,
         auth_method = %auth.auth_method,
     );
     async move {
-        let exclude: std::collections::HashSet<&str> = params
+        let exclude: HashSet<&str> = params
             .exclude
             .split(',')
-            .map(|s| s.trim())
+            .map(str::trim)
             .filter(|s| !s.is_empty())
             .collect();
-
-        info!(exclude_count = exclude.len(), "org approval poll started");
 
         let mut pending = state.approval_store.list_pending_for_org(&org_id).await;
         pending.retain(|a| !exclude.contains(a.id.as_str()));
 
-        let mut long_polled = false;
         if pending.is_empty() {
-            long_polled = true;
             let mut shutdown_signal = shutdown::subscribe();
-            // Same reason as the workspace-scoped poll: a 30-second hold would
-            // pin the drain for its whole window.
+            // Answer "nothing pending" at once on shutdown rather than
+            // holding a connection open through the drain window — mirrors
+            // the free per-workspace poll (`server::get_pending_approvals`).
             let got_new = tokio::select! {
-                got_new = state.approval_store.wait_for_new_for_org(
-                    &org_id,
-                    std::time::Duration::from_secs(30),
-                ) => got_new,
+                got_new = state
+                    .approval_store
+                    .wait_for_new_for_org(&org_id, Duration::from_secs(30)) => got_new,
                 _ = shutdown_signal.wait() => false,
             };
             if got_new {
@@ -89,12 +74,9 @@ async fn get_org_pending_approvals(
             }
         }
 
-        info!(
-            count = pending.len(),
-            long_polled, "org approval poll completed"
-        );
+        info!(count = pending.len(), "org approval poll completed");
 
-        axum::Json(serde_json::json!({
+        Json(serde_json::json!({
             "requests": pending.iter().map(pending_approval_row).collect::<Vec<_>>(),
             "timeoutSeconds": APPROVAL_TIMEOUT_SECS,
         }))
