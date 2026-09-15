@@ -14,7 +14,7 @@ import {
 
 export const getApiKey = async () => {
   const { userId, userEmail, workspaceId } = await resolveWorkspaceContext();
-  const { apiKey, created } = await ensureApiKeyService(userId, {
+  const { apiKey, created, lastUsedAt } = await ensureApiKeyService(userId, {
     workspaceId,
   });
   if (created) {
@@ -27,7 +27,7 @@ export const getApiKey = async () => {
       metadata: { scope: "workspace", autoProvisioned: true },
     });
   }
-  return { apiKey };
+  return { apiKey, lastUsedAt: lastUsedAt ? lastUsedAt.toISOString() : null };
 };
 
 export const regenerateApiKey = async () => {

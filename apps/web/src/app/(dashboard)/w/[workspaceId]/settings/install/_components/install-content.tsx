@@ -7,6 +7,7 @@ import { TryDemoCommand } from "@/app/(dashboard)/_components/try-demo-command";
 import { useAgents } from "@/hooks/use-agents";
 import { useInstallInfo } from "@/hooks/use-install-info";
 import { IS_CLOUD } from "@/lib/env";
+import { maskSecret } from "@/lib/mask-secret";
 import {
   CODING_TOOLS,
   buildCliInstallCommand,
@@ -25,6 +26,11 @@ export const InstallContent = () => {
   const { data: installInfo } = useInstallInfo();
 
   const [tool, setTool] = useState<ToolSelection>("claude-code");
+  // The self-host manual command interpolates the real API key — masked by
+  // default with an explicit reveal, matching the Overview API key card
+  // (`docs/paid-parity/project-scope-spec.md:129-137` flags the unmasked
+  // form as the anti-pattern to not repeat).
+  const [keyRevealed, setKeyRevealed] = useState(false);
 
   // The URL is the single source of truth for the agent choice:
   // `?agent=<identifier>` — how the org-level Get Started picker deep-links in,
@@ -74,15 +80,22 @@ export const InstallContent = () => {
   );
 
   // Self-host / OSS: the one-liner endpoint is cloud-only, so spell the same
-  // setup out manually (with this workspace's real key once loaded).
-  const manualCommand = [
-    "curl -fsSL onecli.sh/cli/install | sh",
-    ...(installInfo
-      ? [`onecli config set api-host ${installInfo.apiUrl}`]
-      : []),
-    `onecli auth login --api-key ${installInfo?.apiKey ?? "oc_..."}`,
-    ...(pinIdentifier ? [`onecli config set agent ${pinIdentifier}`] : []),
-  ].join("\n");
+  // setup out manually (with this workspace's real key once loaded). Masked
+  // by default — the raw key is interpolated into the copyable text only
+  // once the caller explicitly reveals it.
+  const buildManualCommand = (apiKey: string) =>
+    [
+      "curl -fsSL onecli.sh/cli/install | sh",
+      ...(installInfo
+        ? [`onecli config set api-host ${installInfo.apiUrl}`]
+        : []),
+      `onecli auth login --api-key ${apiKey}`,
+      ...(pinIdentifier ? [`onecli config set agent ${pinIdentifier}`] : []),
+    ].join("\n");
+  const manualCommand = buildManualCommand(installInfo?.apiKey ?? "oc_...");
+  const maskedManualCommand = buildManualCommand(
+    installInfo?.apiKey ? maskSecret(installInfo.apiKey) : "oc_...",
+  );
 
   return (
     <>
@@ -121,7 +134,21 @@ export const InstallContent = () => {
                 : "Install the CLI, point it at this instance, and sign in."
             }
           >
-            <TryDemoCommand command={installCommand ?? manualCommand} />
+            <TryDemoCommand
+              command={
+                installCommand ??
+                (keyRevealed ? manualCommand : maskedManualCommand)
+              }
+            />
+            {!installCommand && (
+              <button
+                type="button"
+                onClick={() => setKeyRevealed((r) => !r)}
+                className="text-muted-foreground hover:text-foreground mt-1 text-xs underline underline-offset-2"
+              >
+                {keyRevealed ? "Hide API key" : "Reveal API key"}
+              </button>
+            )}
             {installCommand && pinIdentifier && (
               <p className="text-muted-foreground mt-2 text-xs">
                 Already have the CLI?{" "}
