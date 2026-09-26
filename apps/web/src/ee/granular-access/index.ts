@@ -9,13 +9,13 @@ export type {
 } from "@/lib/granular-access/types";
 
 /**
- * Real map (not a stand-in): the connection rows and the policy editor's
- * summary text need it to describe a connection's resource scope even
- * before the picker UI ships. `PolicyDialogContent` is intentionally
- * omitted from both configs for now — the pickers (GitHub repo browser,
- * Dropbox folder browser) are Phase 3 work, so `ResourceScopeFields`
- * (`ee/policy-editor/_components/resource-scope-fields.tsx`) renders its
- * "coming later" placeholder instead of opening a manage dialog.
+ * The provider map the connection rows and the policy editor read to describe
+ * (and edit) a connection's resource scope. GitHub ships its repository
+ * picker (`PolicyDialogContent`, loaded on demand from the config); Dropbox
+ * keeps the `folders` policy shape for the gateway but has no picker — its
+ * folder browser needs a live-browse endpoint this edition does not run — so
+ * `ResourceScopeFields` renders nothing for it and the free wrapper shows a
+ * plain hint instead.
  */
 export const granularAccessConfigs: Map<string, GranularAccessConfig> = new Map(
   [

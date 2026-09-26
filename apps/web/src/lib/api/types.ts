@@ -135,39 +135,15 @@ export interface Workspace {
   createdAt: string;
 }
 
-// Workspace access bindings (the human sharing surface for a workspace). `role` is
-// the management role on a user binding (step 13c): "owner" may manage the
-// workspace, "member" is a plain use grant. `isOwner` flags the creator — a
-// provenance display hint, distinct from the (transferable) management role.
-export interface WorkspaceAccessUserRow {
-  id: string;
-  userId: string;
-  name: string | null;
-  email: string;
-  role: "owner" | "member";
-  isOwner: boolean;
-  createdAt: string;
-}
-
-export interface WorkspaceAccessGroupRow {
-  id: string;
-  groupId: string;
-  name: string;
-  memberCount: number;
-  createdAt: string;
-}
-
-export interface WorkspaceAccessBindings {
-  users: WorkspaceAccessUserRow[];
-  groups: WorkspaceAccessGroupRow[];
-}
-
-// The shares to keep. Each user carries a management `role` (owner = may manage
-// the workspace); groups carry no role in v1.
-export interface SetWorkspaceAccessInput {
-  users: { userId: string; role: "owner" | "member" }[];
-  groupIds: string[];
-}
+// Workspace access bindings (the human sharing surface for a workspace) and
+// the shares-to-keep input — the API's own wire types, re-exported so
+// consumers keep importing from `@/lib/api`.
+export type {
+  WorkspaceAccessUserRow,
+  WorkspaceAccessGroupRow,
+  WorkspaceAccessBindings,
+  SetWorkspaceAccessInput,
+} from "@onecli/api/ee/services/workspace-access-service";
 
 export type SsoConnectionStatus = "pending" | "active" | "disabled";
 
@@ -221,15 +197,9 @@ export interface UpdateSsoConnectionInput {
   clientSecret?: string;
 }
 
-// An org's claimed email domain. `verifiedAt` null = pending the DNS TXT
-// check; the token is published in DNS, so it's safe to expose here.
-export interface OrgDomain {
-  id: string;
-  domain: string;
-  verificationToken: string;
-  verifiedAt: string | null;
-  createdAt: string;
-}
+// An org's claimed email domain (`OrgDomainRow` on the API; aliased here so
+// every consumer keeps its `OrgDomain` name).
+export type { OrgDomainRow as OrgDomain } from "@onecli/api/ee/routes/org-domains";
 
 // A bearer token for the org's /scim/v2 provisioning endpoint. Reads only
 // ever carry metadata — the plaintext exists solely in the create response.
@@ -275,13 +245,7 @@ export interface CreateInvitationInput {
   role: "admin" | "member";
 }
 
-export interface OrgMemberRow {
-  userId: string;
-  status: string;
-  ssoExempt: boolean;
-  /** Present on status changes: what happened on the Cognito side. */
-  revocation?: string;
-}
+export type { OrgMemberRow } from "@onecli/api/ee/routes/org-members";
 
 export interface ResourceCounts {
   agents: number;
@@ -321,10 +285,7 @@ export interface CreateSecretInput {
 // ── Org directory (groups, members) ──
 
 /** Cursor envelope shared by every directory-scale list. */
-export interface DirectoryPage<T> {
-  data: T[];
-  nextCursor: string | null;
-}
+export type { DirectoryPage } from "@onecli/api/ee/lib/directory-page";
 
 export interface DirectoryListParams {
   limit?: number;
@@ -332,23 +293,10 @@ export interface DirectoryListParams {
   q?: string;
 }
 
-export interface GroupRow {
-  id: string;
-  name: string;
-  /** "scim" groups are IdP-managed — manual writes 409. */
-  source: "manual" | "scim";
-  externalId: string | null;
-  memberCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface GroupMemberRow {
-  userId: string;
-  email: string;
-  name: string | null;
-  addedAt: string;
-}
+export type {
+  GroupRow,
+  GroupMemberRow,
+} from "@onecli/api/ee/services/group-service";
 
 // Group→role mappings (step 15): map an IdP group to an org role, priority-ordered.
 export interface RoleMappingRow {
@@ -377,15 +325,7 @@ export interface RoleMappingImpact {
   affectedCount: number;
 }
 
-export interface OrgMemberListRow {
-  userId: string;
-  email: string;
-  name: string | null;
-  role: string;
-  status: string;
-  ssoExempt: boolean;
-  joinedAt: string;
-}
+export type { OrgMemberListRow } from "@onecli/api/ee/services/team-service";
 
 // ── Shared policy identity/condition shapes ──────────────────────────────────
 // Used by the editor's PolicyRuleV2. Workspace rules target a specific agent or

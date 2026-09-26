@@ -1,18 +1,25 @@
-import { ComingSoonCard } from "@/lib/components/coming-soon-card";
+import { PageHeader } from "@dashboard/page-header";
 import { requireOrgAdmin } from "@/lib/auth/require-org-admin";
+import { GroupList } from "./_components/group-list";
 
 /**
- * Phase 0 stand-in for Directory groups (KEEP in the v2 migration plan, but
- * a Phase 3 build-out). `requireOrgAdmin()` is real defense-in-depth beside
- * the `(admin)` route-group layout, matching the upstream page's guard
- * sequence even though this page has nothing behind it yet.
+ * Directory groups (KEEP in the v2 migration plan). `requireOrgAdmin()` is
+ * real defense-in-depth beside the `(admin)` route-group layout.
+ *
+ * Role mappings (group → org role automation) are deliberately omitted per
+ * the orchestrator's vetting note 2: the `GroupRoleMapping` table has no
+ * `/org/role-mappings` router mounted, so building that UI now would 404
+ * every call.
  */
 export default async function GroupsPage() {
   await requireOrgAdmin();
   return (
-    <ComingSoonCard
-      title="Groups"
-      description="Organizing members into directory groups and mapping groups to org roles is available in a later phase."
-    />
+    <div className="flex flex-1 flex-col gap-8">
+      <PageHeader
+        title="Groups"
+        description="Organize members into groups, the building blocks for group-level access."
+      />
+      <GroupList />
+    </div>
   );
 }

@@ -25,9 +25,34 @@ import {
 } from "@onecli/ui/components/alert-dialog";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { getApiKey, regenerateApiKey } from "@/lib/actions/api-key";
+import { maskSecret } from "@/lib/mask-secret";
+
+/** "3 minutes ago" / "2 days ago" — coarse enough that timing skew across the
+ *  server-render/client boundary never matters. */
+const formatRelativeTime = (iso: string): string => {
+  const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [
+    ["year", 60 * 60 * 24 * 365],
+    ["month", 60 * 60 * 24 * 30],
+    ["day", 60 * 60 * 24],
+    ["hour", 60 * 60],
+    ["minute", 60],
+  ];
+  for (const [unit, unitSeconds] of units) {
+    const value = Math.floor(seconds / unitSeconds);
+    if (value >= 1) {
+      return new Intl.RelativeTimeFormat("en-US", { numeric: "auto" }).format(
+        -value,
+        unit,
+      );
+    }
+  }
+  return "just now";
+};
 
 export const ApiKeyCard = () => {
   const [apiKey, setApiKey] = useState("");
+  const [lastUsedAt, setLastUsedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [revealed, setRevealed] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
@@ -36,19 +61,21 @@ export const ApiKeyCard = () => {
   useEffect(() => {
     getApiKey().then((result) => {
       setApiKey(result.apiKey ?? "");
+      setLastUsedAt(result.lastUsedAt);
       setLoading(false);
     });
   }, []);
 
-  const truncatedKey = apiKey
-    ? `${apiKey.slice(0, 6)}${"•".repeat(12)}${apiKey.slice(-4)}`
-    : "";
+  const truncatedKey = apiKey ? maskSecret(apiKey) : "";
 
   const handleRegenerate = async () => {
     setRegenerating(true);
     try {
       const result = await regenerateApiKey();
       setApiKey(result.apiKey);
+      // A freshly minted key has never been presented — carrying over the
+      // old key's `lastUsedAt` would report a key nobody has used yet.
+      setLastUsedAt(null);
       setRevealed(true);
       toast.success("API key regenerated");
     } catch {
@@ -137,6 +164,13 @@ export const ApiKeyCard = () => {
             </AlertDialogContent>
           </AlertDialog>
         </div>
+        {!loading && apiKey && (
+          <p className="text-muted-foreground mt-2 text-xs">
+            {lastUsedAt
+              ? `Last used ${formatRelativeTime(lastUsedAt)}`
+              : "Never used"}
+          </p>
+        )}
       </CardContent>
     </Card>
   );
