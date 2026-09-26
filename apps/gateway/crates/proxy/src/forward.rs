@@ -519,6 +519,7 @@ pub async fn forward_request(
         method.as_str(),
         &path,
         policy::ConditionBody::from_buffered(condition_buffer.as_ref()),
+        Some(req.headers()),
         has_injections,
         policy::is_llm_host(host),
         rules.winning_connection_id.as_deref(),
@@ -647,7 +648,18 @@ pub async fn forward_request(
         method.as_str(),
         &path,
         &headers,
-        condition_buffer.as_ref().map(|b| b.bytes.as_slice()),
+        // A TRUNCATED buffer is unevaluable, not "the bytes we happened to
+        // see": a request-level guard (e.g. Dropbox's folder allowlist) that
+        // parses just the observed prefix could accept a document whose
+        // security-relevant field never sits within it — the prefix can be a
+        // syntactically complete, but incomplete, view of the real body. Any
+        // truncated buffer must therefore read as `None` here so the guard's
+        // own fail-closed body-required check fires (`gateway-ee-behaviour.md`
+        // §1.8, §0.4; Phase 1 WP-C item E).
+        condition_buffer
+            .as_ref()
+            .filter(|b| !b.truncated)
+            .map(|b| b.bytes.as_slice()),
     )
     .await
     {

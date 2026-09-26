@@ -1144,7 +1144,12 @@ fn outcome_attributes_the_winning_rule() {
         &db::SecretHosts::default(),
         &db::ConnectionProviders::default(),
     );
-    match evaluate_outcome(&rules, &floor_req("/api", true, false), ConditionBody::None) {
+    match evaluate_outcome(
+        &rules,
+        &floor_req("/api", true, false),
+        ConditionBody::None,
+        None,
+    ) {
         Outcome::Rule(rule) => {
             assert_eq!(rule.logical_id, "lr");
             assert_eq!(rule.name, "rule");
@@ -1163,7 +1168,12 @@ fn deny_default_attributes_the_org_default_first() {
         &db::SecretHosts::default(),
         &db::ConnectionProviders::default(),
     );
-    match evaluate_outcome(&rules, &floor_req("/api", true, false), ConditionBody::None) {
+    match evaluate_outcome(
+        &rules,
+        &floor_req("/api", true, false),
+        ConditionBody::None,
+        None,
+    ) {
         Outcome::DenyDefault(Some(default_rule)) => {
             assert!(default_rule.is_default);
             assert_eq!(
@@ -1185,7 +1195,12 @@ fn lone_workspace_default_block_attributes_the_workspace() {
         &db::SecretHosts::default(),
         &db::ConnectionProviders::default(),
     );
-    match evaluate_outcome(&rules, &floor_req("/api", true, false), ConditionBody::None) {
+    match evaluate_outcome(
+        &rules,
+        &floor_req("/api", true, false),
+        ConditionBody::None,
+        None,
+    ) {
         Outcome::DenyDefault(Some(default_rule)) => {
             assert_eq!(default_rule.scope, Scope::Workspace);
         }

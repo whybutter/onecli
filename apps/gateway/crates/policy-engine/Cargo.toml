@@ -13,6 +13,7 @@ common = { path = "../common" }
 context = { path = "../context" }
 db = { path = "../db" }
 ee = { path = "../ee/ee" }
+hyper = { workspace = true }
 inject = { path = "../inject" }
 policy = { path = "../policy" }
 serde = { workspace = true }

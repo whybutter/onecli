@@ -309,6 +309,7 @@ pub async fn evaluate(
     method: &str,
     path: &str,
     body: ConditionBody<'_>,
+    headers: Option<&hyper::HeaderMap>,
     has_injections: bool,
     is_llm_host: bool,
     winning_connection_id: Option<&str>,
@@ -355,7 +356,7 @@ pub async fn evaluate(
             Scope::Workspace => "workspace".to_string(),
         },
     };
-    match evaluate_outcome(&rules, &request, body) {
+    match evaluate_outcome(&rules, &request, body, headers) {
         Outcome::Rule(rule) => (
             decision_for_rule(rule, org_id, workspace_id, agent_token, cache).await,
             Some(matched_of(rule)),

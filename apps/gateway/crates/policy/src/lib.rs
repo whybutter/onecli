@@ -142,18 +142,21 @@ fn rate_window_name(window_secs: u64) -> &'static str {
 /// `Truncated` body resolves an unfound value by the rule's polarity
 /// (`condition_match::matches`), so throwaway rules built for this matcher
 /// must carry the REAL rule's polarity in `action`, never a hardcoded one.
+/// `headers` feeds `header`-target conditions; `None` when the caller has no
+/// header view (a header condition is then always unevaluable).
 pub fn matches_request(
     rule: &PolicyRule,
     method: &str,
     path: &str,
     body: ConditionBody<'_>,
+    headers: Option<&hyper::HeaderMap>,
 ) -> bool {
     let direct = path_matches(path, &rule.path_pattern)
         && rule
             .method
             .as_ref()
             .is_none_or(|m| m.eq_ignore_ascii_case(method))
-        && crate::condition_match::matches(rule, body);
+        && crate::condition_match::matches(rule, body, headers);
     if direct {
         return true;
     }
@@ -169,7 +172,7 @@ pub fn matches_request(
             if rule.path_pattern.ends_with(&format!("/{service}"))
                 && is_git_discovery(path, service)
             {
-                return crate::condition_match::matches(rule, body);
+                return crate::condition_match::matches(rule, body, headers);
             }
         }
     }
@@ -213,7 +216,7 @@ pub fn is_blocked(
 ) -> bool {
     rules.iter().any(|rule| {
         matches!(rule.action, PolicyAction::Block)
-            && matches_request(rule, request_method, request_path, request_body)
+            && matches_request(rule, request_method, request_path, request_body, None)
     })
 }
 
@@ -417,13 +420,15 @@ mod tests {
             &rule,
             "GET",
             "/owner/repo.git/info/refs?service=git-upload-pack",
-            ConditionBody::None
+            ConditionBody::None,
+            None
         ));
         assert!(matches_request(
             &rule,
             "POST",
             "/owner/repo.git/git-upload-pack",
-            ConditionBody::None
+            ConditionBody::None,
+            None
         ));
         // The clone rule does NOT cover the push discovery, and vice versa -
         // each pack service bridges only to its own discovery.
@@ -431,7 +436,8 @@ mod tests {
             &rule,
             "GET",
             "/owner/repo.git/info/refs?service=git-receive-pack",
-            ConditionBody::None
+            ConditionBody::None,
+            None
         ));
     }
 
