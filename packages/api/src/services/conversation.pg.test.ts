@@ -243,6 +243,16 @@ beforeAll(async () => {
     "-----BEGIN CERTIFICATE-----\ntest-ca\n-----END CERTIFICATE-----";
 
   ({ db } = await import("@onecli/db"));
+  // RBAC is on in every edition of this build, so the access checks these
+  // paths run need the role resolver and workspace-access checker the server
+  // boot injects (`ensureEditionDefaults`); this suite loads services
+  // directly, so it installs the two slots itself.
+  const { initRoleResolver, initWorkspaceAccessChecker } =
+    await import("../providers");
+  const { eeWorkspaceAccessChecker, getUserRole } =
+    await import("../ee/services/authorization-service");
+  initRoleResolver({ getUserRole });
+  initWorkspaceAccessChecker(eeWorkspaceAccessChecker);
   conversations = await import("./conversation-service");
   turns = await import("./turn-service");
   dueWork = await import("./due-work");

@@ -1,16 +1,16 @@
-import OrgSsoPage from "@/ee/settings/org-sso-page";
-import { isEntitled } from "@onecli/api/lib/entitlements";
-import { EnterpriseLockedCard } from "@/lib/components/enterprise-locked-card";
+import { redirect } from "next/navigation";
 
-export default function Page() {
-  // SAML/OIDC SSO (#74-78) is licensed — dark unlicensed.
-  if (!isEntitled()) {
-    return (
-      <EnterpriseLockedCard
-        feature="sso"
-        description="Connect your identity provider for SAML/OIDC sign-in, enforce it org-wide, and provision members via SCIM."
-      />
-    );
-  }
-  return <OrgSsoPage />;
+/**
+ * SSO is permanently dropped in this build (v2 migration plan: no SSO/SCIM;
+ * Google login + email/password cover it). Redirects to the settings page
+ * that does exist rather than rendering a placeholder for a feature with no
+ * place on the roadmap — same convention as `/claim` and `/review/login`.
+ */
+export default async function Page({
+  params,
+}: {
+  params: Promise<{ orgId: string }>;
+}) {
+  const { orgId } = await params;
+  redirect(`/org/${orgId}/settings/general`);
 }

@@ -6,22 +6,19 @@ import { queryKeys } from "@/lib/api/keys";
 import type { InstanceInfo } from "@/lib/api/types";
 
 /**
- * Runtime instance metadata (edition + enterprise entitlement + version +
- * hosted-agents availability).
- *
- * The browser's ONLY correct source for the entitlement: `ENTERPRISE_ENABLED`
- * is runtime env, so the baked client bundle (`CAPS`, `NEXT_PUBLIC_*`) can
- * never know it — a prebuilt self-host image learns it from the API at
- * runtime. Deployment-global and near-immutable per process, hence the
- * infinite stale time.
+ * Runtime instance metadata (edition + entitlement + version + hosted-agents
+ * availability). `isEntitled()` is hardcoded true server-side (there is no
+ * license dial in this build); `entitled` stays in the wire shape for
+ * compatibility rather than as something the UI still branches on.
+ * Deployment-global and near-immutable per process, hence the infinite
+ * stale time.
  *
  * `poll` is for surfaces that must notice `runners.online` flipping (the chat
  * offline banner): a 30s interval on this one shared cache entry. Interval
  * refetches ignore staleTime, so polling and non-polling observers coexist.
  *
- * Returns `null` while loading — callers must treat that as "not locked yet",
- * never as unlicensed, so licensed users are never falsely gated (the same
- * null contract as `usePlanUsage`).
+ * Returns `null` while loading — callers must treat that as "not ready yet"
+ * (the same null contract as `usePlanUsage`).
  */
 export const useInstance = (
   options: { poll?: boolean } = {},

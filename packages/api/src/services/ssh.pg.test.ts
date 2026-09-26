@@ -89,6 +89,12 @@ const seedBase = async () => {
       role: "member",
     },
   });
+  // RBAC is on in every edition of this build: a plain member reaches a
+  // workspace only through a workspace_access binding (the flat team needed
+  // none), so the member fixtures carry the binding a real member has.
+  await db.workspaceAccess.create({
+    data: { workspaceId: WORKSPACE, userId: USER, role: "member" },
+  });
   await db.runner.create({
     data: {
       id: RUNNER,
@@ -186,6 +192,16 @@ beforeAll(async () => {
   process.env.SSH_CERT_MINTS_PER_HOUR = "5";
 
   ({ db } = await import("@onecli/db"));
+  // RBAC is on in every edition of this build, so the access checks these
+  // paths run need the role resolver and workspace-access checker the server
+  // boot injects (`ensureEditionDefaults`); this suite loads services
+  // directly, so it installs the two slots itself.
+  const { initRoleResolver, initWorkspaceAccessChecker } =
+    await import("../providers");
+  const { eeWorkspaceAccessChecker, getUserRole } =
+    await import("../ee/services/authorization-service");
+  initRoleResolver({ getUserRole });
+  initWorkspaceAccessChecker(eeWorkspaceAccessChecker);
   dueWork = await import("./due-work");
   ssh = await import("./ssh-service");
   sshKeys = await import("./ssh-key-service");

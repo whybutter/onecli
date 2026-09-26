@@ -25,7 +25,6 @@ import { TableCell, TableRow } from "@onecli/ui/components/table";
 import { cn } from "@onecli/ui/lib/utils";
 import type { OverlapWarning } from "@onecli/api/lib/policy-overlap";
 import type { PolicyRuleSource, PolicyRuleV2 } from "@/lib/api";
-import { usePlanGate } from "@/lib/plan-gate";
 import { ActionVerdict } from "./policy-preview/policy-action-verdict";
 import { IdentityCell } from "./policy-preview/policy-identity-cell";
 import { TargetCell } from "./policy-preview/policy-target-cell";
@@ -116,12 +115,6 @@ export const EditableRuleRow = ({
 
   const sourceLabel = SOURCE_LABEL[rule.source];
   const muted = !rule.enabled;
-  // The group arm of identity targeting is licensed (#51): unlicensed, the
-  // gateway clears group principals at load, so a group-targeted rule —
-  // block rules included — silently stops applying. Say so, loudly.
-  const { isLocked } = usePlanGate();
-  const notEnforced =
-    isLocked("groups") && rule.identities.some((i) => i.type === "group");
   return (
     <TableRow
       ref={setNodeRef}
@@ -180,17 +173,8 @@ export const EditableRuleRow = ({
               {rule.name}
             </span>
           )}
-          {(sourceLabel || muted || changeState || overlap || notEnforced) && (
+          {(sourceLabel || muted || changeState || overlap) && (
             <div className="flex items-center gap-1.5">
-              {notEnforced && (
-                <Badge
-                  variant="outline"
-                  title="This rule targets a directory group, and group targeting requires an Enterprise license. The gateway does not apply it, even to block."
-                  className="rounded border-amber-500/40 px-1.5 py-0 text-[10px] font-medium text-amber-700 dark:text-amber-400"
-                >
-                  Not enforced
-                </Badge>
-              )}
               {overlap && (
                 <Badge
                   variant="outline"

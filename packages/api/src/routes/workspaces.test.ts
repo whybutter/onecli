@@ -129,12 +129,26 @@ vi.mock("@onecli/db", () => {
       data,
       select,
     }: {
-      data: Omit<WorkspaceRow, "createdAt">;
+      data: Omit<WorkspaceRow, "createdAt"> & {
+        apiKeys?: { create: { key: string; userId: string } };
+      };
       select?: Record<string, boolean>;
     }) => {
-      const row = { ...data, createdAt: new Date() };
+      const { apiKeys, ...rest } = data;
+      const row = { ...rest, createdAt: new Date() };
       store.workspaces.push(row);
-      return pickWorkspace(row, select);
+      // The nested key seed lands like the database would land it, and the
+      // create's `select` can read it back.
+      if (apiKeys?.create) {
+        store.apiKeys.push({ ...apiKeys.create, workspaceId: row.id });
+      }
+      const picked = pickWorkspace(row, select) as Record<string, unknown>;
+      if (select?.apiKeys) {
+        picked.apiKeys = store.apiKeys
+          .filter((k) => k.workspaceId === row.id)
+          .map((k) => ({ key: k.key }));
+      }
+      return picked;
     },
     update: async ({
       where,

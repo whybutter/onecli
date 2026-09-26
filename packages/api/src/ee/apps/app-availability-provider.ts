@@ -1,12 +1,10 @@
-import type { AppAvailabilityProvider } from "../../providers";
-import { deriveAvailableProviders } from "../services/app-availability-service";
+import type { AppAvailabilityProvider } from "../../providers/types";
 
 /**
- * App-availability read seam (registered by the cloud edition). Backs
- * the connect-picker filter with the same allowlist the gateway enforces at
- * runtime. OSS never registers it, so every app stays available there.
+ * App availability (the org allowlist) is deferred (v2 migration decision 3).
+ * `null` means "unrestricted": every app is connectable in every workspace,
+ * which is what the free onprem default already answered.
  */
 export const appAvailability: AppAvailabilityProvider = {
-  getAvailableProviders: (workspaceId, organizationId) =>
-    deriveAvailableProviders(workspaceId, organizationId),
+  getAvailableProviders: async () => null,
 };

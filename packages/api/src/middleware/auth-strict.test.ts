@@ -7,8 +7,10 @@ import type { ApiEnv } from "../types";
 // these guard: with local auth the session is ambient (local admin), so an org
 // key that failed key auth — e.g. no X-Workspace-Id header — silently resolved
 // to the user's DEFAULT workspace. Pin onprem so the ambient-session fallthrough
-// is actually reachable (and CAPS.rbac is off, so the org-key role re-check is
-// skipped).
+// is actually reachable. RBAC is on in every edition of this build, so the
+// org-key role re-check and the workspace-key access re-check run against the
+// real resolver and checker, injected below the way `ensureEditionDefaults`
+// does at boot (this suite mounts the middleware without `createApiApp`).
 vi.hoisted(() => {
   process.env.NEXT_PUBLIC_EDITION = "onprem";
 });
@@ -50,6 +52,8 @@ vi.mock("@onecli/db", () => ({
     },
     organizationMember: {
       findFirst: async () => ({ organizationId: ORG }),
+      // The role resolver's read: the key holder is the org's active owner.
+      findUnique: async () => ({ role: "owner", status: "active" }),
     },
     workspace: {
       // Org-key path verifies the header workspace belongs to the key's org
@@ -67,7 +71,16 @@ vi.mock("@onecli/db", () => ({
 }));
 
 import { auth } from "./auth";
-import { initSession, initStrictApiKeyAuth } from "../providers";
+import {
+  initRoleResolver,
+  initSession,
+  initStrictApiKeyAuth,
+  initWorkspaceAccessChecker,
+} from "../providers";
+import {
+  eeWorkspaceAccessChecker,
+  getUserRole,
+} from "../ee/services/authorization-service";
 
 const makeApp = () => {
   const app = new Hono<ApiEnv>();
@@ -95,6 +108,8 @@ describe("auth middleware — strict API-key mode", () => {
       }),
     });
     initStrictApiKeyAuth(false);
+    initRoleResolver({ getUserRole });
+    initWorkspaceAccessChecker(eeWorkspaceAccessChecker);
   });
 
   describe("strict ON (the default in every edition)", () => {

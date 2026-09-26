@@ -42,6 +42,16 @@ beforeAll(async () => {
   process.env.SANDBOX_IDLE_STOP_SECONDS = "600";
 
   ({ db } = await import("@onecli/db"));
+  // RBAC is on in every edition of this build, so the access checks these
+  // paths run need the role resolver and workspace-access checker the server
+  // boot injects (`ensureEditionDefaults`); this suite loads services
+  // directly, so it installs the two slots itself.
+  const { initRoleResolver, initWorkspaceAccessChecker } =
+    await import("../providers");
+  const { eeWorkspaceAccessChecker, getUserRole } =
+    await import("../ee/services/authorization-service");
+  initRoleResolver({ getUserRole });
+  initWorkspaceAccessChecker(eeWorkspaceAccessChecker);
   processes = await import("./sandbox-process-service");
   dueWork = await import("./due-work");
   watchFire = await import("./watch-fire-service");
@@ -76,6 +86,7 @@ const resetAll = async () => {
   });
   await db.agent.deleteMany({ where: { identifier: { startsWith: P } } });
   await db.runner.deleteMany({ where: { id: { startsWith: P } } });
+  await db.organizationMember.deleteMany({ where: { userId: USER } });
   await db.user.deleteMany({ where: { id: USER } });
   await db.workspace.deleteMany({ where: { id: { startsWith: P } } });
   await db.organization.deleteMany({ where: { id: { startsWith: P } } });
@@ -90,6 +101,20 @@ beforeEach(async () => {
   });
   await db.user.create({
     data: { id: USER, email: `${P}user@example.com`, externalAuthId: `${P}a` },
+  });
+  // RBAC is on in every edition of this build: a plain member reaches a
+  // workspace only through a workspace_access binding (the flat team needed
+  // none), so the member fixtures carry the binding a real member has.
+  await db.organizationMember.create({
+    data: {
+      organizationId: ORG,
+      userId: USER,
+      userEmail: `${P}user@example.com`,
+      role: "member",
+    },
+  });
+  await db.workspaceAccess.create({
+    data: { workspaceId: WORKSPACE, userId: USER, role: "member" },
   });
   await db.runner.createMany({
     data: [

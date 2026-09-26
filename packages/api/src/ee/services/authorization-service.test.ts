@@ -1,369 +1,353 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// canManageAllWorkspaces (used by the workspace checks) only scopes by role under
-// RBAC — pin the cloud edition so the role arm is exercised.
-vi.hoisted(() => {
-  process.env.NEXT_PUBLIC_EDITION = "cloud";
-});
+// The access law (api-ee-behaviour §2.3), Phase 0: direct bindings only.
+// A hand-rolled @onecli/db double records every binding read so the ORDER
+// invariant of the checker (role first, bindings never consulted for a
+// non-member or an admin) is provable, not assumed.
 
-const state = vi.hoisted(() => ({
-  membership: null as { role: string; status: string } | null,
-  workspace: null as {
-    createdByUserId: string | null;
-    organizationId: string;
-  } | null,
-  // Usage binding (hasWorkspaceAccessBinding) vs owner-role binding
-  // (hasWorkspaceOwnerBinding, step 13c). The mock routes findFirst by the `role`
-  // filter so the two are controlled independently.
-  binding: null as { id: string } | null,
-  ownerBinding: null as { id: string } | null,
-  workspaceProbes: [] as Record<string, unknown>[],
-  bindingProbes: [] as Record<string, unknown>[],
+interface MemberRow {
+  organizationId: string;
+  userId: string;
+  role: string;
+  status: string;
+}
+
+interface BindingRow {
+  workspaceId: string;
+  userId: string;
+  role: string;
+}
+
+const store = vi.hoisted(() => ({
+  members: [] as MemberRow[],
+  bindings: [] as BindingRow[],
+  workspaces: [] as { id: string; organizationId: string }[],
+  bindingReads: 0,
 }));
 
 vi.mock("@onecli/db", () => ({
   Prisma: {},
   db: {
     organizationMember: {
-      findUnique: async () => state.membership,
-    },
-    workspace: {
-      findFirst: async (args: Record<string, unknown>) => {
-        state.workspaceProbes.push(args);
-        return state.workspace;
+      findUnique: async ({
+        where,
+      }: {
+        where: {
+          organizationId_userId: { organizationId: string; userId: string };
+        };
+      }) => {
+        const { organizationId, userId } = where.organizationId_userId;
+        return (
+          store.members.find(
+            (m) => m.organizationId === organizationId && m.userId === userId,
+          ) ?? null
+        );
       },
     },
     workspaceAccess: {
-      findFirst: async (args: { where?: { role?: string } }) => {
-        state.bindingProbes.push(args);
-        return args?.where?.role === "owner"
-          ? state.ownerBinding
-          : state.binding;
+      findFirst: async ({
+        where,
+      }: {
+        where: { workspaceId: string; userId: string; role?: string };
+      }) => {
+        store.bindingReads += 1;
+        const row = store.bindings.find(
+          (b) =>
+            b.workspaceId === where.workspaceId &&
+            b.userId === where.userId &&
+            (where.role === undefined || b.role === where.role),
+        );
+        return row ? { id: `${row.workspaceId}:${row.userId}` } : null;
+      },
+    },
+    workspace: {
+      // The visibility fence: the workspace must sit in an org the user is
+      // an ACTIVE member of. The double evaluates that nested `some` by hand.
+      findFirst: async ({
+        where,
+      }: {
+        where: {
+          id: string;
+          organization: {
+            members: { some: { userId: string; status: { not: string } } };
+          };
+        };
+      }) => {
+        const workspace = store.workspaces.find((w) => w.id === where.id);
+        if (!workspace) return null;
+        const probe = where.organization.members.some;
+        const member = store.members.find(
+          (m) =>
+            m.organizationId === workspace.organizationId &&
+            m.userId === probe.userId &&
+            m.status !== probe.status.not,
+        );
+        return member ? { organizationId: workspace.organizationId } : null;
       },
     },
   },
 }));
 
 import {
+  canAccessWorkspace,
+  canManageAllWorkspaces,
+  canManageWorkspace,
   eeWorkspaceAccessChecker,
   getUserRole,
   hasMinimumRole,
-  hasWorkspaceAccessBinding,
-  hasWorkspaceOwnerBinding,
+  requireRole,
   visibleWorkspacesWhere,
-  canAccessWorkspace,
-  canManageWorkspace,
 } from "./authorization-service";
 
-// hasMinimumRole is the role-hierarchy threshold the org admin/owner-only
-// lockdown depends on: requireRole (server actions + route guards) and the API
-// auth middleware both deny when a role falls below the required minimum. These
-// cases pin the member -> denied / admin & owner -> allowed decision.
+const ORG = "org-1";
+const WS = "ws-1";
+// A sibling workspace in the same org, and a workspace in ANOTHER org where
+// an admin of org-1 holds nothing — the fence the whole law hangs on.
+const SIBLING_WS = "ws-2";
+const OTHER_ORG = "org-b";
+const OTHER_WS = "ws-b";
+const member = (userId: string, role: string, status = "active") => ({
+  organizationId: ORG,
+  userId,
+  role,
+  status,
+});
+
+beforeEach(() => {
+  store.members = [
+    member("owner", "owner"),
+    member("admin", "admin"),
+    member("bound", "member"),
+    member("manager", "member"),
+    member("plain", "member"),
+    member("suspended", "admin", "suspended"),
+    {
+      organizationId: OTHER_ORG,
+      userId: "other-owner",
+      role: "owner",
+      status: "active",
+    },
+  ];
+  store.bindings = [
+    { workspaceId: WS, userId: "bound", role: "member" },
+    { workspaceId: WS, userId: "manager", role: "owner" },
+    // A stale binding: suspension must win over it.
+    { workspaceId: WS, userId: "suspended", role: "owner" },
+  ];
+  store.workspaces = [
+    { id: WS, organizationId: ORG },
+    { id: SIBLING_WS, organizationId: ORG },
+    { id: OTHER_WS, organizationId: OTHER_ORG },
+  ];
+  store.bindingReads = 0;
+});
+
 describe("hasMinimumRole", () => {
-  it("grants when the role exceeds the threshold (owner >= admin)", () => {
-    expect(hasMinimumRole("owner", "admin")).toBe(true);
-  });
-
-  it("grants when the role exactly meets the threshold (admin >= admin)", () => {
-    expect(hasMinimumRole("admin", "admin")).toBe(true);
-  });
-
-  it("denies a member against the admin threshold", () => {
-    expect(hasMinimumRole("member", "admin")).toBe(false);
-  });
-
-  it("denies a non-member (null role) against any threshold", () => {
-    expect(hasMinimumRole(null, "admin")).toBe(false);
-    expect(hasMinimumRole(null, "member")).toBe(false);
-  });
-
-  it("grants any role at or above its own level for the member threshold", () => {
-    expect(hasMinimumRole("member", "member")).toBe(true);
-    expect(hasMinimumRole("admin", "member")).toBe(true);
-    expect(hasMinimumRole("owner", "member")).toBe(true);
-  });
-
-  it("reserves the owner threshold for owners only", () => {
-    expect(hasMinimumRole("owner", "owner")).toBe(true);
-    expect(hasMinimumRole("admin", "owner")).toBe(false);
-    expect(hasMinimumRole("member", "owner")).toBe(false);
+  it.each<[string | null, string, boolean]>([
+    ["owner", "admin", true],
+    ["admin", "admin", true],
+    ["member", "admin", false],
+    ["admin", "owner", false],
+    ["owner", "owner", true],
+    [null, "member", false],
+  ])("%s ≥ %s → %s", (role, min, expected) => {
+    expect(
+      hasMinimumRole(
+        role as "owner" | "admin" | "member" | null,
+        min as "owner" | "admin" | "member",
+      ),
+    ).toBe(expected);
   });
 });
 
-// getUserRole is THE suspension choke point: a suspended membership must read
-// as non-member (null) so every role gate, the org-key re-check, and the
-// workspace-key re-check deny in one place.
-describe("getUserRole suspension filter", () => {
-  beforeEach(() => {
-    state.membership = null;
+describe("getUserRole (the suspension choke point)", () => {
+  it("reads the active membership's role", async () => {
+    await expect(getUserRole("admin", ORG)).resolves.toBe("admin");
+    await expect(getUserRole("plain", ORG)).resolves.toBe("member");
   });
 
-  it("returns the role of an active membership", async () => {
-    state.membership = { role: "admin", status: "active" };
-    await expect(getUserRole("u1", "org-1")).resolves.toBe("admin");
+  it("answers null for a non-member", async () => {
+    await expect(getUserRole("stranger", ORG)).resolves.toBeNull();
+    await expect(getUserRole("owner", "org-other")).resolves.toBeNull();
   });
 
-  it("returns null for a suspended membership — any role, even owner", async () => {
-    state.membership = { role: "owner", status: "suspended" };
-    await expect(getUserRole("u1", "org-1")).resolves.toBeNull();
-  });
-
-  it("returns null for non-members", async () => {
-    await expect(getUserRole("u1", "org-1")).resolves.toBeNull();
+  it("answers null for a suspended member, whatever their role", async () => {
+    await expect(getUserRole("suspended", ORG)).resolves.toBeNull();
+    store.members.push(member("frozen-owner", "owner", "suspended"));
+    await expect(getUserRole("frozen-owner", ORG)).resolves.toBeNull();
   });
 });
 
-// Step 13b: usage flipped to bindings-only — the creator arm was dropped, so a
-// member sees ONLY the workspaces shared with them (direct or via a group).
-// Admins/owners still see every workspace in the org.
+describe("requireRole", () => {
+  it("returns the role when it meets the threshold", async () => {
+    await expect(requireRole("owner", ORG, "admin")).resolves.toBe("owner");
+    await expect(requireRole("plain", ORG, "member")).resolves.toBe("member");
+  });
+
+  it("refuses a non-member and a suspended member as not a member", async () => {
+    for (const userId of ["stranger", "suspended"]) {
+      await expect(requireRole(userId, ORG, "member")).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        message: "Not a member of this organization",
+      });
+    }
+  });
+
+  it("refuses a member below the threshold", async () => {
+    await expect(requireRole("plain", ORG, "admin")).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Insufficient permissions",
+    });
+  });
+});
+
 describe("visibleWorkspacesWhere", () => {
-  it("returns every workspace in the org for admins/owners", () => {
-    expect(visibleWorkspacesWhere("u1", "org-1", "admin")).toEqual({
-      organizationId: "org-1",
+  it("gives admins the whole org and members their bindings", () => {
+    expect(visibleWorkspacesWhere("u", ORG, "admin")).toEqual({
+      organizationId: ORG,
     });
-  });
-
-  it("scopes a member to bound workspaces only (direct or via group) — no creator arm", () => {
-    const where = visibleWorkspacesWhere("u1", "org-1", "member");
-    expect(where).toMatchObject({ organizationId: "org-1" });
-    expect(where.OR).toEqual([
-      { accessBindings: { some: { userId: "u1" } } },
-      {
-        accessBindings: {
-          some: { group: { members: { some: { userId: "u1" } } } },
-        },
-      },
-    ]);
-  });
-});
-
-describe("hasWorkspaceAccessBinding", () => {
-  beforeEach(() => {
-    state.binding = null;
-  });
-
-  it("is true when a matching binding exists", async () => {
-    state.binding = { id: "b1" };
-    await expect(hasWorkspaceAccessBinding("u1", "p1")).resolves.toBe(true);
-  });
-
-  it("is false with no binding", async () => {
-    await expect(hasWorkspaceAccessBinding("u1", "p1")).resolves.toBe(false);
-  });
-});
-
-// step 13c: management rides an OWNER-role user binding; a plain member binding
-// does not grant it. The mock routes findFirst by the `role` filter.
-describe("hasWorkspaceOwnerBinding", () => {
-  beforeEach(() => {
-    state.binding = null;
-    state.ownerBinding = null;
-    state.bindingProbes = [];
-  });
-
-  it("is true when an owner-role binding exists", async () => {
-    state.ownerBinding = { id: "b1" };
-    await expect(hasWorkspaceOwnerBinding("u1", "p1")).resolves.toBe(true);
-  });
-
-  it("queries a direct user binding scoped to role owner", async () => {
-    await hasWorkspaceOwnerBinding("u1", "p1");
-    expect(state.bindingProbes[0]).toMatchObject({
-      where: { workspaceId: "p1", userId: "u1", role: "owner" },
+    expect(visibleWorkspacesWhere("u", ORG, "member")).toEqual({
+      organizationId: ORG,
+      accessBindings: { some: { userId: "u" } },
     });
-  });
-
-  it("is false when the user's only binding is a member role", async () => {
-    state.binding = { id: "b1" }; // a member (non-owner) binding exists
-    state.ownerBinding = null; // but no owner binding
-    await expect(hasWorkspaceOwnerBinding("u1", "p1")).resolves.toBe(false);
+    expect(canManageAllWorkspaces(null)).toBe(false);
   });
 });
 
-describe("canAccessWorkspace (usage is bindings-only since 13b)", () => {
-  beforeEach(() => {
-    state.membership = null;
-    state.workspace = null;
-    state.binding = null;
-    state.workspaceProbes = [];
+describe("canAccessWorkspace (use)", () => {
+  it.each([
+    ["owner", true],
+    ["admin", true],
+    ["bound", true],
+    ["manager", true],
+    ["plain", false],
+    ["suspended", false],
+    ["stranger", false],
+  ])("%s → %s", async (userId, expected) => {
+    await expect(canAccessWorkspace(userId, WS)).resolves.toBe(expected);
   });
 
-  it("is false when the workspace isn't visible in the user's orgs", async () => {
-    await expect(canAccessWorkspace("u1", "p1")).resolves.toBe(false);
-  });
-
-  it("enforces suspension through the visibility filter (status != suspended)", async () => {
-    // Suspension is enforced by the findFirst relation filter, not the binding
-    // query (which is status-blind) — pin that the filter is present.
-    state.workspace = { createdByUserId: "creator", organizationId: "org-1" };
-    state.binding = { id: "b1" };
-    await canAccessWorkspace("u1", "p1");
-    expect(state.workspaceProbes[0]).toMatchObject({
-      where: {
-        organization: {
-          members: { some: { userId: "u1", status: { not: "suspended" } } },
-        },
-      },
-    });
-  });
-
-  it("grants a user holding a WorkspaceAccess binding (incl. the creator's seeded one)", async () => {
-    state.workspace = { createdByUserId: "u1", organizationId: "org-1" };
-    state.binding = { id: "b1" };
-    await expect(canAccessWorkspace("u1", "p1")).resolves.toBe(true);
-  });
-
-  it("grants a non-creator holding a WorkspaceAccess binding", async () => {
-    state.workspace = { createdByUserId: "creator", organizationId: "org-1" };
-    state.binding = { id: "b1" };
-    await expect(canAccessWorkspace("u1", "p1")).resolves.toBe(true);
-  });
-
-  it("grants an org admin without a binding", async () => {
-    state.workspace = { createdByUserId: "creator", organizationId: "org-1" };
-    state.membership = { role: "admin", status: "active" };
-    await expect(canAccessWorkspace("u1", "p1")).resolves.toBe(true);
-  });
-
-  it("denies a plain member with no binding", async () => {
-    state.workspace = { createdByUserId: "creator", organizationId: "org-1" };
-    state.membership = { role: "member", status: "active" };
-    await expect(canAccessWorkspace("u1", "p1")).resolves.toBe(false);
-  });
-
-  it("denies the creator once their binding is removed (no creator arm)", async () => {
-    // THE 13b behavior change: a creator is just a member now — with no binding
-    // and no admin role they no longer get in for free.
-    state.workspace = { createdByUserId: "u1", organizationId: "org-1" };
-    state.membership = { role: "member", status: "active" };
-    state.binding = null;
-    await expect(canAccessWorkspace("u1", "p1")).resolves.toBe(false);
+  it("is false for a workspace that does not exist", async () => {
+    await expect(canAccessWorkspace("owner", "ws-missing")).resolves.toBe(
+      false,
+    );
   });
 });
 
-// step 13c: management moved onto an OWNER-role binding OR org admin/owner. The
-// creator arm is gone — a creator with no owner binding no longer manages.
-describe("canManageWorkspace (owner-role binding OR org admin)", () => {
-  beforeEach(() => {
-    state.membership = null;
-    state.workspace = null;
-    state.binding = null;
-    state.ownerBinding = null;
-    state.workspaceProbes = [];
-  });
-
-  it("grants a user holding an owner-role binding", async () => {
-    state.workspace = { createdByUserId: "creator", organizationId: "org-1" };
-    state.membership = { role: "member", status: "active" };
-    state.ownerBinding = { id: "b1" };
-    await expect(canManageWorkspace("u1", "p1")).resolves.toBe(true);
-  });
-
-  it("grants an org admin with no binding", async () => {
-    state.workspace = { createdByUserId: "creator", organizationId: "org-1" };
-    state.membership = { role: "admin", status: "active" };
-    await expect(canManageWorkspace("u1", "p1")).resolves.toBe(true);
-  });
-
-  it("denies a member with only a use (non-owner) binding — use, not manage", async () => {
-    state.workspace = { createdByUserId: "creator", organizationId: "org-1" };
-    state.binding = { id: "b1" }; // a member binding (usage), but not owner
-    state.ownerBinding = null;
-    state.membership = { role: "member", status: "active" };
-    await expect(canManageWorkspace("u1", "p1")).resolves.toBe(false);
-  });
-
-  it("denies the creator once their owner binding is gone (no creator arm)", async () => {
-    // THE 13c behavior change: creation alone no longer confers management.
-    state.workspace = { createdByUserId: "u1", organizationId: "org-1" };
-    state.membership = { role: "member", status: "active" };
-    state.ownerBinding = null;
-    await expect(canManageWorkspace("u1", "p1")).resolves.toBe(false);
-  });
-
-  it("enforces suspension through the workspace relation filter", async () => {
-    // Suspension is enforced by the findFirst filter (status != suspended) before
-    // any binding check — pin that the filter is present on the probe.
-    state.workspace = { createdByUserId: "u1", organizationId: "org-1" };
-    state.ownerBinding = { id: "b1" };
-    await canManageWorkspace("u1", "p1");
-    expect(state.workspaceProbes[0]).toMatchObject({
-      where: {
-        organization: {
-          members: { some: { userId: "u1", status: { not: "suspended" } } },
-        },
-      },
-    });
+describe("canManageWorkspace (rename / share / delete)", () => {
+  it.each([
+    ["owner", true],
+    ["admin", true],
+    ["manager", true],
+    // A plain use binding never confers management.
+    ["bound", false],
+    ["plain", false],
+    ["suspended", false],
+    ["stranger", false],
+  ])("%s → %s", async (userId, expected) => {
+    await expect(canManageWorkspace(userId, WS)).resolves.toBe(expected);
   });
 });
 
-// The injected WorkspaceAccessChecker (the licensed implementation behind the
-// shared predicates in services/workspace-access-check.ts). These pin the
-// RBAC access law: the suspension invariant with its ORDERING (a suspended
-// member's stale binding is never even consulted), the admin bypass, and the
-// member-needs-a-binding rule.
-describe("eeWorkspaceAccessChecker", () => {
-  const WS = { id: "p1", organizationId: "o1" };
-
-  beforeEach(() => {
-    state.membership = null;
-    state.binding = null;
-    state.bindingProbes = [];
+describe("the org fence", () => {
+  it("an owner/admin of org-1 has neither use nor management in org-b", async () => {
+    for (const userId of ["owner", "admin"]) {
+      await expect(canAccessWorkspace(userId, OTHER_WS)).resolves.toBe(false);
+      await expect(canManageWorkspace(userId, OTHER_WS)).resolves.toBe(false);
+    }
+    expect(store.bindingReads).toBe(0);
   });
 
-  it("denies a non-member outright", async () => {
+  it("the checker denies a foreign workspace even when the caller's own org id is supplied", async () => {
+    // A (workspaceId, organizationId) pair that disagrees with the database
+    // is the caller's bug; the checker answers for the org it was given, so
+    // an org-1 admin asked about ws-b under org-1 is not admitted by ws-b's
+    // org — and a member's binding lookup is keyed by the workspace, so a
+    // sibling-org pair never leaks a binding either.
     await expect(
-      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("u1", WS),
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("bound", {
+        id: OTHER_WS,
+        organizationId: ORG,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("owner", {
+        id: OTHER_WS,
+        organizationId: OTHER_ORG,
+      }),
     ).resolves.toBe(false);
   });
 
-  it("denies a suspended member WITHOUT consulting their binding", async () => {
-    state.membership = { role: "member", status: "suspended" };
-    state.binding = { id: "b1" }; // a stale binding that must never rescue them
+  it("a member bound on ws-1 reaches neither the sibling ws-2 nor its management", async () => {
+    await expect(canAccessWorkspace("bound", WS)).resolves.toBe(true);
+    await expect(canAccessWorkspace("bound", SIBLING_WS)).resolves.toBe(false);
+    await expect(canManageWorkspace("bound", SIBLING_WS)).resolves.toBe(false);
+    await expect(canManageWorkspace("manager", SIBLING_WS)).resolves.toBe(
+      false,
+    );
     await expect(
-      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("u1", WS),
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("bound", {
+        id: SIBLING_WS,
+        organizationId: ORG,
+      }),
     ).resolves.toBe(false);
-    // The ordering IS the invariant: no-role short-circuits before the
-    // binding query ever runs.
-    expect(state.bindingProbes).toEqual([]);
   });
 
-  it("admin/owner passes without a binding", async () => {
-    state.membership = { role: "admin", status: "active" };
+  it("the other org's owner sees only their own workspace", async () => {
+    await expect(canAccessWorkspace("other-owner", OTHER_WS)).resolves.toBe(
+      true,
+    );
+    await expect(canAccessWorkspace("other-owner", WS)).resolves.toBe(false);
+    await expect(canManageWorkspace("other-owner", WS)).resolves.toBe(false);
+  });
+});
+
+describe("eeWorkspaceAccessChecker (the shared-predicate slot)", () => {
+  const ref = { id: WS, organizationId: ORG };
+
+  it("admits an owner/admin without consulting bindings", async () => {
     await expect(
-      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("u1", WS),
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("admin", ref),
     ).resolves.toBe(true);
-    expect(state.bindingProbes).toEqual([]);
+    expect(store.bindingReads).toBe(0);
   });
 
-  it("an active member passes iff they hold a binding", async () => {
-    state.membership = { role: "member", status: "active" };
-    state.binding = { id: "b1" };
+  it("denies a suspended member with a stale binding, with zero binding reads", async () => {
     await expect(
-      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("u1", WS),
-    ).resolves.toBe(true);
-    state.binding = null;
-    await expect(
-      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("u1", WS),
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("suspended", ref),
     ).resolves.toBe(false);
+    expect(store.bindingReads).toBe(0);
   });
 
-  it("userIsOrgAdmin: admin/owner yes, member/suspended/none no", async () => {
-    state.membership = { role: "owner", status: "active" };
+  it("denies a non-member with zero binding reads", async () => {
     await expect(
-      eeWorkspaceAccessChecker.userIsOrgAdmin("u1", "o1"),
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("stranger", ref),
+    ).resolves.toBe(false);
+    expect(store.bindingReads).toBe(0);
+  });
+
+  it("admits a member iff they hold a binding", async () => {
+    await expect(
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("bound", ref),
     ).resolves.toBe(true);
-    state.membership = { role: "member", status: "active" };
     await expect(
-      eeWorkspaceAccessChecker.userIsOrgAdmin("u1", "o1"),
+      eeWorkspaceAccessChecker.canAccessWorkspaceAsUser("plain", ref),
     ).resolves.toBe(false);
-    state.membership = { role: "admin", status: "suspended" };
+    expect(store.bindingReads).toBe(2);
+  });
+
+  it("userIsOrgAdmin: owner and admin pass, member and suspended admin fail", async () => {
     await expect(
-      eeWorkspaceAccessChecker.userIsOrgAdmin("u1", "o1"),
+      eeWorkspaceAccessChecker.userIsOrgAdmin("owner", ORG),
+    ).resolves.toBe(true);
+    await expect(
+      eeWorkspaceAccessChecker.userIsOrgAdmin("admin", ORG),
+    ).resolves.toBe(true);
+    await expect(
+      eeWorkspaceAccessChecker.userIsOrgAdmin("plain", ORG),
     ).resolves.toBe(false);
-    state.membership = null;
     await expect(
-      eeWorkspaceAccessChecker.userIsOrgAdmin("u1", "o1"),
+      eeWorkspaceAccessChecker.userIsOrgAdmin("suspended", ORG),
     ).resolves.toBe(false);
   });
 });

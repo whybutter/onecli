@@ -172,6 +172,16 @@ beforeAll(async () => {
   process.env.SLACK_SHARED_APP_ID = "A0SHARED";
 
   ({ db } = await import("@onecli/db"));
+  // RBAC is on in every edition of this build, so the access checks these
+  // paths run need the role resolver and workspace-access checker the server
+  // boot injects (`ensureEditionDefaults`); this suite loads services
+  // directly, so it installs the two slots itself.
+  const { initRoleResolver, initWorkspaceAccessChecker } =
+    await import("../../../../providers");
+  const { eeWorkspaceAccessChecker, getUserRole } =
+    await import("../../../../ee/services/authorization-service");
+  initRoleResolver({ getUserRole });
+  initWorkspaceAccessChecker(eeWorkspaceAccessChecker);
   sharedInstall = await import("./shared-install-service");
   oauthState = await import("../../../../lib/oauth-state");
   ({ getCrypto, initSelfUrl } = await import("../../../../providers"));

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { onpremPolicyValidator } from "./policy-onprem-validator";
 import { validatePolicyShape } from "../ee/granular-access/shape";
+import { eePolicyValidator } from "../ee/granular-access";
+import { getPolicyValidator } from "../providers";
 
 // The onprem edition's default policy validator is SHAPE-ONLY: the same
 // provider-shape validation as cloud's `eePolicyValidator`, minus the plan
@@ -71,6 +73,23 @@ describe("onpremPolicyValidator.validate (shape-only, no plan gate)", () => {
     ).catch((e: unknown) => e);
     expect(viaOnprem).toBeInstanceOf(Error);
     expect((viaOnprem as Error).message).toBe((viaShape as Error).message);
+  });
+});
+
+describe("the edition validators", () => {
+  it("the ee validator IS the onprem validator — one shape check, no plan or licence gate", () => {
+    expect(eePolicyValidator).toBe(onpremPolicyValidator);
+  });
+
+  it("the uninjected edition default is the shape check with no entitlement in front", async () => {
+    // Before the v2 migration the onprem default asserted the granular_access
+    // entitlement first; this build is always entitled, so the default is the
+    // bare validator and an unrestricted shape passes with zero setup.
+    await expect(
+      getPolicyValidator().validate("org-1", "dropbox", null, {
+        folders: ["/Work"],
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 

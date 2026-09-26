@@ -10,9 +10,8 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,md,css,json}\" && pnpm --filter @onecli/db prisma format",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,md,css,json}\" && pnpm --filter @onecli/db prisma format --check",
     "check-types": "turbo run check-types",
-    "check": "turbo run lint check-types && pnpm run format:check && pnpm run test:scripts && pnpm run test:licensing",
+    "check": "turbo run lint check-types && pnpm run format:check && pnpm run test:scripts",
     "test:scripts": "node --test 'scripts/**/*.test.mjs'",
-    "test:licensing": "pnpm --filter @onecli/api test:licensing",
     "fix": "turbo run lint:fix && pnpm run format",
     "agent:build": "docker build -f docker/agent.Dockerfile -t onecli-agent:dev .",
     "db:up": "docker compose --project-directory . -f docker/docker-compose.dev.yml up -d --wait postgres",
@@ -40,7 +39,7 @@
     "node": ">=22"
   },
   "version": "2.6.0",
-  "license": "Apache-2.0 AND LicenseRef-OneCLI-Enterprise",
+  "license": "Apache-2.0",
   "lint-staged": {
     "*.{ts,tsx,js,jsx,md,css,json}": [
       "prettier --write"

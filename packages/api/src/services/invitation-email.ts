@@ -1,6 +1,10 @@
 import { sendEmail, isEmailConfigured } from "./email-service";
 import { appOrigin } from "../lib/public-origins";
 
+// TODO(fork-domain): this file's onecli.sh / team@onecli.sh strings (logo
+// host, support address, footer) are upstream's domain, left as-is pending a
+// fork domain decision (decision 0.C, docs/upstream-sync/v2-migration/phase0-plan.md).
+
 const escapeHtml = (s: string): string =>
   s
     .replace(/&/g, "&amp;")

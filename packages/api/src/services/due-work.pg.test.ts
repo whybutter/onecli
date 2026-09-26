@@ -105,6 +105,16 @@ beforeAll(async () => {
   process.env.RUNNER_ONLINE_THRESHOLD_SECONDS = "90";
 
   ({ db } = await import("@onecli/db"));
+  // RBAC is on in every edition of this build, so the access checks these
+  // paths run need the role resolver and workspace-access checker the server
+  // boot injects (`ensureEditionDefaults`); this suite loads services
+  // directly, so it installs the two slots itself.
+  const { initRoleResolver, initWorkspaceAccessChecker } =
+    await import("../providers");
+  const { eeWorkspaceAccessChecker, getUserRole } =
+    await import("../ee/services/authorization-service");
+  initRoleResolver({ getUserRole });
+  initWorkspaceAccessChecker(eeWorkspaceAccessChecker);
   dueWork = await import("./due-work");
   placement = await import("./placement");
   sandboxes = await import("./sandbox-service");

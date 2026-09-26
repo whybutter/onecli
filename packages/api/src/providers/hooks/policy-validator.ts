@@ -1,7 +1,6 @@
 import type { PolicyTargetInput } from "../../validations/policy";
 import { createEditionSlot } from "../edition-state";
 import { onpremPolicyValidator } from "../../services/policy-onprem-validator";
-import { assertEntitled } from "../../lib/entitlements-guard";
 
 export interface PolicyValidator {
   validate(
@@ -21,28 +20,14 @@ export interface PolicyValidator {
 
 // Edition default when nothing is injected: cloud gates granular access by
 // plan + provider shape — injected by `ensureEditionDefaults()`, keeping the
-// plan/quota graph out of client bundles; onprem checks the enterprise
-// entitlement (#39/#40 — resource scoping is licensed) and then validates the
-// SAME provider shape (the validator module is client-safe and stays a static
-// import; the entitlement guard imports only `ServiceError` + the pure
-// entitlement parser, so it is client-safe too). The `policyValidator` option
-// and `initPolicyValidator` remain as overrides for tests (null resets to the
-// edition default).
-const entitledOnpremPolicyValidator: PolicyValidator = {
-  validate: async (organizationId, provider, metadata, policy) => {
-    assertEntitled("granular_access");
-    return onpremPolicyValidator.validate(
-      organizationId,
-      provider,
-      metadata,
-      policy,
-    );
-  },
-};
-
+// plan/quota graph out of client bundles; onprem validates the SAME provider
+// shape with no licence gate in front (resource scoping is entitled in this
+// build; the validator module is client-safe and stays a static import). The
+// `policyValidator` option and `initPolicyValidator` remain as overrides for
+// tests (null resets to the edition default).
 const slot = createEditionSlot<PolicyValidator>(
   "policyValidator",
-  () => entitledOnpremPolicyValidator,
+  () => onpremPolicyValidator,
 );
 
 export const initPolicyValidator = (v: PolicyValidator | null) => slot.init(v);

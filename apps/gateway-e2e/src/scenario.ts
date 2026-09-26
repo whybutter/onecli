@@ -45,7 +45,22 @@ export interface Cx {
  * with the same ten-line skip preamble duplicated eight times, and all eight
  * silently disabled.
  */
-export const scenario = (
+interface ScenarioFn {
+  (name: string, body: (cx: Cx) => Promise<void>): void;
+  /**
+   * Mark a scenario as intentionally skipped for a structural reason (a
+   * capability this build doesn't have, not an environment gap — that's what
+   * `scenario()`'s own `e2eConfig() === null` guard above is for). Reuses the
+   * same `test.skip(name, () => undefined)` shape so the runner still counts
+   * the scenario as skipped, with its title, rather than dropping it
+   * silently. Takes the same `(name, body)` signature as `scenario` so a call
+   * site can be disabled/re-enabled by toggling `.skip` alone, keeping the
+   * body in place (and type-checked) for whoever re-enables it.
+   */
+  skip(name: string, body: (cx: Cx) => Promise<void>): void;
+}
+
+export const scenario: ScenarioFn = (
   name: string,
   body: (cx: Cx) => Promise<void>,
 ): void => {
@@ -130,4 +145,12 @@ export const scenario = (
       }
     }
   });
+};
+
+scenario.skip = (name: string, body: (cx: Cx) => Promise<void>): void => {
+  // `body` is never called — the point is to skip it — but is still part of
+  // the signature so a call site's full scenario body stays in place and
+  // type-checked (against `Cx`) for whoever re-enables it later.
+  void body;
+  test.skip(name, () => undefined);
 };

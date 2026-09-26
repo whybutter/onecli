@@ -15,8 +15,9 @@ import type { ApiEnv } from "../types";
 const ORG = "org-1";
 const ORG_KEY = "oc_org_test-key";
 
-// Pinned onprem: CAPS.rbac off, so the org-key auth needs no role resolver and
-// the member fence is the flat-team active-membership check.
+// Pinned onprem. RBAC is on in every edition of this build, so the org-key
+// auth re-checks the holder's role through the membership row and a departed
+// holder fails at key authentication itself (strict `oc_` bearer → 401).
 vi.hoisted(() => {
   process.env.NEXT_PUBLIC_EDITION = "onprem";
   process.env.SECRET_ENCRYPTION_KEY = "test-secret";
@@ -42,6 +43,9 @@ vi.mock("@onecli/db", () => ({
     organizationMember: {
       findFirst: async () =>
         state.membershipActive ? { userId: "user-1" } : null,
+      // The role resolver's read: an active owner, or no row once departed.
+      findUnique: async () =>
+        state.membershipActive ? { role: "owner", status: "active" } : null,
     },
     organization: {
       findUnique: async ({ where }: { where: { id: string } }) => {
@@ -111,10 +115,13 @@ describe("GET /v1/org", () => {
     expect(res.status).toBe(401);
   });
 
-  it("403s a departed member's still-live API key (the member fence)", async () => {
+  it("401s a departed member's still-live API key (the member fence)", async () => {
+    // An org key is an admin capability: once its holder is no longer an
+    // active admin/owner the key stops authenticating at all — the demotion
+    // re-check in the api-key resolver, ahead of the route's role option.
     state.membershipActive = false;
     const res = await app.request("/v1/org", authed);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     // And the org row was never read.
     expect(state.orgQueries).toEqual([]);
   });

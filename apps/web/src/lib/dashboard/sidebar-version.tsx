@@ -23,6 +23,8 @@ import type { InstanceInfo } from "@/lib/api/types";
 // Both commands byte-exact from scripts/install.sh and docs/self-hosting.md —
 // re-running the install front door IS the upgrade (a bare `docker compose
 // pull` leaves the agent sandbox image stale).
+// TODO(fork-domain): onecli.sh is upstream's install domain, left as-is
+// pending a fork domain decision (decision 0.C, phase0-plan.md).
 const INSTALL_COMMAND = "curl -fsSL https://onecli.sh/install | sh";
 const CHECKOUT_COMMAND = "git pull && pnpm install && pnpm run setup --upgrade";
 

@@ -30,7 +30,12 @@ describe("aws-marketplace web surface is hosted-only", () => {
     expect(source).toContain('import { IS_CLOUD } from "@/lib/env"');
   });
 
-  it("both server actions carry their own edition gate (defense in depth)", () => {
+  it("both server actions are unconditionally dark (AWS Marketplace is dropped)", () => {
+    // AWS Marketplace billing is permanently dropped in this onprem-only
+    // fork (v2 migration plan: "billing (all) — DROP"), so these no longer
+    // need a per-edition gate: they refuse on every edition, not just off
+    // cloud, matching the page/route level `IS_CLOUD` gates that already
+    // 404 before either action is ever reached.
     const source = readFileSync(
       join(
         __dirname,
@@ -43,11 +48,11 @@ describe("aws-marketplace web surface is hosted-only", () => {
       ),
       "utf8",
     );
-    // hasPendingMarketplaceToken: reports no pending registration off cloud.
-    expect(source).toContain("if (!IS_CLOUD) return false;");
-    // completeMarketplaceRegistration: refuses to run off cloud.
+    expect(source).toContain(
+      "export const hasPendingMarketplaceToken = async (): Promise<boolean> => false;",
+    );
     expect(source).toMatch(
-      /if \(!IS_CLOUD\) \{\s*return \{ ok: false, error: "Not available on this deployment\." \};\s*\}/,
+      /completeMarketplaceRegistration =\s*async \(\): Promise<RegistrationResult> => \(\{\s*ok: false,\s*error: "Not available on this deployment\."\s*,?\s*\}\);/,
     );
   });
 });

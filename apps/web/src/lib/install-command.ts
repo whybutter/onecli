@@ -2,6 +2,9 @@
 // Install page and the onboarding install step). Pure string building — the
 // callers decide edition gating (IS_CLOUD) and which agent, if any, to pin.
 
+// TODO(fork-domain): points at upstream's install domain — left as-is pending
+// a fork domain decision (see decision 0.C in
+// docs/upstream-sync/v2-migration/phase0-plan.md).
 export const PROD_APP_URL = "https://app.onecli.sh";
 
 export interface CodingTool {

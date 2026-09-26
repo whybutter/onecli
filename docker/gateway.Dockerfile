@@ -29,10 +29,7 @@ RUN cargo build --release --locked
 # Stage 2: Minimal runtime image
 # ──────────────────────────────────────────────
 FROM alpine:3.24 AS runner
-# Dual-licensed image contents: Apache-2.0 plus the enterprise-licensed ee/
-# paths compiled/bundled into every edition — see LICENSE and
-# LICENSE-ENTERPRISE at the repository root.
-LABEL org.opencontainers.image.licenses="Apache-2.0 AND LicenseRef-OneCLI-Enterprise"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 WORKDIR /app
 
 RUN apk add --no-cache ca-certificates

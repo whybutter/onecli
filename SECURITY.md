@@ -8,7 +8,7 @@ discussions, or pull requests.
 Instead, report them privately through either of the following:
 
 - **GitHub Security Advisories** (preferred): use the
-  [Report a vulnerability](https://github.com/onecli/onecli/security/advisories/new)
+  [Report a vulnerability](https://github.com/whybutter/onecli/security/advisories/new)
   form on this repository.
 - **Email**: security@onecli.sh
 

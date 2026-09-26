@@ -586,6 +586,16 @@ beforeAll(async () => {
   process.env.OPENAI_API_BASE_URL = slackUrl;
 
   ({ db } = await import("@onecli/db"));
+  // RBAC is on in every edition of this build, so the access checks these
+  // paths run need the role resolver and workspace-access checker the server
+  // boot injects (`ensureEditionDefaults`); this suite loads services
+  // directly, so it installs the two slots itself.
+  const { initRoleResolver, initWorkspaceAccessChecker } =
+    await import("../../providers");
+  const { eeWorkspaceAccessChecker, getUserRole } =
+    await import("../../ee/services/authorization-service");
+  initRoleResolver({ getUserRole });
+  initWorkspaceAccessChecker(eeWorkspaceAccessChecker);
   integrations = await import("./channel-integration-service");
   agentChannels = await import("./agent-channel-service");
   ingestion = await import("./channel-ingestion-service");
@@ -676,6 +686,16 @@ beforeAll(async () => {
         suspendedAt: new Date(),
       },
     ],
+  });
+  // RBAC is on in every edition of this build: a plain member reaches a
+  // workspace only through a workspace_access binding (the flat team needed
+  // none), so the member fixtures carry the binding a real member has.
+  await db.workspaceAccess.createMany({
+    data: [MEMBER, CTRL_NAME_USER].map((userId) => ({
+      workspaceId: WORKSPACE,
+      userId,
+      role: "member",
+    })),
   });
 });
 

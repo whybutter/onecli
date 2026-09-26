@@ -1,37 +1,22 @@
-/**
- * Cognito ID-token identity claims → session fields. The single parse used
- * by BOTH session providers (api-server JWT path and the web Amplify server
- * path) so trust-relevant derivation can never drift between them.
- */
-
 export interface CognitoIdentityClaims {
-  /** ALL federated provider names on the profile, in token order. */
+  /** Every federated IdP name attached to the token's identity, in order. */
   identityProviders: string[];
-  /** First entry, kept for back-compat display; trust code scans the array. */
+  /** The first federated IdP name, or null for native sign-ins. */
   federatedProvider: string | null;
   emailVerified: boolean;
 }
 
-/**
- * Reads `identities` (the federated-provider list) and `email_verified` off a
- * decoded Cognito ID-token payload. Typed as an open record so both the jose
- * `JWTPayload` (api-server) and the Amplify token payload (web) pass without a
- * cast — every field is accessed as `unknown` and narrowed here.
- */
-export const parseCognitoIdentityClaims = (
+export type ParseCognitoIdentityClaims = (
   payload: Record<string, unknown>,
-): CognitoIdentityClaims => {
-  const identities = payload.identities;
-  const identityProviders = Array.isArray(identities)
-    ? identities.flatMap((entry) => {
-        const name = (entry as { providerName?: unknown }).providerName;
-        return typeof name === "string" && name.length > 0 ? [name] : [];
-      })
-    : [];
-  return {
-    identityProviders,
-    federatedProvider: identityProviders[0] ?? null,
-    emailVerified:
-      payload.email_verified === true || payload.email_verified === "true",
-  };
-};
+) => CognitoIdentityClaims;
+
+/**
+ * Cognito is not an identity backend in this build. The api-server's Cognito
+ * session provider is unreachable (`IS_CLOUD` is never true), so the claims
+ * parser reports "no federation, unverified" — the conservative reading.
+ */
+export const parseCognitoIdentityClaims: ParseCognitoIdentityClaims = () => ({
+  identityProviders: [],
+  federatedProvider: null,
+  emailVerified: false,
+});

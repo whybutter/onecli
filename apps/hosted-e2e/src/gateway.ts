@@ -11,11 +11,11 @@ import {
 
 /**
  * A per-test gateway, ONPREM edition — the posture this suite exists to
- * prove (`docker compose up`, no Redis, no KMS, no Cognito; local AES via the
- * scenario's shared SECRET_ENCRYPTION_KEY; an unlicensed onprem gateway
- * refuses to even boot with REDIS_HOST set). It binds 0.0.0.0 (all
- * interfaces), which is what lets sandbox CONTAINERS reach a host-spawned
- * gateway through `host.docker.internal`.
+ * prove (`docker compose up`, no KMS, no Cognito; local AES via the
+ * scenario's shared SECRET_ENCRYPTION_KEY). Redis/HA is dropped from this
+ * fork (decision 6); an unset REDIS_HOST just runs the free in-memory
+ * stores. It binds 0.0.0.0 (all interfaces), which is what lets sandbox
+ * CONTAINERS reach a host-spawned gateway through `host.docker.internal`.
  */
 
 const STARTUP_TIMEOUT_MS = 30_000;
@@ -40,8 +40,9 @@ export const startGateway = async (
 ): Promise<GatewayHandle> => {
   const dataDir = mkdtempSync(join(tmpdir(), "onecli-hosted-e2e-gw-"));
 
-  // The licensed HA stores when CI provides a Redis; the in-memory stores
-  // otherwise — both are legitimate entitled configurations (see env.ts).
+  // The Redis-backed stores when CI provides a Redis; the free in-memory
+  // stores otherwise — both are legitimate self-host configurations
+  // (see env.ts).
   const config = e2eConfig();
   const redisEnv: Record<string, string> =
     config?.redisHost !== undefined
@@ -59,10 +60,9 @@ export const startGateway = async (
       env: {
         PATH: process.env.PATH ?? "",
         HOME: process.env.HOME ?? "",
-        // The enterprise edition: an entitled self-host — the canonical
-        // licensed deployment, matching the gateway-e2e default lane.
+        // Onprem edition, matching the gateway-e2e default lane — self-host
+        // is always entitled now.
         EDITION: "onprem",
-        ENTERPRISE_ENABLED: "true",
         DATABASE_URL: opts.databaseUrl,
         SECRET_ENCRYPTION_KEY: secretEncryptionKey(),
         ...redisEnv,

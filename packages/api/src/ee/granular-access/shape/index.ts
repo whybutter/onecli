@@ -1,22 +1,72 @@
-import { validateGitHubAppPolicy } from "./github-app";
-import { validateDropboxPolicy } from "./dropbox";
+import { ServiceError } from "../../../services/errors";
+
+const MAX_DROPBOX_FOLDERS = 100;
+const MAX_DROPBOX_PATH_LEN = 1024;
+
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((v) => typeof v === "string");
+
+const validateGithubAppShape = (
+  metadata: Record<string, unknown> | null,
+  policy: Record<string, unknown>,
+) => {
+  const repositories = policy.repositories;
+  if (repositories === undefined || repositories === null) return;
+  if (!isStringArray(repositories)) {
+    throw new ServiceError("BAD_REQUEST", "repositories must be an array");
+  }
+  if (repositories.length === 0) return;
+
+  const available = new Set(
+    isStringArray(metadata?.repos) ? metadata.repos : [],
+  );
+  const missing = repositories.filter((repo) => !available.has(repo));
+  if (missing.length > 0) {
+    throw new ServiceError(
+      "BAD_REQUEST",
+      `Repositories not available on this installation: ${missing.join(", ")}`,
+    );
+  }
+};
+
+const validateDropboxShape = (policy: Record<string, unknown>) => {
+  const folders = policy.folders;
+  if (folders === undefined || folders === null) return;
+  if (!Array.isArray(folders)) {
+    throw new ServiceError("BAD_REQUEST", "folders must be an array");
+  }
+  if (folders.length === 0) return;
+  if (folders.length > MAX_DROPBOX_FOLDERS) {
+    throw new ServiceError(
+      "BAD_REQUEST",
+      `Too many folders selected (max ${MAX_DROPBOX_FOLDERS})`,
+    );
+  }
+  for (const folder of folders) {
+    if (
+      typeof folder !== "string" ||
+      !folder.startsWith("/") ||
+      folder.length > MAX_DROPBOX_PATH_LEN
+    ) {
+      throw new ServiceError(
+        "BAD_REQUEST",
+        `Invalid folder path: ${String(folder)}`,
+      );
+    }
+  }
+};
 
 /**
- * Provider-shape validation of a granular session policy — the write-time
- * validation semantics of the licensed granular_access feature, shared by
- * BOTH editions' default policy validators (cloud adds the plan gate on top;
- * a licensed self-host runs exactly this). Providers without a granular
- * config are accepted as-is. Only ever reached after
- * `assertEntitled("granular_access")` — the entitled-onprem default asserts
- * before delegating, and the cloud default asserts through the quota service.
+ * Write-time validation of a grant's session policy against its provider:
  *
- * CLIENT-BUNDLE: the onprem default (`services/policy-onprem-validator`) is
- * reachable from client bundles via the providers barrel, so it loads this
- * licensed module LAZILY (`await import(...)` — a declared seam, never a
- * static dependency). Keep this module's own import graph client-safe anyway
- * (the per-provider validators + `ServiceError` only; never the quota/plan
- * graph, the DB client, or Node builtins), since `ee/granular-access/index.ts`
- * imports it statically.
+ * - `github-app`: `{ repositories: string[] }` — absent/empty is accepted;
+ *   otherwise every entry must be a repository the installation exposes
+ *   (`metadata.repos`).
+ * - `dropbox`: `{ folders: string[] }` — absent/empty is accepted; at most
+ *   100 entries, each an absolute path of at most 1024 characters.
+ * - any other provider: accepted as-is (no granular configuration exists).
+ *
+ * Deliberately db-free: the caller passes the connection's metadata.
  */
 export const validatePolicyShape = async (
   provider: string,
@@ -25,8 +75,12 @@ export const validatePolicyShape = async (
 ): Promise<void> => {
   switch (provider) {
     case "github-app":
-      return validateGitHubAppPolicy(metadata, policy);
+      validateGithubAppShape(metadata, policy);
+      return;
     case "dropbox":
-      return validateDropboxPolicy(metadata, policy);
+      validateDropboxShape(policy);
+      return;
+    default:
+      return;
   }
 };

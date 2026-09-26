@@ -30,7 +30,7 @@
 ### Self-hosted
 
 ```bash
-git clone https://github.com/onecli/onecli.git && cd onecli
+git clone https://github.com/whybutter/onecli.git && cd onecli
 pnpm install
 pnpm run setup
 ```
@@ -100,7 +100,7 @@ Agents run on your own infrastructure. The runner is outbound-only and holds no 
 ## Local Development
 
 ```bash
-git clone https://github.com/onecli/onecli.git && cd onecli
+git clone https://github.com/whybutter/onecli.git && cd onecli
 mise install
 pnpm install
 pnpm dev
@@ -110,7 +110,7 @@ That's the whole setup: `pnpm dev` generates `.env` with every required secret, 
 
 ## Contributing
 
-Contributions are welcome. Read the [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before getting started. Contributions are accepted under the terms of the [Contributor License Agreement](CLA.md).
+Contributions are welcome. Read the [Contributing Guide](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before getting started.
 
 ## Security
 
@@ -118,10 +118,4 @@ To report a vulnerability, please follow our [Security Policy](SECURITY.md). Do 
 
 ## License
 
-[Apache-2.0](LICENSE), with one exception: the `ee/` directories hold
-enterprise features under the [OneCLI Enterprise License](LICENSE-ENTERPRISE),
-each carrying a notice that points at it. That license is free for development,
-testing and evaluation, and requires a subscription for production use.
-Everything else is Apache-2.0 and can be self-hosted in production with no
-commercial license. [LICENSE-ENTERPRISE](LICENSE-ENTERPRISE) carries the
-authoritative list of licensed paths.
+[Apache-2.0](LICENSE).

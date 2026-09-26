@@ -1,51 +1,12 @@
-"use client";
-
-import { type ComponentProps } from "react";
-import { ArrowRight } from "lucide-react";
-import { Button } from "@onecli/ui/components/button";
-import { useGuardedUpgrade } from "../use-guarded-upgrade";
-import { PlanSwitchDialog } from "./plan-switch-dialog";
-
-interface UpgradeToTeamButtonProps {
+export interface UpgradeToTeamButtonProps {
   label?: string;
-  size?: ComponentProps<typeof Button>["size"];
+  size?: "default" | "sm" | "lg" | "icon";
   className?: string;
 }
 
 /**
- * Shared "Upgrade to Team" CTA. Free orgs go straight to Stripe Checkout;
- * paid orgs get the proration-preview confirm dialog first.
+ * Billing is dropped in this build — there is no "Team" plan to upgrade to
+ * (`isPlanAtLeast` always reports the top plan), so `workspace-card.tsx`'s
+ * non-team branch is never reached. Null stand-in kept only for compilation.
  */
-export const UpgradeToTeamButton = ({
-  label = "Upgrade to Team",
-  size = "sm",
-  className,
-}: UpgradeToTeamButtonProps) => {
-  const {
-    startUpgrade,
-    checkoutLoading,
-    switchTo,
-    switchInterval,
-    closeSwitchDialog,
-  } = useGuardedUpgrade();
-
-  return (
-    <>
-      <Button
-        size={size}
-        variant="brand"
-        className={className}
-        loading={checkoutLoading}
-        onClick={() => startUpgrade("team")}
-      >
-        {checkoutLoading ? "Redirecting..." : label}
-        {!checkoutLoading && <ArrowRight className="size-3.5" />}
-      </Button>
-      <PlanSwitchDialog
-        plan={switchTo}
-        initialInterval={switchInterval}
-        onClose={closeSwitchDialog}
-      />
-    </>
-  );
-};
+export const UpgradeToTeamButton = ({}: UpgradeToTeamButtonProps) => null;

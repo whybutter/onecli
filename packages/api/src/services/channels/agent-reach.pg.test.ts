@@ -337,6 +337,16 @@ beforeAll(async () => {
   process.env.SECRET_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 
   ({ db } = await import("@onecli/db"));
+  // RBAC is on in every edition of this build, so the access checks these
+  // paths run need the role resolver and workspace-access checker the server
+  // boot injects (`ensureEditionDefaults`); this suite loads services
+  // directly, so it installs the two slots itself.
+  const { initRoleResolver, initWorkspaceAccessChecker } =
+    await import("../../providers");
+  const { eeWorkspaceAccessChecker, getUserRole } =
+    await import("../../ee/services/authorization-service");
+  initRoleResolver({ getUserRole });
+  initWorkspaceAccessChecker(eeWorkspaceAccessChecker);
   dispatch = await import("./providers/slack/dispatch");
   reach = await import("./agent-reach-service");
   agentChannels = await import("./agent-channel-service");
@@ -388,6 +398,12 @@ beforeAll(async () => {
   // The notify target: OWNER holds the workspace owner-role binding.
   await db.workspaceAccess.create({
     data: { workspaceId: WORKSPACE, userId: OWNER, role: "owner" },
+  });
+  // RBAC is on in every edition of this build: a plain member reaches a
+  // workspace only through a workspace_access binding (the flat team needed
+  // none), so the member fixtures carry the binding a real member has.
+  await db.workspaceAccess.create({
+    data: { workspaceId: WORKSPACE, userId: MEMBER, role: "member" },
   });
 });
 

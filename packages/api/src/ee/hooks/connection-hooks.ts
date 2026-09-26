@@ -1,8 +1,6 @@
-import type { ConnectionHooks } from "../../providers";
-import { assertCanCreateOAuthApp } from "../services/quota-service";
+import type { ConnectionHooks } from "../../providers/hooks/connection-hooks";
 
+/** Plan quotas on OAuth-app creation are dropped: nothing to assert. */
 export const eeConnectionHooks: ConnectionHooks = {
-  async beforeCreate(organizationId) {
-    await assertCanCreateOAuthApp(organizationId);
-  },
+  beforeCreate: async () => {},
 };

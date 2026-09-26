@@ -1,64 +1,34 @@
-//! Budget layer (cloud-only): per-(secret, org) spend caps on LLM keys.
+//! Spend budgets on org/workspace secrets.
 //!
-//! DORMANT: the partner layer that produced budget-eligible (`scope='partner'`)
-//! secrets was removed, and no other producer or setter surface exists yet —
-//! bindings always resolve empty, so every downstream stage compiles but never
-//! fires. Kept whole for a future budget surface; reviving it means adding a
-//! setter surface and widening the candidate predicate in `binding.rs`.
-//!
-//! Self-contained and easily deletable: remove this file, the `budget/`
-//! directory beside it, the `pub mod budget` decl in this crate's `lib.rs`,
-//! and the `budget_bindings` field + its call sites in `proxy`
-//! (`connect`, `mitm`, `hooks`) and `server`, plus the spend-sink
-//! installation in the bin's `wiring` and the `SpendSink` seam in
-//! `telemetry`.
-//!
-//! Threading: `proxy`'s `connect` resolves bindings for the effective
-//! credential and threads them via `ConnectResponse → ResolvedRules`; its
-//! `hooks` enforce (`pre_forward` → [`is_over_budget`]) and meter
-//! (`track_and_wrap` → [`wrap_metered`]); the telemetry flush persists spend
-//! via [`add_spend`] through the installed sink.
-//!
-//! Generic by design: the only per-provider code is the metering switch
-//! (`meter::has_meter` / `meter::accumulator_for`) + the pricing table. Spend
-//! is always nano-dollars, so enforcement/accounting never knows the provider.
+//! Phase 0 posture (`docs/upstream-sync/v2-migration/phase0-plan.md` WP2):
+//! the wire-facing TYPES are real (they are cached inside `ConnectResponse`,
+//! so their shape is load-bearing even though nothing produces a binding
+//! yet), but the actual eligibility/spend LOGIC is dormant — `resolve_bindings`
+//! always returns empty, so nothing downstream (`has_meter`, `is_over_budget`,
+//! `wrap_metered`) ever fires in practice. Phase 1 rewrites `resolve_bindings`
+//! for the fork's own org/workspace secret eligibility rule.
 
-use serde::{Deserialize, Serialize};
+use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
 
-mod anthropic;
-mod binding;
-mod meter;
-mod pricing;
-mod spend;
+use futures_util::Stream;
+use hyper::body::{Bytes, Frame};
 
-pub use binding::resolve_bindings;
-// The enforcement/metering surface is consumed by `proxy`'s request
-// hooks and the `telemetry` flush (via the installed `SpendSink`).
-pub use meter::{has_meter, wrap_metered};
-pub use spend::{add_spend, is_over_budget};
-
-/// How a budget's spend window resets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// How often a budget resets. Serialized lowercase — this value is part of
+/// the cached `ConnectResponse` wire shape (`connect.rs`), so the encoding is
+/// load-bearing even though nothing produces a non-empty binding yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BudgetPeriod {
-    /// Resets on the 1st of each month (UTC).
     Monthly,
-    /// Lifetime cap; never resets.
     Total,
 }
 
-/// WHO a budget's spend is attributed to — the second axis of the spend
-/// counter, next to the credential (`secret_id`).
-///
-/// Org budgets attribute to the consuming organization; the platform trial
-/// credit attributes to a USER (the org's founding owner), so a second org by
-/// the same person draws from the same pool. Storage is the rendered
-/// `org:<id>` / `user:<id>` string — in the Redis key, in the
-/// `budget_spends.organization_id` column (kept under its historical name;
-/// the prefix is what makes the value honest), and across the serialized
-/// `ConnectResponse` cache. Serde round-trips through that same string, so
-/// the wire shape stays a plain JSON string.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Who a budget's spend is attributed to. Encoded as a single prefixed string
+/// (`org:<id>` / `user:<id>`) on the wire — this is also the shape stored in
+/// the `budget_spends.organization_id` column upstream, so the prefix rule is
+/// load-bearing, not cosmetic.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(into = "String", try_from = "String")]
 pub enum BudgetSubject {
     Org(String),
@@ -75,93 +45,182 @@ impl std::fmt::Display for BudgetSubject {
 }
 
 impl From<BudgetSubject> for String {
-    fn from(s: BudgetSubject) -> String {
-        s.to_string()
+    fn from(subject: BudgetSubject) -> Self {
+        subject.to_string()
     }
 }
 
 impl TryFrom<String> for BudgetSubject {
     type Error = String;
 
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        if let Some(id) = s.strip_prefix("org:") {
-            return Ok(BudgetSubject::Org(id.to_string()));
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if let Some(id) = value.strip_prefix("org:") {
+            Ok(BudgetSubject::Org(id.to_string()))
+        } else if let Some(id) = value.strip_prefix("user:") {
+            Ok(BudgetSubject::User(id.to_string()))
+        } else {
+            Err(format!(
+                "invalid budget subject {value:?}: expected an \"org:\" or \"user:\" prefix"
+            ))
         }
-        if let Some(id) = s.strip_prefix("user:") {
-            return Ok(BudgetSubject::User(id.to_string()));
-        }
-        // Unprefixed values (a pre-rename cached ConnectResponse) fail parse:
-        // the caller treats it as a cache miss and re-resolves — a ~60s
-        // window, never wrong enforcement.
-        Err(format!("budget subject without an org:/user: prefix: {s}"))
     }
 }
 
-/// A resolved budget governing the effective credential for a request's host.
-/// Resolved once at connect time, threaded `ConnectResponse → ResolvedRules`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A resolved budget governing one secret's spend, for one subject, over one
+/// period. Threaded from `resolve_bindings` through `ConnectResponse` /
+/// `ResolvedRules`, so it must stay `Debug + Clone + PartialEq + Serialize +
+/// Deserialize` (it is cached as JSON).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BudgetBinding {
     pub secret_id: String,
-    /// Spend attribution: the org for org budgets, the founding-owner USER
-    /// for the platform trial credit.
     pub subject: BudgetSubject,
-    /// Secret type — selects the metering strategy (e.g. "anthropic").
     pub secret_type: String,
-    /// Spend ceiling in nano-dollars (1e-9 USD).
     pub limit_nanos: i64,
     pub period: BudgetPeriod,
 }
 
-/// The licensed spend sink, installed by the composition root at startup so
-/// the telemetry flush can persist metered charges without naming this module.
+/// The fields `resolve_bindings` needs from a secret row to decide budget
+/// eligibility. Implemented for `db::SecretRow` so the free `proxy::connect`
+/// call site can pass its host-filtered secret pool directly.
+pub trait BudgetSecret {
+    fn id(&self) -> &str;
+    fn scope(&self) -> &str;
+    fn secret_type(&self) -> &str;
+}
+
+impl BudgetSecret for db::SecretRow {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn scope(&self) -> &str {
+        &self.scope
+    }
+
+    fn secret_type(&self) -> &str {
+        &self.type_
+    }
+}
+
+/// Resolve which of the host-filtered secrets carry a spend budget. Dormant
+/// in this build: nothing yet defines org/workspace budget eligibility (that
+/// is Phase 1's rewrite), so this always returns empty and the rest of the
+/// budget pipeline (`has_meter`, `is_over_budget`, `wrap_metered`) never
+/// fires. Keeping the real generic signature (rather than a fixed
+/// `&[db::SecretRow]`) matches the licensed original and costs nothing.
+pub async fn resolve_bindings<S: BudgetSecret>(
+    _pool: &sqlx::PgPool,
+    _org_id: &str,
+    _secrets: &[S],
+    _entitled: bool,
+) -> Vec<BudgetBinding> {
+    Vec::new()
+}
+
+/// Whether a secret type is metered (usage-priced) rather than a flat
+/// pass/fail budget. Always false in this build — no metered secret type is
+/// defined yet, so `budget::wrap_metered` never gets called from
+/// `proxy::hooks::track_and_wrap`.
+#[must_use]
+pub fn has_meter(_secret_type: &str) -> bool {
+    false
+}
+
+/// Whether a binding's spend has crossed its limit. Always false: with
+/// `resolve_bindings` always empty, this is never invoked on the request
+/// path today, but it is still called per-binding by `proxy::hooks::pre_forward`
+/// so the signature (and a safe default) must exist.
+pub async fn is_over_budget(
+    _cache: &dyn cache::CacheStore,
+    _pool: &sqlx::PgPool,
+    _binding: &BudgetBinding,
+) -> bool {
+    false
+}
+
+/// Passthrough stream wrapper that preserves the free path's telemetry
+/// invariant: `proxy::hooks::track_and_wrap` emits `telemetry::on_request`
+/// itself when it does NOT wrap the stream, so the ONE place that emits when
+/// a metered binding exists is this wrapper — it must fire exactly once, at
+/// end of stream (or on an early drop), with no charge (unreachable today
+/// since `has_meter` is always false, but wired so Phase 1 only has to add
+/// pricing here, not re-derive this contract).
+struct MeteredPassthrough {
+    inner: Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>,
+    // `Option` so the emission happens exactly once regardless of whether the
+    // stream is polled to completion or dropped early.
+    meta: Option<telemetry::core::RequestMeta>,
+}
+
+impl MeteredPassthrough {
+    fn emit_once(&mut self) {
+        if let Some(meta) = self.meta.take() {
+            telemetry::on_request(meta.into_event(None));
+        }
+    }
+}
+
+impl Stream for MeteredPassthrough {
+    type Item = Result<Frame<Bytes>, reqwest::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(bytes))) => Poll::Ready(Some(Ok(Frame::data(bytes)))),
+            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err))),
+            Poll::Ready(None) => {
+                self.emit_once();
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for MeteredPassthrough {
+    fn drop(&mut self) {
+        self.emit_once();
+    }
+}
+
+/// Wrap an upstream response stream so its bytes pass through unchanged while
+/// guaranteeing the one `telemetry::on_request` emission `track_and_wrap`
+/// would otherwise skip for a metered binding. See `MeteredPassthrough`.
+#[must_use]
+pub fn wrap_metered(
+    _binding: &BudgetBinding,
+    meta: telemetry::core::RequestMeta,
+    _is_sse: bool,
+    stream: Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>>,
+) -> context::BodyStream {
+    Box::pin(MeteredPassthrough {
+        inner: stream,
+        meta: Some(meta),
+    })
+}
+
+/// Installed unconditionally at startup (`wiring.rs`, before `telemetry::init`)
+/// so `telemetry::flush_budget` never warns about a missing sink. A no-op here
+/// because `resolve_bindings` never produces a binding to spend against in
+/// this build.
 pub struct BudgetSpendSink;
 
 #[async_trait::async_trait]
 impl telemetry::SpendSink for BudgetSpendSink {
     async fn add_spend(
         &self,
-        cache: &dyn cache::CacheStore,
-        pool: &sqlx::PgPool,
+        _cache: &dyn cache::CacheStore,
+        _pool: &sqlx::PgPool,
         secret_id: &str,
         subject: &str,
         period_key: &str,
         nanos: i64,
     ) {
-        add_spend(cache, pool, secret_id, subject, period_key, nanos).await;
-    }
-}
-
-#[cfg(test)]
-mod subject_tests {
-    use super::BudgetSubject;
-
-    #[test]
-    fn renders_prefixed_forms() {
-        assert_eq!(BudgetSubject::Org("o1".into()).to_string(), "org:o1");
-        assert_eq!(BudgetSubject::User("u1".into()).to_string(), "user:u1");
-    }
-
-    #[test]
-    fn serde_round_trips_through_the_prefixed_string() {
-        for subject in [
-            BudgetSubject::Org("o1".into()),
-            BudgetSubject::User("u1".into()),
-        ] {
-            let json = serde_json::to_string(&subject).unwrap();
-            let back: BudgetSubject = serde_json::from_str(&json).unwrap();
-            assert_eq!(back, subject);
-        }
-        assert_eq!(
-            serde_json::to_string(&BudgetSubject::User("u1".into())).unwrap(),
-            "\"user:u1\""
+        tracing::debug!(
+            secret_id,
+            subject,
+            period_key,
+            nanos,
+            "budget spend sink is a no-op in this build"
         );
-    }
-
-    // A pre-rename cached ConnectResponse carries a bare id — it must fail
-    // deserialization (→ cache miss → re-resolve), never silently parse as
-    // one of the variants.
-    #[test]
-    fn unprefixed_value_fails_parse() {
-        assert!(serde_json::from_str::<BudgetSubject>("\"bare-id\"").is_err());
     }
 }

@@ -1,24 +1,12 @@
-import ClaimPage from "@/ee/team/claim-page";
-import { isEntitled } from "@onecli/api/lib/entitlements";
-import { EnterpriseLockedCard } from "@/lib/components/enterprise-locked-card";
+import { redirect } from "next/navigation";
 
-export default async function Page(
-  props: React.ComponentProps<typeof ClaimPage>,
-) {
-  // Provisioning (#75) is licensed — dark reads included: an unlicensed
-  // deployment resolves no claim token and shows no org name.
-  if (!isEntitled()) {
-    return (
-      <EnterpriseLockedCard
-        feature="provisioning"
-        description="Pre-provision member accounts and hand out claim links that bring teammates straight into your organization."
-      />
-    );
-  }
-  // Invoked as a function, not as `<ClaimPage />`: both are server
-  // components, and composing them this way lets the unlicensed/licensed arms
-  // be rendered in a test (JSX would hand the test harness an unresolved
-  // async element). Keep it — the gate above is only proven while this is
-  // renderable.
-  return ClaimPage(props);
+/**
+ * Provisioning/claim links are permanently dropped (this fork uses
+ * invitations + Google login instead — see the v2 migration plan).
+ * Redirects home rather than rendering a placeholder for a feature with no
+ * place on the roadmap — same convention as `/org/:id/settings/sso` and
+ * `/review/login`.
+ */
+export default function Page() {
+  redirect("/");
 }

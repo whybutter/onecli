@@ -5,7 +5,6 @@
   "globalPassThroughEnv": [
     "DATABASE_URL",
     "EDITION",
-    "ENTERPRISE_ENABLED",
     "APP_URL",
     "API_URL",
     "COGNITO_CLIENT_ID",

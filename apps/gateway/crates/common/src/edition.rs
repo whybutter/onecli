@@ -30,34 +30,17 @@ pub fn edition() -> Edition {
     *EDITION.get_or_init(|| parse(std::env::var("EDITION").ok().as_deref()))
 }
 
-/// Whether this deployment may run enterprise features. Cloud is always
-/// entitled (billing plans gate there); self-host opts in with
-/// `ENTERPRISE_ENABLED=true` under the OneCLI Enterprise License. Forcing
-/// cloud inside the parser (not at call sites) keeps every `EDITION=cloud`
-/// path — including the whole e2e suite — behaviorally identical with or
-/// without the flag.
-fn parse_entitled(raw: Option<&str>, edition: Edition) -> bool {
-    match edition {
-        Edition::Cloud => true,
-        Edition::Onprem => matches!(
-            raw.map(str::trim),
-            Some(v) if v.eq_ignore_ascii_case("true") || v == "1"
-        ),
-    }
-}
-
-/// The entitlement for this process, read once at first use. Code with an
-/// entitlement branch should take `entitled: bool` as a parameter
-/// (table-testable) and read `entitled()` only at the call site — never on
-/// the per-request path; every gate sits at load/startup.
+/// Whether this deployment may run enterprise features.
+///
+/// This fork has no `ENTERPRISE_ENABLED` switch and no unlicensed lane: every
+/// deployment — cloud or onprem — is always entitled
+/// (`docs/upstream-sync/v2-migration/plan.md` Principle 3, "Always
+/// entitled"). Kept as a function (not inlined at call sites) so the
+/// entitlement gates scattered through the free crates (`proxy::connect`,
+/// `policy-engine::enforce`, `wiring.rs`, …) need no further changes — they
+/// still read `entitled()` and get a constant `true`.
 pub fn entitled() -> bool {
-    static ENTITLED: OnceLock<bool> = OnceLock::new();
-    *ENTITLED.get_or_init(|| {
-        parse_entitled(
-            std::env::var("ENTERPRISE_ENABLED").ok().as_deref(),
-            edition(),
-        )
-    })
+    true
 }
 
 #[cfg(test)]
@@ -79,22 +62,9 @@ mod tests {
     }
 
     #[test]
-    fn cloud_is_always_entitled_regardless_of_flag() {
-        assert!(parse_entitled(None, Edition::Cloud));
-        assert!(parse_entitled(Some("false"), Edition::Cloud));
-        assert!(parse_entitled(Some("garbage"), Edition::Cloud));
-    }
-
-    #[test]
-    fn onprem_requires_the_explicit_opt_in() {
-        assert!(parse_entitled(Some("true"), Edition::Onprem));
-        assert!(parse_entitled(Some(" TRUE "), Edition::Onprem));
-        assert!(parse_entitled(Some("1"), Edition::Onprem));
-
-        assert!(!parse_entitled(None, Edition::Onprem));
-        assert!(!parse_entitled(Some(""), Edition::Onprem));
-        assert!(!parse_entitled(Some("false"), Edition::Onprem));
-        assert!(!parse_entitled(Some("yes"), Edition::Onprem));
-        assert!(!parse_entitled(Some("0"), Edition::Onprem));
+    fn always_entitled() {
+        // No `ENTERPRISE_ENABLED` switch in this fork — every deployment is
+        // entitled, regardless of edition or environment.
+        assert!(entitled());
     }
 }

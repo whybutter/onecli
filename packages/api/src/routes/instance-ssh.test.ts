@@ -13,7 +13,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // a hoisted block trips no-require-imports.
 vi.hoisted(() => {
   process.env.NEXT_PUBLIC_EDITION = "onprem";
-  delete process.env.ENTERPRISE_ENABLED;
   process.env.SSH_HOST = "ssh.onecli.test";
   process.env.SSH_PORT = "10257";
   process.env.SSH_CA_PRIVATE_KEY = [

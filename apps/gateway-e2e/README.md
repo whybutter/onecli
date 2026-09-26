@@ -12,28 +12,19 @@ move essentially every file in it. A suite coupled to internals would break duri
 and protect nothing; a suite that only knows the wire protocol survives it and is exactly the
 regression net the restructure needs.
 
-## The edition model: enterprise by default, arms per lane
+## The edition model
 
 The binary is edition-less; the runtime env selects behavior. The suite's default spawn env
-is the **enterprise edition** — an entitled self-host (`EDITION=onprem` +
-`ENTERPRISE_ENABLED=true`) running the **licensed Redis-backed HA stores** (`REDIS_HOST`
-set) and the local AES crypto backend (`SECRET_ENCRYPTION_KEY`, pinned by
-`vitest.config.ts`). That is the canonical licensed deployment, and it exercises the
-entitled feature set (group principals, resource scoping, budgets, RBAC rechecks, HA
-stores) that a plain self-host never runs.
+is the **onprem edition** (`EDITION=onprem`) — self-host is always entitled (there is no
+`ENTERPRISE_ENABLED` flag), using the local AES crypto backend (`SECRET_ENCRYPTION_KEY`,
+pinned by `vitest.config.ts`). By default `REDIS_HOST` is unset and the gateway runs its
+free in-memory cache/approval stores; set `E2E_REDIS_HOST` to run the same suite against the
+Redis-backed stores instead (this fork drops Redis/HA as a licensed tier — it's just an
+optional backend now).
 
-Two lanes override it per test:
-
-- **The unlicensed lane** (`unlicensed.test.ts`) blanks `ENTERPRISE_ENABLED` and
-  `REDIS_HOST` and proves the decided flag-off posture from the outside — licensed features
-  get a differential twin (same seeds, opposite outcome), free surfaces get parity twins.
-- **The cloud lane** (`platform-llm.test.ts`) sets `EDITION=cloud` and covers cloud-only
-  wire behavior: the platform Anthropic trial credit and the cloud boot posture. The
-  Cognito/KMS values it sets are dummies satisfying the cloud fail-fast — never dialed
-  (sessions stay on agent tokens; the pinned `SECRET_ENCRYPTION_KEY` selects local AES by
-  config precedence). The KMS envelope FORMAT itself is unit-pinned on both sides of the
-  TS↔Rust contract (`packages/api/src/ee/kms-crypto.contract.test.ts`,
-  `apps/gateway/crates/ee/ee/src/kms_crypto.rs`); only the live AWS KMS call is proven by deploys.
+There is no more unlicensed/licensed split to test: `unlicensed.test.ts` and the cloud-only
+`platform-llm.test.ts` lane are gone. Every scenario runs against the one, always-entitled
+onprem posture described above.
 
 ## Running locally
 
@@ -48,7 +39,8 @@ docker run -d --name gwe2e-db -p 5434:5432 \
   -e POSTGRES_USER=ci -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=onecli \
   postgres:18-alpine -c max_connections=200
 
-# 2. Redis — the enterprise lane runs the licensed Redis-backed stores.
+# 2. Redis — optional. Only needed to run the suite against the Redis-backed
+#    stores instead of the default free in-memory ones.
 docker run -d --name gwe2e-redis -p 6379:6379 redis:7-alpine
 
 # 3. Create and migrate the template database the tests clone per test.
@@ -64,6 +56,7 @@ DATABASE_URL=postgresql://ci:ci@127.0.0.1:5434/onecli_e2e_template \
 #    into everyone's default test command.
 export E2E_ADMIN_DATABASE_URL=postgresql://ci:ci@127.0.0.1:5434/postgres
 export E2E_TEMPLATE_DB=onecli_e2e_template
+# Optional — omit it to run against the free in-memory stores instead.
 export E2E_REDIS_HOST=127.0.0.1
 pnpm --filter @onecli/gateway-e2e test:e2e
 ```

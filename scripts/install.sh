@@ -1,8 +1,13 @@
 #!/bin/sh
 
 # OneCLI - Open-Source Credential Vault for AI Agents
-# Source: https://github.com/onecli/onecli
+# Source: https://github.com/whybutter/onecli
 # License: See repository for license details
+#
+# TODO(fork-domain): every onecli.sh / app.onecli.sh / *@onecli.sh string in
+# this script still points at upstream's install domain and support email —
+# left as-is pending a fork domain decision (see decision 0.C in
+# docs/upstream-sync/v2-migration/phase0-plan.md).
 #
 # Usage: curl -fsSL https://onecli.sh/install | sh
 #
@@ -52,8 +57,8 @@ ENV_FILE="$INSTALL_DIR/.env"
 # v2 split the all-in-one container into web + gateway + api services.
 # Installs pinned to a pre-2.0 version keep receiving the compose that matches
 # those images (docker-compose.legacy.yml, frozen alongside them).
-COMPOSE_URL_NEW="https://raw.githubusercontent.com/onecli/onecli/main/docker/docker-compose.yml"
-COMPOSE_URL_LEGACY="https://raw.githubusercontent.com/onecli/onecli/main/docker/docker-compose.legacy.yml"
+COMPOSE_URL_NEW="https://raw.githubusercontent.com/whybutter/onecli/main/docker/docker-compose.yml"
+COMPOSE_URL_LEGACY="https://raw.githubusercontent.com/whybutter/onecli/main/docker/docker-compose.legacy.yml"
 PROJECT_NAME="onecli"
 # Docker command indirection, so the tests can substitute a stub and assert
 # exactly which calls the upgrade steps make — and, critically, which they

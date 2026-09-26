@@ -62,10 +62,7 @@ RUN pnpm --filter @onecli/db generate
 # Stage 6: Production runner
 # ──────────────────────────────────────────────
 FROM node:22.23.2-alpine3.24 AS runner
-# Dual-licensed image contents: Apache-2.0 plus the enterprise-licensed ee/
-# paths compiled/bundled into every edition — see LICENSE and
-# LICENSE-ENTERPRISE at the repository root.
-LABEL org.opencontainers.image.licenses="Apache-2.0 AND LicenseRef-OneCLI-Enterprise"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 WORKDIR /app
 
 # tini as PID 1: Node is not an init (signal handling differs, orphans are

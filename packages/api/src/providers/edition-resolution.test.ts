@@ -106,16 +106,14 @@ describe("edition resolution at the real seams", () => {
     subscription.release();
   });
 
-  it("entitled self-host: the same licensed checker rides the override arm", async () => {
+  it("self-host: the same checker and role resolver ride the override arm after boot", async () => {
     const { providers, defaults } = await loadAs("onprem");
-    const ent = await import("../lib/entitlements");
     const authz = await import("../ee/services/authorization-service");
-    ent.initEntitlementForTests(true);
     defaults.ensureEditionDefaults();
     expect(providers.getWorkspaceAccessChecker()).toBe(
       authz.eeWorkspaceAccessChecker,
     );
-    ent.initEntitlementForTests(null);
+    expect(providers.getRoleResolver()?.getUserRole).toBe(authz.getUserRole);
   });
 
   it("tests/hosts can still override, and null-reset returns to the edition default", async () => {

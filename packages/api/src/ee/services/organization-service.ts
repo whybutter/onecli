@@ -1,28 +1,19 @@
 import { db, Prisma } from "@onecli/db";
-import {
-  slugify,
-  bootstrapOrganization,
-  validateOrgName,
-} from "../../services/organization-service";
-import { ServiceError } from "../../services/errors";
-import { isEntitled } from "../../lib/entitlements";
-import { enterpriseLicenseMessage } from "../../lib/entitlements-guard";
-import { getStripe } from "../billing/stripe";
-import { findOrgLiveSubscriptions } from "../billing/plan-switch";
-import { deleteWorkspace } from "./workspace-service";
-import { assertCanCreateOrganization } from "./quota-service";
-import { logger } from "../../lib/logger";
 import { invalidateGatewayCacheForKeys } from "../../lib/gateway-invalidate";
+import { logger } from "../../lib/logger";
+import { ServiceError } from "../../services/errors";
+import { bootstrapOrganization } from "../../services/organization-service";
+import { assertCanCreateOrganization } from "./quota-service";
+import { deleteWorkspace } from "./workspace-service";
 
-export { slugify, validateOrgName };
-
-const log = logger.child({ component: "organization" });
+const log = logger.child({ component: "organization-service" });
 
 /**
- * User-initiated org creation (the "New organization" flow). Enforces the
- * per-user free-org cap, then delegates to the shared bootstrap. The first-login
- * auto-provision paths call `bootstrapOrganization` directly and stay exempt, so
- * a user is never blocked from getting their initial org.
+ * The web "New organization" flow: the shared bootstrap (org + owner
+ * membership + default workspace, atomic, then the best-effort policy seed).
+ * The bootstrap's deterministic slug turns a duplicate name into a unique
+ * violation, which reads back as a 409 naming the organization; anything
+ * else propagates unchanged. There is no cap on organizations per user.
  */
 export const createOrganization = async (
   userId: string,
@@ -33,10 +24,6 @@ export const createOrganization = async (
   try {
     return await bootstrapOrganization(userId, userEmail, displayName);
   } catch (err) {
-    // The org slug is `slugify(name)-<userId prefix>`, so a unique-constraint
-    // violation on a freshly-created org can only be the `slug` — i.e. this user
-    // already owns an org whose name derives the same slug. Translate it into a
-    // friendly 409 instead of leaking the raw Prisma error to the toast.
     if (
       err instanceof Prisma.PrismaClientKnownRequestError &&
       err.code === "P2002"
@@ -53,23 +40,19 @@ export const createOrganization = async (
 };
 
 /**
- * Delete an organization's non-workspace children and the org row, inside an
- * existing transaction. Precondition: the org's WORKSPACES are already deleted (the
- * workspace-deletion strategy differs per caller, so it stays with the caller).
- * Idempotent — every step is a `deleteMany`; the final `organization.delete` runs
- * on a still-present org.
- *
- * Single source of truth for "what is an org's children", used by
- * `deleteOrganization` (dashboard). `budget`/`budgetSpend` are orphan cleanup
- * (`budget_spends` has no FK).
+ * The hand-written organization cascade, inside the caller's transaction,
+ * for an org whose workspaces are already gone. Returns the org-scoped API
+ * keys it deleted so the caller can flush the gateway cache after commit.
  */
 export const deleteOrganizationContent = async (
   organizationId: string,
-  tx: Parameters<Parameters<typeof db.$transaction>[0]>[0],
-) => {
+  tx: Prisma.TransactionClient,
+): Promise<string[]> => {
+  const keys = await tx.apiKey.findMany({
+    where: { organizationId },
+    select: { key: true },
+  });
   await tx.auditLog.deleteMany({ where: { organizationId } });
-  // Org-tier skills: Restrict FK — the explicit line IS the deletion path
-  // (workspaces are precondition-deleted, so only org-tier rows remain here).
   await tx.skill.deleteMany({ where: { organizationId } });
   await tx.secret.deleteMany({ where: { organizationId } });
   await tx.apiKey.deleteMany({ where: { organizationId } });
@@ -77,105 +60,50 @@ export const deleteOrganizationContent = async (
   await tx.appConnection.deleteMany({ where: { organizationId } });
   await tx.invitation.deleteMany({ where: { organizationId } });
   await tx.userProvision.deleteMany({ where: { organizationId } });
-  await tx.budget.deleteMany({ where: { organizationId } });
   await tx.budgetSpend.deleteMany({ where: { organizationId } });
+  await tx.budget.deleteMany({ where: { organizationId } });
+  await tx.groupRoleMapping.deleteMany({ where: { organizationId } });
+  await tx.group.deleteMany({ where: { organizationId } });
   await tx.organizationMember.deleteMany({ where: { organizationId } });
   await tx.organization.delete({ where: { id: organizationId } });
+  return keys.map((row) => row.key);
 };
 
+/**
+ * Delete an organization outright. Only its ACTIVE owner may. Every
+ * workspace goes first, each in its own bounded transaction, then the org
+ * itself. Not audited: the org's audit rows are deleted with it.
+ */
 export const deleteOrganization = async (
   organizationId: string,
   userId: string,
-) => {
+): Promise<void> => {
   const membership = await db.organizationMember.findUnique({
-    where: {
-      organizationId_userId: { organizationId, userId },
-    },
+    where: { organizationId_userId: { organizationId, userId } },
     select: { role: true, status: true },
   });
   if (
     !membership ||
-    membership.status === "suspended" ||
-    membership.role !== "owner"
+    membership.role !== "owner" ||
+    membership.status === "suspended"
   ) {
     throw new Error("Only the organization owner can delete it");
   }
 
-  // Freeze posture (#64): owning several orgs is enterprise state, and without
-  // the license that state is immutable — deletes included. Owning exactly one
-  // org is the free single-org lifecycle, which keeps its delete.
-  if (!isEntitled()) {
-    const ownedOrgs = await db.organizationMember.count({
-      where: { userId, role: "owner" },
-    });
-    if (ownedOrgs > 1) {
-      throw new ServiceError(
-        "FORBIDDEN",
-        enterpriseLicenseMessage("multi_org"),
-      );
-    }
-  }
-
-  const org = await db.organization.findUniqueOrThrow({
-    where: { id: organizationId },
-    select: {
-      id: true,
-      name: true,
-      stripeCustomerId: true,
-      workspaces: { select: { id: true } },
-    },
+  const workspaces = await db.workspace.findMany({
+    where: { organizationId },
+    select: { id: true },
   });
-
-  // The stored customer id gates the Stripe call (an org that never touched
-  // billing — every onprem org — skips it), but it does NOT scope the cancel:
-  // resolve the org's own live subscriptions instead of blindly canceling
-  // whatever the stored customer holds. The blind list had both failure modes
-  // of the customer-id drift: it canceled ANOTHER org's subscription on a
-  // shared customer, and it missed the org's real subscription when Checkout
-  // billed it to a different customer — which then kept charging forever
-  // after the org was gone. Errors propagate: an org must not delete while
-  // its subscription may still be billing.
-  if (org.stripeCustomerId) {
-    const stripe = getStripe();
-    const matches = await findOrgLiveSubscriptions(
-      stripe,
-      organizationId,
-      org.stripeCustomerId,
-    );
-    for (const { subscription } of matches) {
-      // Search-sourced matches ride an eventually-consistent index that can
-      // echo a just-canceled sub as active, and canceling a canceled sub
-      // throws — re-read before the destructive act.
-      const fresh = await stripe.subscriptions.retrieve(subscription.id);
-      if (fresh.status === "active" || fresh.status === "trialing") {
-        await stripe.subscriptions.cancel(subscription.id);
-      }
-    }
-  }
-
-  // Workspaces first, each in its own bounded transaction (request_logs aren't
-  // pruned, so a single org-wide tx could be huge). Re-querying org.workspaces on
-  // every call makes this loop idempotent on retry.
-  for (const workspace of org.workspaces) {
+  for (const workspace of workspaces) {
     await deleteWorkspace(workspace.id);
   }
 
-  // The workspace loop above already flushed each workspace's keys. The org-scoped
-  // keys (scope: "organization") are removed by deleteOrganizationContent, so
-  // capture them inside that transaction and flush after it commits — otherwise
-  // a deleted org key keeps being served from the gateway cache until its TTL.
-  const orgKeys = await db.$transaction(async (tx) => {
-    const apiKeys = await tx.apiKey.findMany({
-      where: { organizationId },
-      select: { key: true },
-    });
-    await deleteOrganizationContent(organizationId, tx);
-    return apiKeys;
-  });
-  invalidateGatewayCacheForKeys(orgKeys.map((k) => k.key));
-
+  const keys = await db.$transaction((tx) =>
+    deleteOrganizationContent(organizationId, tx),
+  );
+  invalidateGatewayCacheForKeys(keys);
   log.info(
-    { organizationId, orgName: org.name, userId },
+    { organizationId, userId, workspaces: workspaces.length },
     "organization deleted",
   );
 };

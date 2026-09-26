@@ -7,10 +7,9 @@ silently rotted).
 
 Per test (`pnpm --filter @onecli/hosted-e2e test:e2e`): a private Postgres
 database cloned from a migrated template, a spawned **gateway binary**
-(the enterprise edition — an entitled self-host, `EDITION=onprem` +
-`ENTERPRISE_ENABLED=true`, local AES; give it the licensed Redis-backed HA
-stores by setting `E2E_REDIS_HOST`, as CI does — without it the entitled
-in-memory stores run, also a legitimate licensed configuration), a spawned
+(`EDITION=onprem`, self-host is always entitled, local AES; give it the
+Redis-backed stores by setting `E2E_REDIS_HOST`, as CI does — without it the
+free in-memory stores run, also a legitimate configuration), a spawned
 **api-server** child (same edition), an **in-process runner** with the real
 Docker backend, and **real sandbox containers** from the agent image running
 the fake harness. Covers

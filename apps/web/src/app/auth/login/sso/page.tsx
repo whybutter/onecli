@@ -1,13 +1,14 @@
 import { redirect } from "next/navigation";
-import { isEntitled } from "@onecli/api/lib/entitlements";
-import { SsoLoginContent } from "@/ee/auth/sso-login-content";
 
+/**
+ * SSO is permanently dropped in this build (v2 migration plan: no SSO/SCIM;
+ * Google login + email/password cover it). Redirects unconditionally rather
+ * than rendering the (null) `SsoLoginContent` stand-in, so a stray visit or
+ * bookmark lands somewhere useful instead of a blank page. Documented
+ * free-file deviation from the plain "remove the dead entitlement branch"
+ * pattern used by the other route wrappers, since this route's other arm
+ * was always a redirect, never `EnterpriseLockedCard`.
+ */
 export default function Page() {
-  // SSO (#74) is licensed. Unlicensed deployments have no SSO to look up,
-  // so the entry point sends the visitor to the regular login instead of
-  // rendering a form whose lookup can only 403.
-  if (!isEntitled()) {
-    redirect("/auth/login");
-  }
-  return <SsoLoginContent />;
+  redirect("/auth/login");
 }

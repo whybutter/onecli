@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Lock, Plus, UserRound, Users, X } from "lucide-react";
+import { Plus, UserRound, Users, X } from "lucide-react";
 import { Badge } from "@onecli/ui/components/badge";
 import { Button } from "@onecli/ui/components/button";
 import { Checkbox } from "@onecli/ui/components/checkbox";
@@ -14,7 +14,6 @@ import {
 import type { ProjectionIdentity } from "@/lib/api";
 import { useGroups } from "@/hooks/use-groups";
 import { useOrgMembersList } from "@/hooks/use-org-members";
-import { usePlanGate } from "@/lib/plan-gate";
 
 type Kind = "group" | "user";
 
@@ -60,11 +59,6 @@ export const OrgIdentityPicker = ({
 }: OrgIdentityPickerProps) => {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
-  const { isLocked, guard } = usePlanGate();
-  // The GROUP arm is enterprise (#51); user targeting stays free. The 403 on
-  // the (dark) group read is absorbed by the same retry-free machinery as the
-  // non-admin case — `groups` simply stays empty.
-  const groupsLocked = isLocked("groups");
   const { data: groups = EMPTY } = useGroups();
   const { data: members = EMPTY } = useOrgMembersList(true);
 
@@ -115,9 +109,6 @@ export const OrgIdentityPicker = ({
       (o) => o.kind === i.type && o.id === i.id,
     )?.label;
     if (known) return known;
-    // Unlicensed, group names are unreadable (dark reads) — a saved group
-    // target renders as a generic locked chip, never a raw UUID.
-    if (i.type === "group" && groupsLocked) return "Enterprise group";
     return i.id;
   };
 
@@ -181,32 +172,12 @@ export const OrgIdentityPicker = ({
             />
           </div>
           <div className="max-h-64 overflow-y-auto overscroll-contain p-1">
-            {filtered.length === 0 && !groupsLocked ? (
+            {filtered.length === 0 ? (
               <p className="text-muted-foreground px-2 py-6 text-center text-xs">
                 No identities found.
               </p>
             ) : (
               SECTIONS.map(({ kind, title, Icon }) => {
-                // Unlicensed, the group half is one locked, non-selectable row
-                // that opens the license dialog instead of a checkbox list.
-                if (kind === "group" && groupsLocked) {
-                  return (
-                    <div key={kind} className="mb-1">
-                      <p className="text-muted-foreground flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium tracking-wide uppercase">
-                        <Icon className="size-3" aria-hidden />
-                        {title}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => guard("groups")}
-                        className="hover:bg-muted text-muted-foreground flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm"
-                      >
-                        <Lock className="size-3 shrink-0" aria-hidden />
-                        Requires an Enterprise license
-                      </button>
-                    </div>
-                  );
-                }
                 const rows = filtered.filter((o) => o.kind === kind);
                 if (rows.length === 0) return null;
                 return (

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   auditRows: [] as Record<string, unknown>[],
@@ -29,7 +29,6 @@ vi.mock("@onecli/db", () => ({
 }));
 
 import { resolveIdentityConflict } from "./identity-conflict";
-import { initEntitlementForTests } from "./entitlements";
 
 const existing = {
   id: "user-1",
@@ -41,13 +40,7 @@ beforeEach(() => {
   state.auditRows = [];
   state.ssoConnection = null;
   state.verifiedDomain = false;
-  // The SSO-vouch arms exercise licensed trust behavior; the hermetic env is
-  // unlicensed by default and sso-trust's gate would null the vouch. The
-  // unlicensed arm of that gate is pinned in sso-trust.test.ts.
-  initEntitlementForTests(true);
 });
-
-afterEach(() => initEntitlementForTests(null));
 
 describe("resolveIdentityConflict", () => {
   it("links a Google-federated session even without a verified-email claim", async () => {
@@ -99,7 +92,10 @@ describe("resolveIdentityConflict", () => {
     ).resolves.toBe("reject");
   });
 
-  it("links an enterprise-SSO session whose org verified the email's domain", async () => {
+  it("never lets an SSO-shaped provider vouch — enterprise SSO trust is not in this build", async () => {
+    // Even with a connection row and a verified domain on file, the SSO arm
+    // answers null (ee/sso/sso-trust is a stand-in), so an unverified email
+    // asserted by an IdP is rejected like any other unproven claim.
     state.ssoConnection = {
       id: "conn-1",
       organizationId: "org-1",
@@ -112,28 +108,9 @@ describe("resolveIdentityConflict", () => {
         email: "guy@acme.com",
         emailVerified: false,
         federatedProvider: "org-a1b2c3d4e5f6a1b2c3d4e5f6",
-        identityProviders: ["org-a1b2c3d4e5f6a1b2c3d4e5f6"],
-      }),
-    ).resolves.toBe("link");
-  });
-
-  it("finds the SSO provider anywhere in identityProviders (multi-linked token)", async () => {
-    state.ssoConnection = {
-      id: "conn-1",
-      organizationId: "org-1",
-      cognitoProviderName: "org-a1b2c3d4e5f6a1b2c3d4e5f6",
-    };
-    state.verifiedDomain = true;
-    await expect(
-      resolveIdentityConflict(existing, {
-        id: "new-sub",
-        email: "guy@acme.com",
-        emailVerified: false,
-        // identities[0] is NOT the SSO provider — the arm must scan the array
-        federatedProvider: "SomethingElse",
         identityProviders: ["SomethingElse", "org-a1b2c3d4e5f6a1b2c3d4e5f6"],
       }),
-    ).resolves.toBe("link");
+    ).resolves.toBe("reject");
   });
 
   it("rejects an SSO-shaped provider without a verified org domain", async () => {

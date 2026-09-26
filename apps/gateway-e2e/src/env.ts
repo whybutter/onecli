@@ -20,6 +20,8 @@ export interface E2EConfig {
   readonly adminDatabaseUrl: string;
   /** Name of the migrated, frozen database each test clones. */
   readonly templateDb: string;
+  /** Empty when unset — this fork drops Redis/HA, so the gateway falls back
+   *  to its free in-memory stores. */
   readonly redisHost: string;
   readonly redisPort: string;
 }
@@ -34,8 +36,6 @@ const WHY: Readonly<Record<string, string>> = {
   E2E_ADMIN_DATABASE_URL:
     "the maintenance connection used to clone a database per test",
   E2E_TEMPLATE_DB: "the migrated template database each test clones",
-  E2E_REDIS_HOST:
-    "the enterprise lane runs the licensed Redis-backed stores (HA is licensed)",
 };
 
 const resolve = (): E2EConfig | null => {
@@ -43,21 +43,18 @@ const resolve = (): E2EConfig | null => {
   // non-null assertions — the compiler narrows these for us.
   const adminDatabaseUrl = read("E2E_ADMIN_DATABASE_URL");
   const templateDb = read("E2E_TEMPLATE_DB");
-  const redisHost = read("E2E_REDIS_HOST");
+  // Optional: this fork drops Redis/HA (decision 6) — an unset host runs the
+  // suite against the free in-memory stores instead of skipping.
+  const redisHost = read("E2E_REDIS_HOST") ?? "";
 
   const missing = Object.entries({
     E2E_ADMIN_DATABASE_URL: adminDatabaseUrl,
     E2E_TEMPLATE_DB: templateDb,
-    E2E_REDIS_HOST: redisHost,
   })
     .filter(([, value]) => value === undefined)
     .map(([name]) => name);
 
-  if (
-    adminDatabaseUrl === undefined ||
-    templateDb === undefined ||
-    redisHost === undefined
-  ) {
+  if (adminDatabaseUrl === undefined || templateDb === undefined) {
     const first = missing[0] ?? "E2E_ADMIN_DATABASE_URL";
     if (process.env.CI !== undefined) {
       throw new Error(

@@ -1,145 +1,63 @@
-//! Per-agent granular access — cloud-only.
+//! Per-connection resource scoping (GitHub repository lists, Dropbox folder
+//! allowlists) and the pure scope-composition primitives that back it.
 //!
-//! A connection's `session_policy` can restrict what an agent reaches *within* a
-//! provider — specific GitHub repos, specific Dropbox folders, etc. Each
-//! provider enforces this in exactly one of two ways:
+//! Phase 0 posture: `denies_everything` and `intersect_policies` are pure
+//! functions with a complete decision table
+//! (`docs/upstream-sync/v2-migration/phase0-plan.md` Orchestrator vetting
+//! note 2; `gateway-ee-behaviour.md` §1.3-§1.5) — a partial, exact-match-only
+//! version would leave a window where a nested-folder or cross-org boundary
+//! is mis-composed (mis-composing it wider than intended is a
+//! credential-scope leak), so they ship in full.
 //!
-//! * **Token-level** ([`TokenScoper`]) — mint a credential the provider itself
-//!   restricts (e.g. a GitHub repo-scoped installation token). Enforcement is
-//!   upstream and transparent to the request path.
-//! * **Request-level** ([`RequestGuard`]) — inspect each request against the
-//!   policy and allow/deny at the gateway (e.g. a Dropbox folder allowlist).
-//!   Used when the provider's credential cannot be scoped.
-//!
-//! To add a provider: implement the matching trait in a submodule and register
-//! it in `request_guard` (request-level, keyed by the provider serving the
-//! host) or `token_scoper` (token-level, keyed by credential type).
-//!
-//! A third seam, [`ResourceAxis`], is keyed by the policy's own shape rather
-//! than by host or credential type, so scope composition works where neither is
-//! in hand (`policy_engine::inject_select`). It defines what "one resource is
-//! inside another" means per axis, which is what lets an ORG policy act as a
-//! boundary the WORKSPACE selection narrows within.
+//! The per-request/per-mint enforcement seams (`needs_request_body`,
+//! `enforce_request`, `has_request_guard` for Dropbox;  `has_token_scoper`,
+//! `scope_token` for GitHub App) also ship in full here rather than as
+//! DROP stand-ins: the free `proxy::connect`/`proxy::hooks` call sites for
+//! these are NOT gated by `entitled` — they run in every edition today (only
+//! the boundary/selection *composition* in `stamp_resource_scopes` is
+//! entitlement-gated). Two in-crate free tests
+//! (`proxy::connect::deferred_injection_tests::a_resource_scoped_connection_defers_its_credential`,
+//! `…a_request_guarded_provider_keeps_its_credential_under_a_scope`) already
+//! exercise this unconditionally and are part of the `cargo test --workspace`
+//! gate — stubbing these to false/None fails both, and worse, a `false`
+//! `has_request_guard("dropbox")` combined with a real credential mint would
+//! silently serve the stored Dropbox token WITHOUT ever calling
+//! `enforce_request` to check it, which is a real scope leak, not a
+//! conservative default. `gateway-ee-behaviour.md` §1.13 ("Fork relevance")
+//! independently confirms these are meant to KEEP entirely. See
+//! `granular_access::{github, dropbox}` for the implementations.
+
+use std::collections::BTreeSet;
+
+use serde_json::Value;
 
 mod dropbox;
 mod github;
 
-use serde_json::Value;
-use tracing::warn;
-
-/// A blocked request, surfaced to the agent and the activity feed.
+/// Why a request/credential was denied. Read by `proxy::hooks` to build the
+/// agent-facing `resource_access_denied` response.
 #[derive(Debug)]
 pub struct Denial {
-    /// Specific cause, e.g. "path outside allowed folders: /Finance/secret".
     pub reason: String,
-    /// The scope the agent *is* allowed (e.g. the folder allowlist), included
-    /// in the agent-facing error so the model can self-correct.
     pub allowed: Vec<String>,
-    /// Stable label for telemetry / the red "Blocked" activity row.
     pub rule_name: &'static str,
 }
 
-/// Request-level enforcement: pure, synchronous request inspection (no I/O).
-pub trait RequestGuard: Sync {
-    /// Whether the JSON request body must be buffered to evaluate this request.
-    fn needs_body(&self, policy: &Value, host: &str, method: &str, path: &str) -> bool;
-    /// `Some(Denial)` blocks the request; `None` allows it.
-    fn check(
-        &self,
-        policy: &Value,
-        host: &str,
-        path: &str,
-        headers: &hyper::HeaderMap,
-        body: Option<&[u8]>,
-    ) -> Option<Denial>;
-}
-
-/// Token-level enforcement: mint a scoped credential at refresh time.
-#[async_trait::async_trait]
-pub trait TokenScoper: Sync {
-    /// Mint a scoped credential for `policy`. `None` means the policy requests
-    /// no scoping, so the caller falls through to the normal (unscoped) refresh.
-    async fn scope(&self, creds: &Value, policy: &Value) -> Option<anyhow::Result<(String, i64)>>;
-}
-
-/// One resource dimension of a session policy (`repositories`, `folders`, …):
-/// how its entries are named and when one contains another. Scope composition
-/// is defined here so every provider — present and future — inherits it.
-pub trait ResourceAxis: Sync {
-    /// The policy object's single key.
-    fn key(&self) -> &'static str;
-
-    /// Whether `entry` is entirely inside `boundary` — equality for flat axes
-    /// (repository names), containment for hierarchical ones (folder paths).
-    fn covered_by(&self, entry: &str, boundary: &[String]) -> bool;
-
-    /// Canonical form for comparison and for the stable serialization below.
-    fn normalize(&self, entry: &str) -> String;
-
-    /// The overlap of two allowlists on this axis.
-    ///
-    /// SYMMETRIC by construction: an entry survives when it is inside the other
-    /// side, whichever side it came from — so a boundary of `/clients/acme`
-    /// against a selection of `/clients` yields `/clients/acme` (the narrower
-    /// of the nested pair) rather than nothing. Taking only "selection entries
-    /// inside the boundary" would deny-all that case, which is a real overlap.
-    fn intersect(&self, a: &[String], b: &[String]) -> Vec<String> {
-        let mut out: Vec<String> = a
-            .iter()
-            .filter(|entry| self.covered_by(entry, b))
-            .chain(b.iter().filter(|entry| self.covered_by(entry, a)))
-            .map(|entry| self.normalize(entry))
-            .collect();
-        // Deterministic: the merged policy is part of the injection cache key,
-        // so an unstable order would multiply cache misses.
-        out.sort();
-        out.dedup();
-        out
+/// Whether the request-level guard needs the buffered request body to reach
+/// a decision. Only Dropbox registers a request guard.
+#[must_use]
+pub fn needs_request_body(policy: Option<&Value>, host: &str, _method: &str, _path: &str) -> bool {
+    let host = common::util::strip_port(host).to_lowercase();
+    match apps::provider_for_host(&host) {
+        Some((provider, _)) if provider == dropbox::PROVIDER => dropbox::needs_body(policy, &host),
+        _ => false,
     }
 }
 
-static DROPBOX: dropbox::Dropbox = dropbox::Dropbox;
-static GITHUB: github::GithubApp = github::GithubApp;
-static AXES: &[&'static dyn ResourceAxis] = &[&GITHUB, &DROPBOX];
-
-/// Request-level guard for a provider (resolved from the request host), if it
-/// enforces granular access that way.
-fn request_guard(provider: &str) -> Option<&'static dyn RequestGuard> {
-    match provider {
-        "dropbox" => Some(&DROPBOX),
-        _ => None,
-    }
-}
-
-/// Token-level scoper for a credential type (the refresh call site), if it
-/// enforces granular access that way.
-fn token_scoper(cred_type: &str) -> Option<&'static dyn TokenScoper> {
-    match cred_type {
-        "github_app" => Some(&GITHUB),
-        _ => None,
-    }
-}
-
-/// Resolve the request-level guard for the provider serving `host`. Returns the
-/// port-stripped host (which the guards compare against) alongside the guard.
-fn guard_for_host(host: &str) -> Option<(&str, &'static dyn RequestGuard)> {
-    let host = common::util::strip_port(host);
-    let (provider, _) = apps::provider_for_host(host)?;
-    Some((host, request_guard(provider)?))
-}
-
-/// Whether the request body must be buffered for request-level enforcement.
-/// `false` when there's no policy or the provider has no request-level guard.
-pub fn needs_request_body(policy: Option<&Value>, host: &str, method: &str, path: &str) -> bool {
-    let Some(policy) = policy else { return false };
-    let Some((host, guard)) = guard_for_host(host) else {
-        return false;
-    };
-    guard.needs_body(policy, host, method, path)
-}
-
-/// Enforce request-level granular access. `None` = allowed (no policy, no
-/// request-level guard for this provider, or the request is in scope).
+/// Request-level enforcement. Only Dropbox registers a request guard; every
+/// other provider passes through (either it has no scope concept, or it is
+/// enforced at token-mint time instead — see `has_token_scoper`/`scope_token`).
+#[must_use]
 pub fn enforce_request(
     policy: Option<&Value>,
     host: &str,
@@ -147,272 +65,491 @@ pub fn enforce_request(
     headers: &hyper::HeaderMap,
     body: Option<&[u8]>,
 ) -> Option<Denial> {
-    let policy = policy?;
-    let (host, guard) = guard_for_host(host)?;
-    guard.check(policy, host, path, headers, body)
+    let host = common::util::strip_port(host).to_lowercase();
+    match apps::provider_for_host(&host) {
+        Some((provider, _)) if provider == dropbox::PROVIDER => {
+            dropbox::enforce(policy, &host, path, headers, body)
+        }
+        _ => None,
+    }
 }
 
-/// The axis a policy is written on, by its single key. `None` = not a
-/// recognized resource policy (absent, `{}`, behavioral array, unknown key).
-fn axis_of(policy: &Value) -> Option<&'static dyn ResourceAxis> {
+/// The two resource-policy axes this build recognises, in priority order
+/// (also the tie-break order `denies_everything`/`intersect_policies` use
+/// when a policy object happens to carry more than one).
+///
+/// The two functions below deliberately use this list differently:
+/// `denies_everything` checks EVERY recognised axis key present and denies if
+/// ANY of them is an explicitly empty array, while `axis_of` (used by
+/// `intersect_policies`) picks only the FIRST recognised key it finds and
+/// ignores the rest. So a policy naming more than one axis, e.g.
+/// `{"repositories": ["org/a"], "folders": []}`, is refused at connect time
+/// (the empty `folders` array denies everything) even though `intersect_policies`
+/// would only ever have looked at the `repositories` entry — conservative by
+/// design: `denies_everything` runs first on the request path
+/// (`hooks::refuse_empty_scope`), so `axis_of`'s narrower view never gets a
+/// chance to be the more permissive final word.
+const AXES: [&str; 2] = ["repositories", "folders"];
+
+/// Whether `policy` is a recognised resource policy, and if so, its axis key
+/// and the RAW (un-normalized) JSON value at that key.
+///
+/// "Not a resource policy" = JSON null, non-object, empty object, or an
+/// object without a recognised key (`gateway-ee-behaviour.md` §1.4) — every
+/// one of those makes `.as_object()` fail or `AXES.iter().find` come up
+/// empty, so a single early-return covers all four.
+fn axis_of(policy: &Value) -> Option<(&'static str, &Value)> {
     let obj = policy.as_object()?;
     AXES.iter()
-        .copied()
-        .find(|axis| obj.contains_key(axis.key()))
+        .find_map(|axis| obj.get(*axis).map(|v| (*axis, v)))
 }
 
-/// The raw (un-normalized, unfiltered) entry list a policy carries on its axis.
-/// Raw on purpose: normalization drops entries like `"/"`, and a policy that
-/// listed only those still means "restrict", not "unrestricted".
-fn raw_entries<'a>(policy: &'a Value, axis: &dyn ResourceAxis) -> Option<Vec<&'a str>> {
-    Some(
-        policy
-            .get(axis.key())?
-            .as_array()?
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect(),
-    )
+/// The string entries of a JSON value, or an empty list if the value isn't an
+/// array. Non-string array entries are dropped, not errored on — "raw entries
+/// that are not strings are ignored" (`gateway-ee-behaviour.md` §1.4).
+fn string_entries(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
-/// Whether a policy restricts its credential to NOTHING — an explicitly empty
-/// allowlist. It is the sentinel for an empty scope intersection, and it is
-/// also how a hand-written `{"repositories": []}` is refused: without it, an
-/// empty list reads as "no scoping requested" and mints an UNSCOPED credential.
+/// Normalize one axis entry: lowercase for both axes; `folders` additionally
+/// strips one trailing slash (so the account root `"/"` normalizes to the
+/// empty string, the sentinel for "boundary covers everything").
+fn normalize_entry(axis: &str, entry: &str) -> String {
+    let lower = entry.to_ascii_lowercase();
+    if axis == "folders" {
+        lower.strip_suffix('/').map(str::to_string).unwrap_or(lower)
+    } else {
+        lower
+    }
+}
+
+/// Whether a normalized `entry` is within `boundary` (a normalized entry
+/// list) for `axis`.
+///
+/// `repositories`: exact match only — names never nest (`org/a` is not
+/// inside `org/a-extra`, `org` is not inside `org/a`).
+/// `folders`: a boundary entry that normalized to the root (empty string)
+/// covers everything; otherwise `entry` must equal a boundary entry or sit
+/// under it at a segment boundary (`entry == b || entry.starts_with(b + "/")`)
+/// — matching the Dropbox `path_allowed` rule so a name doesn't accidentally
+/// match a same-prefixed sibling (`/marketing` does not admit
+/// `/marketing-2024/x`). The empty entry itself (root as a *target*) is never
+/// "covered" by a non-root boundary.
+fn covered_by(axis: &str, entry: &str, boundary: &[String]) -> bool {
+    match axis {
+        "folders" => {
+            if boundary.iter().any(|b| b.is_empty()) {
+                return true;
+            }
+            !entry.is_empty()
+                && boundary
+                    .iter()
+                    .any(|b| entry == b || entry.starts_with(&format!("{b}/")))
+        }
+        // "repositories", and any future axis this build doesn't specially
+        // recognise: exact match after normalization.
+        _ => boundary.iter().any(|b| b == entry),
+    }
+}
+
+/// Symmetric intersection of two RAW entry lists on `axis`: normalize both,
+/// then keep every entry of either side that the OTHER side's (normalized)
+/// list covers. Sorted + deduped (a `BTreeSet` gives us both for free) —
+/// load-bearing, since the composed policy is part of an injection cache key.
+fn intersect_axis(axis: &str, a: &[String], b: &[String]) -> Vec<String> {
+    let na: Vec<String> = a.iter().map(|e| normalize_entry(axis, e)).collect();
+    let nb: Vec<String> = b.iter().map(|e| normalize_entry(axis, e)).collect();
+
+    let mut result: BTreeSet<String> = BTreeSet::new();
+    for e in &na {
+        if covered_by(axis, e, &nb) {
+            result.insert(e.clone());
+        }
+    }
+    for e in &nb {
+        if covered_by(axis, e, &na) {
+            result.insert(e.clone());
+        }
+    }
+    result.into_iter().collect()
+}
+
+/// True iff `policy` explicitly denies every request: an object whose
+/// recognised axis key (`repositories` or `folders`) holds an EMPTY array.
+///
+/// Reads RAW entries, deliberately not normalized ones: `{"folders": ["/"]}`
+/// must read as false (root is the widest scope, not deny-all) even though
+/// normalization would otherwise reduce `"/"` to the same empty-string
+/// sentinel this function is checking arrays *length* against — normalizing
+/// first would conflate "one entry that happens to mean everything" with
+/// "zero entries, meaning nothing" (`gateway-ee-behaviour.md` §1.5).
+#[must_use]
 pub fn denies_everything(policy: Option<&Value>) -> bool {
-    let Some(policy) = policy else { return false };
-    let Some(axis) = axis_of(policy) else {
+    let Some(policy) = policy else {
         return false;
     };
-    raw_entries(policy, axis).is_some_and(|entries| entries.is_empty())
+    let Some(obj) = policy.as_object() else {
+        return false;
+    };
+    AXES.iter().any(|axis| {
+        obj.get(*axis)
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+    })
 }
 
-/// Compose two session policies into the one the gateway enforces: the overlap
-/// of what each allows. `None` on either side means "unrestricted at that
-/// scope", so the other side stands alone.
+/// Compose an ORG resource boundary with a WORKSPACE selection (or fold
+/// multiple boundaries together) into the effective scope a credential may
+/// reach. See `gateway-ee-behaviour.md` §1.4 for the full decision table;
+/// summary:
 ///
-/// An ORG policy is a boundary and a WORKSPACE policy a selection within it, but
-/// the operation itself is symmetric — order is irrelevant, and composing three
-/// scopes is just two applications.
+/// - Both sides absent-or-not-a-resource-policy → `None`.
+/// - Exactly one side is present (`None`, or present but not a recognised
+///   resource policy) → the OTHER side, cloned verbatim, un-normalized.
+/// - Both sides are resource policies on the SAME axis → the axis'
+///   symmetric, normalized, sorted+deduped intersection (may be `{axis: []}`,
+///   the deny-all sentinel).
+/// - Both sides are resource policies on DIFFERENT axes → deny-all on the
+///   FIRST argument's axis (`{axis_of(a): []}`), with a warning — an
+///   axis mismatch means the two grants can never agree on what "in scope"
+///   means, so the safe reading is "nothing is".
+#[must_use]
 pub fn intersect_policies(a: Option<&Value>, b: Option<&Value>) -> Option<Value> {
-    let (Some(a), Some(b)) = (a, b) else {
-        return a.or(b).cloned();
-    };
-    let (Some(axis_a), Some(axis_b)) = (axis_of(a), axis_of(b)) else {
-        // One side isn't a resource policy (jsonb null, a behavioral array, an
-        // empty object): it restricts nothing, so the other side stands.
-        return match (axis_of(a), axis_of(b)) {
-            (Some(_), None) => Some(a.clone()),
-            (None, Some(_)) => Some(b.clone()),
-            _ => None,
-        };
-    };
-    if axis_a.key() != axis_b.key() {
-        // Different dimensions can't overlap (one provider, one axis) — a
-        // misconfiguration, and the safe reading is "nothing is in both".
-        warn!(
-            axis_a = axis_a.key(),
-            axis_b = axis_b.key(),
-            "session policies on different resource axes; denying all access"
-        );
-        return Some(serde_json::json!({ axis_a.key(): [] }));
+    match (a, b) {
+        (None, None) => None,
+        (Some(x), None) => Some(x.clone()),
+        (None, Some(y)) => Some(y.clone()),
+        (Some(x), Some(y)) => match (axis_of(x), axis_of(y)) {
+            (None, None) => None,
+            (Some(_), None) => Some(x.clone()),
+            (None, Some(_)) => Some(y.clone()),
+            (Some((axis_a, val_a)), Some((axis_b, val_b))) => {
+                if axis_a == axis_b {
+                    let entries =
+                        intersect_axis(axis_a, &string_entries(val_a), &string_entries(val_b));
+                    Some(serde_json::json!({ axis_a: entries }))
+                } else {
+                    tracing::warn!(
+                        axis_a,
+                        axis_b,
+                        "intersecting resource policies on mismatched axes; denying all access on the first policy's axis"
+                    );
+                    Some(serde_json::json!({ axis_a: Vec::<String>::new() }))
+                }
+            }
+        },
     }
-    let entries_a: Vec<String> = raw_entries(a, axis_a)
-        .unwrap_or_default()
-        .iter()
-        .map(|e| axis_a.normalize(e))
-        .collect();
-    let entries_b: Vec<String> = raw_entries(b, axis_b)
-        .unwrap_or_default()
-        .iter()
-        .map(|e| axis_b.normalize(e))
-        .collect();
-    Some(serde_json::json!({ axis_a.key(): axis_a.intersect(&entries_a, &entries_b) }))
 }
 
-/// Whether a provider enforces its resource scope by inspecting each REQUEST
-/// (rather than by carrying the scope in the credential). Where it does, the
-/// plain stored credential is the correct one and the guard does the limiting.
+/// Whether `provider` registers a request-level guard. Only Dropbox does —
+/// `proxy::connect` reads this to decide whether a scoped-but-unminted
+/// credential may still be served (because something else will enforce the
+/// scope per request) or must be withheld outright.
+#[must_use]
 pub fn has_request_guard(provider: &str) -> bool {
-    request_guard(provider).is_some()
+    provider == dropbox::PROVIDER
 }
 
-/// Whether a credential type is scoped at the TOKEN level — i.e. a restrictive
-/// policy makes each request mint a fresh, never-persisted credential from the
-/// provider. Callers use this to defer that mint until the request is allowed.
+/// Whether `cred_type` registers a token-level scoper. Only GitHub App does.
+#[must_use]
 pub fn has_token_scoper(cred_type: &str) -> bool {
-    token_scoper(cred_type).is_some()
+    github::has_scoper(cred_type)
 }
 
-/// Mint a scoped credential for token-level providers. `None` = no granular
-/// scoping applies; the caller should fall through to the normal refresh.
+/// Attempt a scoped token mint for a credential type that registers a
+/// scoper. `None` for every other credential type — the caller falls through
+/// to the ordinary, unscoped credential refresh.
 pub async fn scope_token(
     cred_type: &str,
     creds: &Value,
     policy: Option<&Value>,
 ) -> Option<anyhow::Result<(String, i64)>> {
-    let policy = policy?;
-    let scoper = token_scoper(cred_type)?;
-    scoper.scope(creds, policy).await
+    if github::has_scoper(cred_type) {
+        github::scope(creds, policy).await
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{denies_everything, enforce_request, intersect_policies, needs_request_body};
+    use super::*;
     use serde_json::json;
 
-    fn folder_policy() -> serde_json::Value {
-        serde_json::json!({ "folders": ["/Marketing"] })
-    }
+    // ── denies_everything — gateway-ee-behaviour.md §1.5 ────────────────
 
     #[test]
-    fn denies_everything_is_true_only_for_an_explicitly_empty_allowlist() {
-        assert!(denies_everything(Some(&json!({ "repositories": [] }))));
-        assert!(denies_everything(Some(&json!({ "folders": [] }))));
-        assert!(!denies_everything(Some(
-            &json!({ "repositories": ["org/a"] })
-        )));
-        // A root folder is the WIDEST scope, not an empty one — the check must
-        // read the raw entries, because normalization drops "/".
-        assert!(!denies_everything(Some(&json!({ "folders": ["/"] }))));
-        // Absent / null / empty-object / behavioral: not a restriction at all.
+    fn denies_everything_none_is_false() {
         assert!(!denies_everything(None));
+    }
+
+    #[test]
+    fn denies_everything_null_is_false() {
         assert!(!denies_everything(Some(&json!(null))));
+    }
+
+    #[test]
+    fn denies_everything_empty_object_is_false() {
         assert!(!denies_everything(Some(&json!({}))));
-        assert!(!denies_everything(Some(&json!([
-            { "type": "body_contains", "value": "x" }
-        ]))));
     }
 
     #[test]
-    fn intersect_policies_composes_scopes() {
-        // The reported case: org boundary of two repos, workspace picks one.
-        assert_eq!(
-            intersect_policies(
-                Some(&json!({ "repositories": ["buckle/electron", "buckle/api"] })),
-                Some(&json!({ "repositories": ["buckle/api"] })),
-            ),
-            Some(json!({ "repositories": ["buckle/api"] }))
-        );
-        // Either side absent → the other stands alone.
-        let solo = json!({ "folders": ["/clients"] });
-        assert_eq!(intersect_policies(Some(&solo), None), Some(solo.clone()));
-        assert_eq!(intersect_policies(None, Some(&solo)), Some(solo.clone()));
+    fn denies_everything_behavioural_array_is_false() {
+        assert!(!denies_everything(Some(&json!(["some_condition"]))));
+    }
+
+    #[test]
+    fn denies_everything_unknown_key_is_false() {
+        assert!(!denies_everything(Some(&json!({"unknown": []}))));
+    }
+
+    #[test]
+    fn denies_everything_empty_repositories_is_true() {
+        assert!(denies_everything(Some(&json!({"repositories": []}))));
+    }
+
+    #[test]
+    fn denies_everything_empty_folders_is_true() {
+        assert!(denies_everything(Some(&json!({"folders": []}))));
+    }
+
+    #[test]
+    fn denies_everything_nonempty_repositories_is_false() {
+        assert!(!denies_everything(Some(
+            &json!({"repositories": ["org/a"]})
+        )));
+    }
+
+    #[test]
+    fn denies_everything_root_folder_is_false() {
+        // Root is the widest scope, not deny-all — read from the RAW (non-empty)
+        // array, not the normalized (empty-string) entry.
+        assert!(!denies_everything(Some(&json!({"folders": ["/"]}))));
+    }
+
+    #[test]
+    fn denies_everything_non_array_value_is_false() {
+        assert!(!denies_everything(Some(
+            &json!({"repositories": "not-an-array"})
+        )));
+    }
+
+    // ── intersect_policies — gateway-ee-behaviour.md §1.4 ───────────────
+
+    #[test]
+    fn intersect_both_none_is_none() {
         assert_eq!(intersect_policies(None, None), None);
-        // Non-policy shapes restrict nothing.
+    }
+
+    #[test]
+    fn intersect_some_and_none_clones_the_some_side_unnormalized() {
+        let policy = json!({"repositories": ["Org/A", "org/a"]});
         assert_eq!(
-            intersect_policies(Some(&json!({})), Some(&solo)),
-            Some(solo.clone())
+            intersect_policies(Some(&policy), None),
+            Some(policy.clone())
+        );
+        assert_eq!(intersect_policies(None, Some(&policy)), Some(policy));
+    }
+
+    #[test]
+    fn intersect_not_a_resource_policy_and_none_clones_verbatim() {
+        let garbage = json!(["a_condition"]);
+        assert_eq!(
+            intersect_policies(Some(&garbage), None),
+            Some(garbage.clone())
+        );
+        assert_eq!(intersect_policies(None, Some(&garbage)), Some(garbage));
+    }
+
+    #[test]
+    fn intersect_one_resource_one_not_keeps_the_resource_side() {
+        let resource = json!({"repositories": ["org/a"]});
+        let garbage = json!({});
+        assert_eq!(
+            intersect_policies(Some(&resource), Some(&garbage)),
+            Some(resource.clone())
         );
         assert_eq!(
-            intersect_policies(Some(&json!([{ "type": "body_contains" }])), Some(&solo)),
-            Some(solo)
+            intersect_policies(Some(&garbage), Some(&resource)),
+            Some(resource)
         );
-        // Disjoint → the deny-all sentinel.
-        let disjoint = intersect_policies(
-            Some(&json!({ "repositories": ["org/a"] })),
-            Some(&json!({ "repositories": ["org/z"] })),
-        );
-        assert_eq!(disjoint, Some(json!({ "repositories": [] })));
-        assert!(denies_everything(disjoint.as_ref()));
-        // Mismatched axes cannot overlap → deny-all, on the first axis.
-        let mismatch = intersect_policies(
-            Some(&json!({ "repositories": ["org/a"] })),
-            Some(&json!({ "folders": ["/x"] })),
-        );
-        assert!(denies_everything(mismatch.as_ref()));
-        // Output is sorted + deduped (it feeds the injection cache key).
+    }
+
+    #[test]
+    fn intersect_both_not_a_resource_policy_is_none() {
         assert_eq!(
-            intersect_policies(
-                Some(&json!({ "repositories": ["org/b", "org/a", "ORG/A"] })),
-                Some(&json!({ "repositories": ["org/a", "org/b"] })),
-            ),
-            Some(json!({ "repositories": ["org/a", "org/b"] }))
+            intersect_policies(Some(&json!({})), Some(&json!(null))),
+            None
         );
     }
 
     #[test]
-    fn enforce_request_dispatches_to_dropbox_guard() {
-        let policy = folder_policy();
-        let headers = hyper::HeaderMap::new();
-        // In-scope path → allowed.
-        assert!(enforce_request(
-            Some(&policy),
-            "api.dropboxapi.com",
-            "/2/files/get_metadata",
-            &headers,
-            Some(br#"{"path":"/Marketing/x"}"#),
-        )
-        .is_none());
-        // Out-of-scope path → blocked, with the provider's rule label.
-        let denial = enforce_request(
-            Some(&policy),
-            "api.dropboxapi.com",
-            "/2/files/get_metadata",
-            &headers,
-            Some(br#"{"path":"/Finance/x"}"#),
-        )
-        .expect("out-of-scope path must be denied");
-        assert_eq!(denial.rule_name, "Dropbox folder policy");
-        assert_eq!(denial.allowed, vec!["/marketing".to_string()]);
+    fn intersect_pinned_repositories_example() {
+        let a = json!({"repositories": ["buckle/electron", "buckle/api"]});
+        let b = json!({"repositories": ["buckle/api"]});
+        assert_eq!(
+            intersect_policies(Some(&a), Some(&b)),
+            Some(json!({"repositories": ["buckle/api"]}))
+        );
     }
 
     #[test]
-    fn enforce_request_ignores_providers_without_a_request_guard() {
-        // GitHub enforces at the token level, so there is no request-level guard
-        // and the gateway never blocks its requests here.
-        let policy = serde_json::json!({ "repositories": ["org/a"] });
-        assert!(enforce_request(
-            Some(&policy),
-            "api.github.com",
-            "/repos/org/a/contents/x",
-            &hyper::HeaderMap::new(),
-            None,
-        )
-        .is_none());
+    fn intersect_pinned_case_insensitive_dedup_example() {
+        let a = json!({"repositories": ["org/b", "org/a", "ORG/A"]});
+        let b = json!({"repositories": ["org/a", "org/b"]});
+        assert_eq!(
+            intersect_policies(Some(&a), Some(&b)),
+            Some(json!({"repositories": ["org/a", "org/b"]}))
+        );
     }
 
     #[test]
-    fn enforce_request_allows_when_no_policy() {
-        assert!(enforce_request(
-            None,
-            "api.dropboxapi.com",
-            "/2/files/get_metadata",
-            &hyper::HeaderMap::new(),
-            Some(br#"{"path":"/Finance/x"}"#),
-        )
-        .is_none());
+    fn intersect_folders_symmetric_containment_either_side() {
+        let parent = json!({"folders": ["/clients"]});
+        let child = json!({"folders": ["/clients/acme"]});
+        assert_eq!(
+            intersect_policies(Some(&parent), Some(&child)),
+            Some(json!({"folders": ["/clients/acme"]}))
+        );
+        assert_eq!(
+            intersect_policies(Some(&child), Some(&parent)),
+            Some(json!({"folders": ["/clients/acme"]}))
+        );
     }
 
     #[test]
-    fn needs_request_body_only_for_dropbox_rpc_host_with_policy() {
-        let policy = folder_policy();
-        // RPC host carries the path in the body → buffer it.
-        assert!(needs_request_body(
-            Some(&policy),
-            "api.dropboxapi.com",
-            "POST",
-            "/2/files/get_metadata"
-        ));
-        // Content host carries the path in a header → no buffering.
+    fn intersect_root_boundary_is_widest_scope() {
+        let root = json!({"folders": ["/"]});
+        let scoped = json!({"folders": ["/clients"]});
+        assert_eq!(
+            intersect_policies(Some(&root), Some(&scoped)),
+            Some(json!({"folders": ["/clients"]}))
+        );
+    }
+
+    #[test]
+    fn intersect_root_with_root_yields_empty_string_entry_not_deny_all() {
+        // `[/] ∩ [/]` normalizes both sides to the empty-string root sentinel
+        // and returns it unchanged: `{"folders": [""]}`. This is NOT the
+        // deny-all shape (`{"folders": []}`, an empty ARRAY containing zero
+        // entries) — it is a one-entry array whose entry happens to be the
+        // empty string. Downstream, `granular_access::dropbox::allowed_folders`
+        // treats a folders list made only of the root sentinel as "no
+        // restriction", exactly like a raw `["/"]` input. Do NOT "simplify"
+        // this result to `[]` — that would silently turn an unrestricted
+        // root-boundary intersection into deny-all.
+        let root = json!({"folders": ["/"]});
+        assert_eq!(
+            intersect_policies(Some(&root), Some(&root)),
+            Some(json!({"folders": [""]}))
+        );
+    }
+
+    #[test]
+    fn intersect_non_array_axis_value_and_none_clones_verbatim() {
+        // The "folders" key is present but its value isn't an array — axis_of
+        // still recognises the key, but against `None` neither side's
+        // array-ness matters: the whole (Some, None) branch returns the Some
+        // side cloned, untouched, before axis_of/string_entries ever run.
+        let garbage = json!({"folders": "x"});
+        assert_eq!(
+            intersect_policies(Some(&garbage), None),
+            Some(garbage.clone())
+        );
+        assert_eq!(intersect_policies(None, Some(&garbage)), Some(garbage));
+    }
+
+    #[test]
+    fn intersect_sibling_folders_deny_all() {
+        let a = json!({"folders": ["/marketing"]});
+        let b = json!({"folders": ["/sales"]});
+        assert_eq!(
+            intersect_policies(Some(&a), Some(&b)),
+            Some(json!({"folders": []}))
+        );
+    }
+
+    #[test]
+    fn intersect_prefix_sibling_is_not_contained() {
+        // `/marketing` must not admit `/marketing-2024` — segment boundary,
+        // not string-prefix.
+        let a = json!({"folders": ["/marketing"]});
+        let b = json!({"folders": ["/marketing-2024/x"]});
+        assert_eq!(
+            intersect_policies(Some(&a), Some(&b)),
+            Some(json!({"folders": []}))
+        );
+    }
+
+    #[test]
+    fn intersect_mismatched_axes_denies_on_the_first_argument_axis() {
+        let repos = json!({"repositories": ["org/a"]});
+        let folders = json!({"folders": ["/clients"]});
+        assert_eq!(
+            intersect_policies(Some(&repos), Some(&folders)),
+            Some(json!({"repositories": []}))
+        );
+        // Order matters: the deny-all sentinel lands on whichever axis came
+        // first (the `a` argument), per the decision table.
+        assert_eq!(
+            intersect_policies(Some(&folders), Some(&repos)),
+            Some(json!({"folders": []}))
+        );
+    }
+
+    #[test]
+    fn intersect_non_array_axis_value_yields_empty_entry_list() {
+        let a = json!({"repositories": "not-an-array"});
+        let b = json!({"repositories": ["org/a"]});
+        assert_eq!(
+            intersect_policies(Some(&a), Some(&b)),
+            Some(json!({"repositories": []}))
+        );
+    }
+
+    #[test]
+    fn intersect_non_string_entries_are_ignored() {
+        let a = json!({"repositories": ["org/a", 42, null]});
+        let b = json!({"repositories": ["org/a"]});
+        assert_eq!(
+            intersect_policies(Some(&a), Some(&b)),
+            Some(json!({"repositories": ["org/a"]}))
+        );
+    }
+
+    // ── has_request_guard / has_token_scoper dispatch ───────────────────
+    // Per-provider mechanics live in the `dropbox`/`github` submodules; these
+    // just confirm the dispatch keys on the right identifier (provider name
+    // for the request guard, credential-payload type for the token scoper).
+
+    #[test]
+    fn has_request_guard_is_dropbox_only() {
+        assert!(has_request_guard("dropbox"));
+        assert!(!has_request_guard("github-app"));
+        assert!(!has_request_guard("gmail"));
+    }
+
+    #[test]
+    fn has_token_scoper_is_github_app_only() {
+        assert!(has_token_scoper("github_app"));
+        assert!(!has_token_scoper("dropbox"));
+    }
+
+    #[test]
+    fn needs_request_body_is_false_off_the_dropbox_api_host() {
         assert!(!needs_request_body(
-            Some(&policy),
-            "content.dropboxapi.com",
-            "POST",
-            "/2/files/upload"
-        ));
-        // No policy, or a provider without a request guard → no buffering.
-        assert!(!needs_request_body(
-            None,
-            "api.dropboxapi.com",
-            "POST",
-            "/2/files/get_metadata"
-        ));
-        assert!(!needs_request_body(
-            Some(&policy),
-            "api.github.com",
+            Some(&json!({"folders": ["/clients"]})),
+            "gmail.googleapis.com",
             "GET",
-            "/repos/org/a"
+            "/p"
         ));
     }
 }

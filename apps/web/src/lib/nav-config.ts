@@ -6,7 +6,6 @@ import {
   CreditCard,
   Settings,
   Building2,
-  Fingerprint,
   Globe,
   KeyRound,
   MessagesSquare,
@@ -199,14 +198,8 @@ export const getSettingsSections = (orgId?: string): SettingsNavSection[] => {
       items: [
         { title: "General", url: `${p}/settings/general`, icon: Building2 },
         { title: "Domains", url: `${p}/settings/domains`, icon: Globe },
-        {
-          title: "Single sign-on",
-          url: `${p}/settings/sso`,
-          icon: Fingerprint,
-        },
-        // Enterprise, like Single sign-on above: listed unconditionally and
-        // gated by the page itself, which renders the licensed card when the
-        // deployment is not entitled.
+        // Deferred to a later phase; the page itself renders a placeholder
+        // until it ships (there is no license dial left to gate on).
         {
           title: "App Availability",
           url: `${p}/settings/app-availability`,

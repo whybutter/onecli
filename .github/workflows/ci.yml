@@ -7,12 +7,10 @@ name: CI
 #
 # The test topology is deliberate: many fast UNIT checks (pure logic plus
 # integration-grade suites against throwaway Postgres containers) and exactly
-# ONE end-to-end check, which runs the ENTERPRISE edition — an entitled
-# self-host (EDITION=onprem + ENTERPRISE_ENABLED=true) with the licensed
-# Redis-backed HA stores and real Postgres. Cloud-only wire behavior keeps a
-# thin per-test cloud arm inside that same check (see
-# apps/gateway-e2e/README.md); the TS↔Rust KMS envelope contract is pinned at
-# unit level on both sides (kms-crypto.contract.test.ts / kms_crypto.rs).
+# ONE end-to-end check, which runs the onprem edition (self-host is always
+# entitled — no more ENTERPRISE_ENABLED flag or licensed/unlicensed split)
+# against real Postgres and the gateway's free in-memory stores (see
+# apps/gateway-e2e/README.md).
 
 on:
   pull_request:
@@ -137,11 +135,6 @@ jobs:
         env:
           DATABASE_URL: postgresql://ci:ci@localhost:5440/onecli
 
-      # Includes the licensing/enterprise-lock suites: @onecli/api's `test`
-      # script runs the whole package (src/licensing included), so the
-      # `pnpm --filter @onecli/api test:licensing` subset needs no step of its
-      # own — it runs here and again in the onprem lane below.
-      #
       # `--filter` makes this a PNPM recursive run (not turbo). Its default
       # workspace-concurrency (4) runs 4 vitest processes × up to 4 worker
       # forks each on ubuntu-latest's 4 vCPUs — an oversubscription that has
@@ -161,7 +154,7 @@ jobs:
       # The suites stub the edition per file, but module-LOAD reads resolve from
       # the ambient env (NEXT_PUBLIC_EDITION=cloud job-wide) — re-run the API
       # package with the edition unset so the onprem default path (the edition
-      # self-hosters actually run, EE lock suite included) stays proven.
+      # self-hosters actually run) stays proven.
       - name: Test (onprem default lane)
         run: env -u EDITION -u NEXT_PUBLIC_EDITION pnpm --filter @onecli/api test
         env:
@@ -225,9 +218,9 @@ jobs:
         run: pnpm --filter @onecli/gateway lint
 
       # The workspace-key usage recheck (db.rs `user_can_manage_workspace`) and
-      # its licensed peers are exercised by DB integration tests that need a
-      # real Postgres. Integration-grade, but a UNIT concern: in-crate cargo
-      # tests against a throwaway database — not the E2E lane.
+      # its peers are exercised by DB integration tests that need a real
+      # Postgres. Integration-grade, but a UNIT concern: in-crate cargo tests
+      # against a throwaway database — not the E2E lane.
       - name: Start Postgres for gateway DB tests
         if: steps.changes.outputs.rust == 'true'
         run: |
@@ -260,21 +253,20 @@ jobs:
         env:
           GATEWAY_TEST_DATABASE_URL: postgresql://ci:ci@localhost:5434/onecli
 
-  # ── The ONE end-to-end check: the enterprise edition, real Postgres ────────
+  # ── The ONE end-to-end check: onprem edition, real Postgres ────────────────
   #
-  # Both black-box suites in one job against one Postgres and one Redis:
-  # gateway-e2e (the proxy wire surface — spawns the real binary per test) and
-  # hosted-e2e (the hosted-agents spine — real api-server child, real runner,
-  # real sandbox containers from the agent image). The default spawn env for
-  # every child is the enterprise edition; the unlicensed and cloud arms live
-  # INSIDE the suites as per-test env overrides, so this single check covers
-  # entitled, unlicensed, and cloud wire behavior without a second lane.
+  # Both black-box suites in one job against one Postgres: gateway-e2e (the
+  # proxy wire surface — spawns the real binary per test) and hosted-e2e (the
+  # hosted-agents spine — real api-server child, real runner, real sandbox
+  # containers from the agent image). The default spawn env for every child
+  # is the onprem edition — self-host is always entitled, so there is no
+  # separate unlicensed lane to cover here.
   #
   # Path-filtered — it is the most expensive check in this file — and
   # explicitly timed out (a hung container wait must never ride the 6-hour
   # default).
   e2e:
-    name: E2E (enterprise)
+    name: E2E
     runs-on: ubuntu-latest
     # Covers the cold path (no seeded cache — the gateway compile dominates);
     # warm runs land well under half of this. A timeout kill must stay
@@ -353,16 +345,17 @@ jobs:
           cache-to: type=gha,mode=max,scope=ci-agent
 
       # One Postgres, two template databases (one per suite — their sweeps and
-      # clone prefixes are independent), one Redis for the licensed HA stores.
-      # max_connections is raised because every gateway-e2e test holds its own
-      # gateway pool (up to 5) plus a Prisma client, across parallel forks.
-      - name: Start Postgres and Redis
+      # clone prefixes are independent). No Redis: this fork drops Redis/HA
+      # (decision 6), so every self-host — CI included — runs the gateway's
+      # free in-memory stores. max_connections is raised because every
+      # gateway-e2e test holds its own gateway pool (up to 5) plus a Prisma
+      # client, across parallel forks.
+      - name: Start Postgres
         if: steps.changes.outputs.e2e == 'true'
         run: |
           docker run -d --name e2e-postgres \
             -e POSTGRES_USER=ci -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=postgres \
             -p 5434:5432 postgres:18-alpine -c max_connections=200
-          docker run -d --name e2e-redis -p 6379:6379 redis:7-alpine
           # Probe over TCP (-h localhost), not the container's Unix socket: the
           # image reports socket-ready during its init phase, before the TCP
           # listener exists — which would flake the CREATE DATABASE below.
@@ -377,18 +370,11 @@ jobs:
             pnpm --filter @onecli/db exec prisma migrate deploy
           DATABASE_URL=postgresql://ci:ci@127.0.0.1:5434/onecli_he2e_template \
             pnpm --filter @onecli/db exec prisma migrate deploy
-          # Assert rather than hope: a Redis probe that only times out would
-          # resurface later as an unrelated-looking gateway boot failure.
-          for _ in $(seq 30); do
-            docker exec e2e-redis redis-cli ping 2>/dev/null | grep -q PONG && break
-            sleep 1
-          done
-          docker exec e2e-redis redis-cli ping | grep -q PONG
 
-      # Spawns the REAL binary per test (enterprise edition in the spawn env)
-      # against a freshly cloned database and a real Redis. 127.0.0.1, never
-      # localhost: Node 17+ resolves localhost with verbatim DNS ordering and
-      # can answer ::1 first.
+      # Spawns the REAL binary per test (onprem edition in the spawn env)
+      # against a freshly cloned database. 127.0.0.1, never localhost: Node
+      # 17+ resolves localhost with verbatim DNS ordering and can answer ::1
+      # first.
       - name: Gateway E2E
         if: steps.changes.outputs.e2e == 'true'
         run: pnpm --filter @onecli/gateway-e2e test:e2e:no-build
@@ -396,8 +382,6 @@ jobs:
           GATEWAY_E2E_BIN: ${{ github.workspace }}/apps/gateway/target/debug/onecli-gateway
           E2E_ADMIN_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5434/postgres
           E2E_TEMPLATE_DB: onecli_e2e_template
-          E2E_REDIS_HOST: 127.0.0.1
-          E2E_REDIS_PORT: "6379"
 
       # The hosted-agents spine on the same infrastructure: real api-server
       # child, real runner, real sandbox containers. Runs after gateway-e2e so
@@ -410,5 +394,3 @@ jobs:
           E2E_TEMPLATE_DB: onecli_he2e_template
           E2E_GATEWAY_BIN: ${{ github.workspace }}/apps/gateway/target/debug/onecli-gateway
           E2E_AGENT_IMAGE: onecli-agent:ci
-          E2E_REDIS_HOST: 127.0.0.1
-          E2E_REDIS_PORT: "6379"

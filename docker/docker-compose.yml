@@ -38,7 +38,7 @@ services:
   # with every service: migrations and the code reading the schema always move
   # together.
   migrations:
-    image: ghcr.io/onecli/onecli-migrations:${ONECLI_VERSION:-latest}
+    image: ghcr.io/whybutter/onecli-migrations:${ONECLI_VERSION:-latest}
     container_name: onecli-migrations
     restart: "no"
     security_opt:
@@ -60,7 +60,7 @@ services:
   # The api serves once the migrations one-shot has completed, and web +
   # gateway wait on its health check — a ready api means a ready schema.
   api:
-    image: ghcr.io/onecli/onecli-api:${ONECLI_VERSION:-latest}
+    image: ghcr.io/whybutter/onecli-api:${ONECLI_VERSION:-latest}
     container_name: onecli-api
     restart: unless-stopped
     # Hardening (all OneCLI services): the processes run as non-root users
@@ -81,13 +81,6 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-onecli}:${POSTGRES_PASSWORD:-onecli}@postgres:5432/${POSTGRES_DB:-onecli}
       # Self-hosted default: each user owns one organization (raise to allow more).
       MAX_ORGS_PER_USER: ${MAX_ORGS_PER_USER:-1}
-      # Enterprise features (SSO & SCIM, directory groups, RBAC, workspace
-      # sharing, app availability, resource-level access, multi-org,
-      # provisioning, the members directory API, spend budgets, multi-instance
-      # operation) unlock with
-      # ENTERPRISE_ENABLED=true — requires a OneCLI Enterprise license.
-      # Org credentials are FREE and need no flag.
-      ENTERPRISE_ENABLED: ${ENTERPRISE_ENABLED:-}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?put BETTER_AUTH_SECRET in the .env beside this file (openssl rand -base64 32), or install via https://onecli.sh/install}
       # Encrypts stored secrets at rest — losing it orphans them, so it is
       # required rather than generated per start. install.sh creates and
@@ -176,7 +169,7 @@ services:
       - onecli
 
   web:
-    image: ghcr.io/onecli/onecli-web:${ONECLI_VERSION:-latest}
+    image: ghcr.io/whybutter/onecli-web:${ONECLI_VERSION:-latest}
     container_name: onecli-web
     restart: unless-stopped
     security_opt:
@@ -191,13 +184,6 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-onecli}:${POSTGRES_PASSWORD:-onecli}@postgres:5432/${POSTGRES_DB:-onecli}
       MAX_ORGS_PER_USER: ${MAX_ORGS_PER_USER:-1}
-      # Enterprise features (SSO & SCIM, directory groups, RBAC, workspace
-      # sharing, app availability, resource-level access, multi-org,
-      # provisioning, the members directory API, spend budgets, multi-instance
-      # operation) unlock with
-      # ENTERPRISE_ENABLED=true — requires a OneCLI Enterprise license.
-      # Org credentials are FREE and need no flag.
-      ENTERPRISE_ENABLED: ${ENTERPRISE_ENABLED:-}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?put BETTER_AUTH_SECRET in the .env beside this file (openssl rand -base64 32), or install via https://onecli.sh/install}
       SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:?put SECRET_ENCRYPTION_KEY in the .env beside this file (head -c 32 /dev/urandom | base64), or install via https://onecli.sh/install}
       # Same resolver inputs as the api service: the dashboard derives the
@@ -226,7 +212,7 @@ services:
       - onecli
 
   gateway:
-    image: ghcr.io/onecli/onecli-gateway:${ONECLI_VERSION:-latest}
+    image: ghcr.io/whybutter/onecli-gateway:${ONECLI_VERSION:-latest}
     container_name: onecli-gateway
     restart: unless-stopped
     security_opt:
@@ -241,9 +227,6 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-onecli}:${POSTGRES_PASSWORD:-onecli}@postgres:5432/${POSTGRES_DB:-onecli}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?put BETTER_AUTH_SECRET in the .env beside this file (openssl rand -base64 32), or install via https://onecli.sh/install}
-      # Same enterprise flag as the api/web services above; on the gateway it
-      # additionally licenses multi-instance operation (Redis-backed stores).
-      ENTERPRISE_ENABLED: ${ENTERPRISE_ENABLED:-}
       SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:?put SECRET_ENCRYPTION_KEY in the .env beside this file (head -c 32 /dev/urandom | base64), or install via https://onecli.sh/install}
       GATEWAY_INTERNAL_SECRET: ${GATEWAY_INTERNAL_SECRET:?put GATEWAY_INTERNAL_SECRET in the .env beside this file (head -c 32 /dev/urandom | base64), or install via https://onecli.sh/install}
       # The public URL users reach OneCLI on. The gateway needs it to build the
