@@ -103,6 +103,9 @@ export const agentRoutes = () => {
       },
       // The grantor recorded on the LLM keys the service auto-attaches.
       auth.userId,
+      // Threaded through so the afterCreateAgent resource hook (workspace
+      // agent-defaults) can run without a second workspace lookup.
+      auth.organizationId,
     );
     invalidateGatewayCache(c.req.raw);
     return c.json(agent, 201);

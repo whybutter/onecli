@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import type { ApiEnv } from "../types";
 import { auth } from "../middleware/auth";
-import { CAPS } from "../lib/env";
 import { ServiceError } from "../services/errors";
 import {
   addUserLink,
@@ -79,9 +78,7 @@ const parseBody = async (raw: Request) =>
 export const orgChannelRoutes = () => {
   const app = new Hono<ApiEnv>();
 
-  const guard = CAPS.rbac
-    ? auth({ requireWorkspace: false, role: "admin" })
-    : auth({ requireWorkspace: false });
+  const guard = auth({ requireWorkspace: false, role: "admin" });
   app.use("*", guard);
 
   // GET /org/channels — integrations, user links, adapter liveness, and the

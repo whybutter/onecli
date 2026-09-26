@@ -17,6 +17,7 @@ import {
   DISPLAY_NAME_MIN_LEN,
   validateDisplayName,
 } from "../../validations/display-name";
+import { isUniqueViolation } from "../lib/prisma-errors";
 import {
   canManageAllWorkspaces,
   visibleWorkspacesWhere,
@@ -62,15 +63,6 @@ const slugConflict = (slug: string) =>
     "CONFLICT",
     `A workspace with slug "${slug}" already exists`,
   );
-
-/**
- * Prisma's unique-violation code, matched structurally rather than by class
- * so a test double's error reads the same as the real client's.
- */
-const isUniqueViolation = (err: unknown): boolean =>
-  typeof err === "object" &&
-  err !== null &&
-  (err as { code?: unknown }).code === "P2002";
 
 /**
  * Run a write whose slug uniqueness was pre-checked; a concurrent writer that

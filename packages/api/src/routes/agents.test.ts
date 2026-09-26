@@ -135,6 +135,8 @@ describe("POST /v1/agents", () => {
       },
       // The grantor threaded through for the service's LLM auto-attach.
       "user-1",
+      // The org id threaded through for the afterCreateAgent resource hook.
+      "org-1",
     );
   });
 
@@ -159,6 +161,7 @@ describe("POST /v1/agents", () => {
         instructions: "Triage the inbox.",
       },
       "user-1",
+      "org-1",
     );
   });
 
@@ -208,6 +211,7 @@ describe("POST /v1/agents", () => {
       "p1",
       expect.objectContaining({ harness: "fake" }),
       "user-1",
+      "org-1",
     );
   });
 

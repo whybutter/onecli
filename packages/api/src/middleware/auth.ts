@@ -5,11 +5,9 @@ import {
   getStrictApiKeyAuth,
   ROLE_HIERARCHY,
 } from "../providers";
-import { CAPS } from "../lib/env";
 import { ServiceError } from "../services/errors";
 import type { ApiEnv } from "../types";
 import { authenticateApiKey } from "./auth/api-key";
-import { hasActiveMembership } from "./auth/resolve";
 import { authenticateSession } from "./auth/session";
 
 export interface AuthOptions {
@@ -131,40 +129,25 @@ export const auth = (options?: AuthOptions) => {
       return c.json(UNAUTHORIZED, 401);
     }
 
-    // Role check (only when role option is specified). Non-RBAC
-    // deployments (unlicensed self-host) enforce no roles — every active
-    // member passes, the same flat-team choke point `requireRole`,
-    // `userIsOrgAdmin`, and the invitations router already apply.
+    // Role check (only when role option is specified). RBAC is enforced in
+    // every edition of this build (isEntitled() is hardcoded true — see
+    // CLAUDE.md), so there is no flat-team arm left to fall back to.
     if (minimumRole) {
-      if (CAPS.rbac) {
-        const resolver = getRoleResolver();
-        if (!resolver) {
-          return c.json(FORBIDDEN_NOT_MEMBER, 403);
-        }
-        const userRole = await resolver.getUserRole(
-          authResult.userId,
-          authResult.organizationId,
-        );
-        if (!userRole) {
-          return c.json(FORBIDDEN_NOT_MEMBER, 403);
-        }
-        if (ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[minimumRole]) {
-          return c.json(FORBIDDEN_INSUFFICIENT, 403);
-        }
-        authResult.role = userRole;
-      } else if (
-        // Flat team: no role enforcement, but the ACTIVE-MEMBERSHIP fence
-        // still holds. Session principals proved it during org resolution
-        // (resolve.ts); API-key principals carry the org from the key row,
-        // so a departed or suspended holder's key must be re-fenced here
-        // before it can exercise a role-gated surface.
-        !(await hasActiveMembership(
-          authResult.userId,
-          authResult.organizationId,
-        ))
-      ) {
+      const resolver = getRoleResolver();
+      if (!resolver) {
         return c.json(FORBIDDEN_NOT_MEMBER, 403);
       }
+      const userRole = await resolver.getUserRole(
+        authResult.userId,
+        authResult.organizationId,
+      );
+      if (!userRole) {
+        return c.json(FORBIDDEN_NOT_MEMBER, 403);
+      }
+      if (ROLE_HIERARCHY[userRole] < ROLE_HIERARCHY[minimumRole]) {
+        return c.json(FORBIDDEN_INSUFFICIENT, 403);
+      }
+      authResult.role = userRole;
     }
 
     c.set("auth", authResult);

@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import type { ApiEnv } from "../types";
 import { auth } from "../middleware/auth";
-import { CAPS } from "../lib/env";
 import { ServiceError } from "../services/errors";
 import {
   createOrgSkill,
@@ -21,9 +20,7 @@ import {
 /**
  * The org door of the skills surface (step 9): /v1/org/skills — a FREE
  * surface (skills are Apache-side; never ee/). Reads are member-level (the
- * rows land in every member's workspace view anyway); writes are org-admin
- * where roles exist (the runners.ts posture — with RBAC off there is no role
- * resolver and membership is the only fence).
+ * rows land in every member's workspace view anyway); writes are org-admin.
  */
 
 const parseBody = async (raw: Request) =>
@@ -35,9 +32,7 @@ const parseBody = async (raw: Request) =>
 export const orgSkillRoutes = () => {
   const app = new Hono<ApiEnv>();
   const member = auth({ requireWorkspace: false });
-  const admin = CAPS.rbac
-    ? auth({ requireWorkspace: false, role: "admin" })
-    : auth({ requireWorkspace: false });
+  const admin = auth({ requireWorkspace: false, role: "admin" });
 
   // GET /org/skills
   app.get("/", member, async (c) => {

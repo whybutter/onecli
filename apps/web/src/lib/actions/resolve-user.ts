@@ -182,7 +182,11 @@ export const resolveWorkspaceContext = async (
     });
     if (
       workspace &&
-      ((await hasWorkspaceAccessBinding(user.id, workspace.id)) ||
+      ((await hasWorkspaceAccessBinding(
+        user.id,
+        workspace.id,
+        workspace.organizationId,
+      )) ||
         canManageAllWorkspaces(
           await getUserRole(user.id, workspace.organizationId),
         ))
@@ -208,7 +212,11 @@ export const resolveWorkspaceContext = async (
     if (
       defaultWorkspace &&
       memberOrgIds.includes(defaultWorkspace.organizationId) &&
-      ((await hasWorkspaceAccessBinding(user.id, defaultWorkspace.id)) ||
+      ((await hasWorkspaceAccessBinding(
+        user.id,
+        defaultWorkspace.id,
+        defaultWorkspace.organizationId,
+      )) ||
         canManageAllWorkspaces(
           await getUserRole(user.id, defaultWorkspace.organizationId),
         ))

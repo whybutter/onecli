@@ -23,17 +23,15 @@ import { logger } from "../lib/logger";
 import { db } from "@onecli/db";
 import { ROLE_HIERARCHY } from "../providers";
 import type { AuthContext } from "../providers";
-import { CAPS } from "../lib/env";
 
 /**
  * The org-door authorization shared by BOTH entry points: the canonical
  * /org/apps routes gate via `auth({ role: "admin" })`, but the legacy
  * interceptors ride the plain-auth workspace endpoints (`?_org=`,
  * `X-Organization-Id`), so the same threshold must hold here or the admin
- * gate is one header away from moot. Membership (non-suspended) is the fence
- * on every deployment; the admin threshold applies only where roles are
- * enforced (`CAPS.rbac`) — flat teams pass every active member, matching
- * `requireRole`.
+ * gate is one header away from moot. Membership (non-suspended) is the fence,
+ * and the admin threshold is enforced on top of it (RBAC is on in every
+ * edition of this build; see CLAUDE.md), matching `requireRole`.
  */
 const requireOrgDoor = async (
   userId: string,
@@ -51,17 +49,15 @@ const requireOrgDoor = async (
       { status: 403 },
     );
   }
-  if (CAPS.rbac) {
-    const role = membership.role as keyof typeof ROLE_HIERARCHY;
-    if (
-      !(role in ROLE_HIERARCHY) ||
-      ROLE_HIERARCHY[role] < ROLE_HIERARCHY.admin
-    ) {
-      return Response.json(
-        { error: "Insufficient permissions" },
-        { status: 403 },
-      );
-    }
+  const role = membership.role as keyof typeof ROLE_HIERARCHY;
+  if (
+    !(role in ROLE_HIERARCHY) ||
+    ROLE_HIERARCHY[role] < ROLE_HIERARCHY.admin
+  ) {
+    return Response.json(
+      { error: "Insufficient permissions" },
+      { status: 403 },
+    );
   }
   return null;
 };

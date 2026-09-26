@@ -522,3 +522,106 @@ describe("createAgent — placement (hosted-agents step 3)", () => {
     expect(store.created[0]?.sandbox).toBeUndefined();
   });
 });
+
+describe("createAgent — afterCreateAgent resource-hook wiring", () => {
+  // The hook lives on `createAgent` itself (not the route) since phase2-plan
+  // WP-B: the agent-defaults template applies right after the agent row (and
+  // the LLM auto-attach) commit, for every caller of the service, not just
+  // the one production route.
+  afterEach(async () => {
+    const { initResourceHooks } = await import("../providers");
+    initResourceHooks(null);
+  });
+
+  it("calls afterCreateAgent with (organizationId, workspaceId, new agent id) after creation", async () => {
+    const { initResourceHooks } = await import("../providers");
+    const afterCreateAgent = vi.fn(async () => {});
+    initResourceHooks({
+      beforeCreateAgent: async () => {},
+      beforeCreateSecret: async () => {},
+      afterCreateAgent,
+    });
+
+    await createAgent(
+      "p1",
+      { name: "Scout", identifier: "scout" },
+      "user-1",
+      "org-1",
+    );
+
+    expect(afterCreateAgent).toHaveBeenCalledWith("org-1", "p1", "new-agent");
+  });
+
+  it("skips the hook when no organizationId is threaded (the lookup-free default)", async () => {
+    const { initResourceHooks } = await import("../providers");
+    const afterCreateAgent = vi.fn(async () => {});
+    initResourceHooks({
+      beforeCreateAgent: async () => {},
+      beforeCreateSecret: async () => {},
+      afterCreateAgent,
+    });
+
+    await createAgent("p1", { name: "Scout", identifier: "scout" }, "user-1");
+
+    expect(afterCreateAgent).not.toHaveBeenCalled();
+  });
+
+  it("an edition with no afterCreateAgent (optional hook) still creates the agent fine", async () => {
+    const { initResourceHooks } = await import("../providers");
+    initResourceHooks({
+      beforeCreateAgent: async () => {},
+      beforeCreateSecret: async () => {},
+      // afterCreateAgent intentionally omitted
+    });
+
+    await expect(
+      createAgent(
+        "p1",
+        { name: "Scout", identifier: "scout" },
+        "user-1",
+        "org-1",
+      ),
+    ).resolves.toMatchObject({ name: "Scout" });
+  });
+
+  it("does not fail agent creation when the hook itself throws", async () => {
+    const { initResourceHooks } = await import("../providers");
+    initResourceHooks({
+      beforeCreateAgent: async () => {},
+      beforeCreateSecret: async () => {},
+      afterCreateAgent: async () => {
+        throw new Error("template drifted");
+      },
+    });
+
+    await expect(
+      createAgent(
+        "p1",
+        { name: "Scout", identifier: "scout" },
+        "user-1",
+        "org-1",
+      ),
+    ).resolves.toMatchObject({ name: "Scout" });
+  });
+
+  it("does not call the hook when creation itself fails (duplicate identifier)", async () => {
+    const { initResourceHooks } = await import("../providers");
+    const afterCreateAgent = vi.fn(async () => {});
+    initResourceHooks({
+      beforeCreateAgent: async () => {},
+      beforeCreateSecret: async () => {},
+      afterCreateAgent,
+    });
+    seedAgent("taken");
+
+    await expect(
+      createAgent(
+        "p1",
+        { name: "Name", identifier: "taken" },
+        "user-1",
+        "org-1",
+      ),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(afterCreateAgent).not.toHaveBeenCalled();
+  });
+});

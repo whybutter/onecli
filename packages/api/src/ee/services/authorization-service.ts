@@ -13,16 +13,24 @@ export type { OrgRole };
  * Who may see, use and manage a workspace, and who is an org admin — the one
  * place every route, server action and the shared access checker ask.
  *
- * The access law (api-ee-behaviour §2.3), Phase 0 of the v2 migration:
+ * The access law (api-ee-behaviour §2.3), Phase 2 of the v2 migration:
  *
  * - `getUserRole` is the suspension choke point: a suspended membership reads
  *   as no membership, so every gate below denies through it.
  * - Usage of a workspace is bindings-only: an org owner/admin reaches every
  *   workspace in the org; a member reaches the ones they hold a DIRECT
- *   `workspace_access` binding on. Group bindings arrive with groups (Phase 1).
+ *   `workspace_access` binding on, OR an INDIRECT one through a `groupId`
+ *   binding naming a group they belong to (the GROUP arm, added in Phase 2).
+ *   A group binding must itself belong to the workspace's organization — the
+ *   same org fence the free `policy-simulate/principal-set.ts` CTE applies —
+ *   so a user's membership in another org's groups can never leak in.
  * - Management (rename / share / delete) is org owner/admin, or a direct
- *   binding with role `owner`. Creating a workspace only matters because it
- *   seeds that owner binding; there is no creator arm.
+ *   USER binding with role `owner`. Group bindings NEVER confer management,
+ *   no matter the role stored on the row (group rows are always `member`
+ *   anyway) — this is deliberate per spec §2.3, not an oversight: widening it
+ *   would let anyone who can edit group membership escalate to workspace
+ *   management. Creating a workspace only matters because it seeds the
+ *   creator's owner binding; there is no creator arm.
  */
 
 const isOrgRole = (value: string): value is OrgRole =>
@@ -74,21 +82,49 @@ export const requireRole = async (
 export const canManageAllWorkspaces = (role: OrgRole | null): boolean =>
   hasMinimumRole(role, "admin");
 
-/** Whether the user holds a direct `workspace_access` binding on the workspace. */
+/**
+ * Whether the user holds a `workspace_access` binding on the workspace —
+ * either DIRECT (their own `userId` row) or via a GROUP they belong to. The
+ * group must belong to the workspace's organization: the same shape the free
+ * `policy-simulate/principal-set.ts` CTE resolves (direct users ∪ members of
+ * org-fenced granted groups), without importing it — that file is a
+ * LICENSED-MIRROR the free hot path executes and must not depend on `ee/`.
+ */
 export const hasWorkspaceAccessBinding = async (
   userId: string,
   workspaceId: string,
+  organizationId: string,
 ): Promise<boolean> => {
-  const binding = await db.workspaceAccess.findFirst({
+  const direct = await db.workspaceAccess.findFirst({
     where: { workspaceId, userId },
     select: { id: true },
   });
-  return binding !== null;
+  if (direct !== null) return true;
+
+  // Belt-and-suspenders org fence on the group itself, mirroring
+  // `principal-set.ts`'s `direct_groups` CTE arm: a `workspace_access` row's
+  // `groupId` should only ever name a group of this workspace's own
+  // organization (write-time validation in `group-service.ts`'s
+  // `setWorkspaceAccessBindings` enforces that), but the read re-checks it
+  // rather than trusting the write path never drifts.
+  const group = await db.workspaceAccess.findFirst({
+    where: {
+      workspaceId,
+      groupId: { not: null },
+      group: { organizationId, members: { some: { userId } } },
+    },
+    select: { id: true },
+  });
+  return group !== null;
 };
 
 /**
  * The `where` fragment selecting the workspaces a user may see in an org:
- * admins get the whole org; members get the ones they hold a binding on.
+ * admins get the whole org; members get the ones they hold a DIRECT binding
+ * on, OR an INDIRECT one through a group binding naming a group they belong
+ * to (org-fenced via the relation traversal itself: `WorkspaceAccess.group`
+ * only ever names a group of the workspace's own organization — see the
+ * `@@unique([organizationId, name])` / creation path in `group-service.ts`).
  * Status-blind by design — callers pass an org the user is an ACTIVE member
  * of (the auth layer has already fenced that).
  */
@@ -99,7 +135,20 @@ export const visibleWorkspacesWhere = (
 ): Prisma.WorkspaceWhereInput =>
   canManageAllWorkspaces(role)
     ? { organizationId }
-    : { organizationId, accessBindings: { some: { userId } } };
+    : {
+        organizationId,
+        accessBindings: {
+          some: {
+            OR: [
+              { userId },
+              {
+                groupId: { not: null },
+                group: { organizationId, members: { some: { userId } } },
+              },
+            ],
+          },
+        },
+      };
 
 /**
  * The visibility fence shared by the two predicates below: the workspace
@@ -130,7 +179,9 @@ export const canAccessWorkspace = async (
 ): Promise<boolean> => {
   const organizationId = await visibleWorkspaceOrg(userId, workspaceId);
   if (!organizationId) return false;
-  if (await hasWorkspaceAccessBinding(userId, workspaceId)) return true;
+  if (await hasWorkspaceAccessBinding(userId, workspaceId, organizationId)) {
+    return true;
+  }
   return canManageAllWorkspaces(await getUserRole(userId, organizationId));
 };
 
@@ -170,7 +221,11 @@ export const eeWorkspaceAccessChecker: WorkspaceAccessChecker = {
     const role = await getUserRole(userId, workspace.organizationId);
     if (!role) return false;
     if (canManageAllWorkspaces(role)) return true;
-    return hasWorkspaceAccessBinding(userId, workspace.id);
+    return hasWorkspaceAccessBinding(
+      userId,
+      workspace.id,
+      workspace.organizationId,
+    );
   },
   userIsOrgAdmin: async (userId, organizationId) =>
     hasMinimumRole(await getUserRole(userId, organizationId), "admin"),

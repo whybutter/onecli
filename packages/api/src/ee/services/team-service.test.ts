@@ -15,6 +15,9 @@ const store = vi.hoisted(() => ({
   calls: [] as string[],
   personalWorkspaces: [] as { id: string; name: string | null }[],
   keys: [] as { id: string; key: string; userEmail: string }[],
+  // The IdP-managed-role lock (changeMemberRole): true when the target sits
+  // in a group carrying a role mapping.
+  roleManagedByIdp: false,
 }));
 
 vi.mock("@onecli/db", () => {
@@ -43,6 +46,12 @@ vi.mock("@onecli/db", () => {
           }
           if (name === "apiKey" && method === "findMany") {
             return record(`${name}.findMany`, store.keys);
+          }
+          if (name === "groupMember" && method === "findFirst") {
+            return record(
+              `${name}.findFirst`,
+              store.roleManagedByIdp ? { userId: "user-2" } : null,
+            );
           }
           if (method === "count") return record(`${name}.count`, 1);
           if (method === "findMany") return record(`${name}.findMany`, []);
@@ -104,6 +113,7 @@ beforeEach(() => {
   store.calls = [];
   store.personalWorkspaces = [];
   store.keys = [];
+  store.roleManagedByIdp = false;
   flushed.keys = [];
 });
 
@@ -115,13 +125,16 @@ describe("removeMember", () => {
   it('voluntary leave completes and keeps the login — outcome "skipped"', async () => {
     await expect(
       removeMember("org-1", "user-2", { revokeIdentity: false }),
-    ).resolves.toBe("skipped");
+    ).resolves.toEqual({ revocation: "skipped", email: "leaver@example.com" });
     // The membership row actually went — departure worked, not just no-op'd.
     expect(store.calls).toContain("organizationMember.delete");
   });
 
   it("an admin removal completes too, with the same outcome in this build", async () => {
-    await expect(removeMember("org-1", "user-2")).resolves.toBe("skipped");
+    await expect(removeMember("org-1", "user-2")).resolves.toEqual({
+      revocation: "skipped",
+      email: "leaver@example.com",
+    });
     expect(store.calls).toContain("organizationMember.delete");
   });
 
@@ -197,6 +210,33 @@ describe("changeMemberRole", () => {
     expect(store.calls).toContain("organizationMember.update");
     expect(store.calls).toContain("apiKey.deleteMany");
     expect(flushed.keys).toEqual(["oc_shared"]);
+  });
+
+  it("refuses a role change for an IdP-managed member, owner guard first", async () => {
+    store.roleManagedByIdp = true;
+    await expect(
+      changeMemberRole("org-1", "user-2", "admin"),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "This member's role is managed by your identity provider.",
+    });
+    expect(store.calls).not.toContain("organizationMember.update");
+
+    // The owner guard still fires BEFORE the IdP lock even when both would
+    // refuse — an owner can never be "IdP-managed" per spec §4.4.
+    store.calls = [];
+    store.role = "owner";
+    await expect(changeMemberRole("org-1", "user-2", "member")).rejects.toThrow(
+      "The owner's role cannot be changed",
+    );
+  });
+
+  it("allows an unmapped member's role change even with the lock wired", async () => {
+    store.roleManagedByIdp = false;
+    await expect(
+      changeMemberRole("org-1", "user-2", "admin"),
+    ).resolves.toBeUndefined();
+    expect(store.calls).toContain("organizationMember.update");
   });
 });
 

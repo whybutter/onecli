@@ -5,7 +5,6 @@ import {
   getRoleResolver,
   ROLE_HIERARCHY,
 } from "../../../../providers";
-import { CAPS } from "../../../../lib/env";
 import { signOAuthState, verifyOAuthState } from "../../../../lib/oauth-state";
 import { ServiceError } from "../../../errors";
 import {
@@ -444,18 +443,15 @@ export const completeSharedInstallFromOAuth = async (input: {
     throw new ServiceError("UNPROCESSABLE", "This install link is not valid");
   }
 
-  // Where roles are enforced, re-run the SAME gate the mint route used: the
-  // state can sit in an approval queue for days, and a demoted admin's
-  // parked link must not outrank their live permissions. (Membership above
-  // stays the RBAC-off floor.)
-  if (CAPS.rbac) {
-    const resolver = getRoleResolver();
-    const role = resolver
-      ? await resolver.getUserRole(actorUserId, organizationId)
-      : null;
-    if (!role || ROLE_HIERARCHY[role] < ROLE_HIERARCHY.admin) {
-      throw new ServiceError("UNPROCESSABLE", "This install link is not valid");
-    }
+  // Re-run the SAME gate the mint route used: the state can sit in an
+  // approval queue for days, and a demoted admin's parked link must not
+  // outrank their live permissions.
+  const resolver = getRoleResolver();
+  const role = resolver
+    ? await resolver.getUserRole(actorUserId, organizationId)
+    : null;
+  if (!role || ROLE_HIERARCHY[role] < ROLE_HIERARCHY.admin) {
+    throw new ServiceError("UNPROCESSABLE", "This install link is not valid");
   }
 
   const result = await recordSharedInstall({

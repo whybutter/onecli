@@ -35,7 +35,11 @@ vi.mock("@onecli/db", () => {
     organizationId?: string;
     slug?: string;
     NOT?: { id?: string };
-    accessBindings?: { some: { userId: string } };
+    // `visibleWorkspacesWhere`'s member arm: a direct binding OR a group
+    // binding (the group arm is exercised by `authorization-service.test.ts`
+    // and the pg proof; this double only fixtures direct bindings, so the OR's
+    // first branch is the one that ever matches here).
+    accessBindings?: { some: { OR: [{ userId: string }, unknown] } };
   };
   const matches = (row: WorkspaceRow, where: Where) =>
     (where.id === undefined || row.id === where.id) &&
@@ -47,7 +51,7 @@ vi.mock("@onecli/db", () => {
       store.bindings.some(
         (b) =>
           b.workspaceId === row.id &&
-          b.userId === where.accessBindings!.some.userId,
+          b.userId === where.accessBindings!.some.OR[0].userId,
       ));
   const pick = (row: WorkspaceRow, select?: Record<string, boolean>) =>
     select

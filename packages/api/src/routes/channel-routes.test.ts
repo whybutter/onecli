@@ -3,16 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OrgRole } from "../providers";
 
 /**
- * The channel surfaces' HTTP contract (step 6): org-channels' role gate in
- * BOTH CAPS.rbac arms, the `cha_` token family fenced in both directions,
- * the adapter wire's status codes, and the Slack inbound trust model
- * (challenge echo, signature 401s, OAuth callback redirects). Services are
- * mocked (the conversations.test.ts pattern); the DB laws live in
+ * The channel surfaces' HTTP contract (step 6): org-channels' role gate
+ * (admin-only, RBAC enforced in every edition of this build; see
+ * CLAUDE.md), the `cha_` token family fenced in both directions, the
+ * adapter wire's status codes, and the Slack inbound trust model (challenge
+ * echo, signature 401s, OAuth callback redirects). Services are mocked (the
+ * conversations.test.ts pattern); the DB laws live in
  * services/channels/channels.pg.test.ts.
- *
- * `CAPS` is resolved at module load, and org-channels bakes its guard at
- * router construction — so lib/env is mocked with a MUTABLE `rbac` getter
- * and two apps are built, one per arm.
  */
 
 const ORG_ID = "org-1";
@@ -26,21 +23,7 @@ vi.hoisted(() => {
   process.env.APP_URL = "https://app.example.test";
 });
 
-const caps = vi.hoisted(() => ({ rbac: false }));
 const store = vi.hoisted(() => ({ role: "owner" as OrgRole }));
-
-vi.mock("../lib/env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/env")>();
-  return {
-    ...actual,
-    CAPS: {
-      ...actual.CAPS,
-      get rbac() {
-        return caps.rbac;
-      },
-    },
-  };
-});
 
 const services = vi.hoisted(() => ({
   // channel-integration-service
@@ -247,15 +230,8 @@ const session = {
 };
 const roleResolver = { getUserRole: async () => store.role };
 
-// Two apps, one per CAPS.rbac arm: the org-channels guard is baked at router
-// construction, so each arm needs its own instance.
-caps.rbac = true;
-const appRbacOn = createApiApp(session, {
+const app = createApiApp(session, {
   roleResolver,
-  selfUrl: "https://api.example.test",
-});
-caps.rbac = false;
-const appRbacOff = createApiApp(session, {
   selfUrl: "https://api.example.test",
 });
 
@@ -288,7 +264,6 @@ beforeEach(() => {
   for (const fn of Object.values(services)) fn.mockReset();
   dbSpies.presenceByAppId.mockReset();
   dbSpies.auditCreate.mockClear();
-  caps.rbac = false;
   store.role = "owner";
 
   services.getIntegrationView.mockResolvedValue([]);
@@ -376,20 +351,13 @@ beforeEach(() => {
   );
 });
 
-// ── org-channels: the role gate, both CAPS.rbac arms ────────────────────────
+// ── org-channels: the role gate (admin-only) ────────────────────────────────
 
-describe("GET /v1/org/channels where roles are ENFORCED (CAPS.rbac on)", () => {
-  beforeEach(() => {
-    caps.rbac = true;
-  });
-
+describe("GET /v1/org/channels — the role gate", () => {
   it("REFUSES a plain member with 403, before any read", async () => {
-    // MUTATION-TESTED (one half of the guard ternary): collapse
-    // `CAPS.rbac ? auth(admin) : auth()` to the permissive arm and this
-    // member reads the whole org's workspace bindings and user links.
     store.role = "member";
 
-    const res = await appRbacOn.request("/v1/org/channels", {
+    const res = await app.request("/v1/org/channels", {
       headers: ORG_HEADERS,
     });
 
@@ -400,7 +368,7 @@ describe("GET /v1/org/channels where roles are ENFORCED (CAPS.rbac on)", () => {
   it("lets an admin read the settings payload", async () => {
     store.role = "admin";
 
-    const res = await appRbacOn.request("/v1/org/channels", {
+    const res = await app.request("/v1/org/channels", {
       headers: ORG_HEADERS,
     });
 
@@ -420,7 +388,7 @@ describe("GET /v1/org/channels where roles are ENFORCED (CAPS.rbac on)", () => {
 
   it("admin-gates the write routes too", async () => {
     store.role = "member";
-    const res = await appRbacOn.request("/v1/org/channels/slack/credentials", {
+    const res = await app.request("/v1/org/channels/slack/credentials", {
       method: "PUT",
       headers: { ...ORG_HEADERS, "content-type": "application/json" },
       body: JSON.stringify({ credential: "xoxe-paste" }),
@@ -430,31 +398,16 @@ describe("GET /v1/org/channels where roles are ENFORCED (CAPS.rbac on)", () => {
   });
 });
 
-describe("GET /v1/org/channels where roles are NOT enforced (CAPS.rbac off)", () => {
-  it("a plain member passes — there is no role resolver to consult", async () => {
-    // MUTATION-TESTED (the other half of the ternary): make the guard
-    // unconditionally `auth({ role: "admin" })` and every onprem deployment
-    // — where no role resolver exists — answers 403 to everyone including
-    // the owner. This member-passes test is what catches that.
-    store.role = "member";
-
-    const res = await appRbacOff.request("/v1/org/channels", {
-      headers: ORG_HEADERS,
-    });
-
-    expect(res.status).toBe(200);
-    expect(services.getIntegrationView).toHaveBeenCalledWith(ORG_ID);
-  });
-
+describe("org-channels — write routes (credentials, disconnect, user links)", () => {
   it("still requires SOME authentication", async () => {
-    const res = await appRbacOff.request("/v1/org/channels", {
+    const res = await app.request("/v1/org/channels", {
       headers: { ...ORG_HEADERS, authorization: "Bearer cha_not-a-session" },
     });
     expect(res.status).toBe(401);
   });
 
   it("connects a credential and audits it", async () => {
-    const res = await appRbacOff.request("/v1/org/channels/slack/credentials", {
+    const res = await app.request("/v1/org/channels/slack/credentials", {
       method: "PUT",
       headers: { ...ORG_HEADERS, "content-type": "application/json" },
       body: JSON.stringify({ credential: "xoxe-paste" }),
@@ -471,7 +424,7 @@ describe("GET /v1/org/channels where roles are NOT enforced (CAPS.rbac off)", ()
   });
 
   it("rejects a bad connect body with 422", async () => {
-    const res = await appRbacOff.request("/v1/org/channels/slack/credentials", {
+    const res = await app.request("/v1/org/channels/slack/credentials", {
       method: "PUT",
       headers: { ...ORG_HEADERS, "content-type": "application/json" },
       body: "{}",
@@ -481,7 +434,7 @@ describe("GET /v1/org/channels where roles are NOT enforced (CAPS.rbac off)", ()
   });
 
   it("answers 404 for an unknown provider", async () => {
-    const res = await appRbacOff.request(
+    const res = await app.request(
       "/v1/org/channels/carrier-pigeon/credentials",
       {
         method: "PUT",
@@ -493,7 +446,7 @@ describe("GET /v1/org/channels where roles are NOT enforced (CAPS.rbac off)", ()
   });
 
   it("disconnects with 204", async () => {
-    const res = await appRbacOff.request("/v1/org/channels/slack", {
+    const res = await app.request("/v1/org/channels/slack", {
       method: "DELETE",
       headers: ORG_HEADERS,
     });
@@ -505,7 +458,7 @@ describe("GET /v1/org/channels where roles are NOT enforced (CAPS.rbac off)", ()
   });
 
   it("adds and removes user links", async () => {
-    const add = await appRbacOff.request("/v1/org/channels/slack/user-links", {
+    const add = await app.request("/v1/org/channels/slack/user-links", {
       method: "POST",
       headers: { ...ORG_HEADERS, "content-type": "application/json" },
       body: JSON.stringify({ externalUserId: "U1", userId: "user-2" }),
@@ -516,7 +469,7 @@ describe("GET /v1/org/channels where roles are NOT enforced (CAPS.rbac off)", ()
       userId: "user-2",
     });
 
-    const remove = await appRbacOff.request(
+    const remove = await app.request(
       "/v1/org/channels/slack/user-links/lnk-1",
       { method: "DELETE", headers: ORG_HEADERS },
     );
@@ -525,7 +478,7 @@ describe("GET /v1/org/channels where roles are NOT enforced (CAPS.rbac off)", ()
   });
 
   it("rejects a malformed user-link body with 422", async () => {
-    const res = await appRbacOff.request("/v1/org/channels/slack/user-links", {
+    const res = await app.request("/v1/org/channels/slack/user-links", {
       method: "POST",
       headers: { ...ORG_HEADERS, "content-type": "application/json" },
       body: JSON.stringify({ externalUserId: "U1" }),
@@ -539,7 +492,7 @@ describe("GET /v1/org/channels where roles are NOT enforced (CAPS.rbac off)", ()
 
 describe("token families do not cross", () => {
   it("a cha_ token is NOT a credential on the user surface (/v1/agents/*)", async () => {
-    const res = await appRbacOff.request("/v1/agents/ag-1/channels", {
+    const res = await app.request("/v1/agents/ag-1/channels", {
       headers: { ...CHA_AUTH, ...WORKSPACE_HEADERS },
     });
     expect(res.status).toBe(401);
@@ -547,7 +500,7 @@ describe("token families do not cross", () => {
   });
 
   it("a cha_ token is not a credential on the org surface either", async () => {
-    const res = await appRbacOff.request("/v1/org/channels", {
+    const res = await app.request("/v1/org/channels", {
       headers: { ...CHA_AUTH, ...ORG_HEADERS },
     });
     expect(res.status).toBe(401);
@@ -555,7 +508,7 @@ describe("token families do not cross", () => {
   });
 
   it("an oc_ key is NOT a credential on the adapter surface", async () => {
-    const res = await appRbacOff.request("/v1/channel-adapter/heartbeat", {
+    const res = await app.request("/v1/channel-adapter/heartbeat", {
       method: "POST",
       headers: { authorization: "Bearer oc_org_some-user-key" },
     });
@@ -564,7 +517,7 @@ describe("token families do not cross", () => {
   });
 
   it("an ambient session is not one either — the adapter surface wants a bearer", async () => {
-    const res = await appRbacOff.request("/v1/channel-adapter/config", {
+    const res = await app.request("/v1/channel-adapter/config", {
       headers: ORG_HEADERS, // would authenticate the user surface
     });
     expect(res.status).toBe(401);
@@ -572,7 +525,7 @@ describe("token families do not cross", () => {
   });
 
   it("an UNKNOWN cha_ token is refused on the authenticated adapter routes", async () => {
-    const res = await appRbacOff.request("/v1/channel-adapter/config", {
+    const res = await app.request("/v1/channel-adapter/config", {
       headers: { authorization: "Bearer cha_never-registered" },
     });
     expect(res.status).toBe(401);
@@ -585,7 +538,7 @@ describe("token families do not cross", () => {
       { authorization: "Bearer rnr_a-runner-token" },
       ORG_HEADERS,
     ]) {
-      const events = await appRbacOff.request(
+      const events = await app.request(
         "/v1/channel-adapter/conversations/cv-1/events",
         { headers },
       );
@@ -597,7 +550,7 @@ describe("token families do not cross", () => {
 
 describe("POST /v1/channel-adapter/register", () => {
   it("refuses a non-cha_ bearer BEFORE consulting the service", async () => {
-    const res = await appRbacOff.request("/v1/channel-adapter/register", {
+    const res = await app.request("/v1/channel-adapter/register", {
       method: "POST",
       headers: {
         authorization: "Bearer oc_org_not-an-adapter",
@@ -611,7 +564,7 @@ describe("POST /v1/channel-adapter/register", () => {
 
   it("maps a service refusal to the same hint-free 401", async () => {
     services.registerAdapter.mockResolvedValue({ ok: false });
-    const res = await appRbacOff.request("/v1/channel-adapter/register", {
+    const res = await app.request("/v1/channel-adapter/register", {
       method: "POST",
       headers: {
         authorization: "Bearer cha_unknown-not-anchor",
@@ -624,7 +577,7 @@ describe("POST /v1/channel-adapter/register", () => {
   });
 
   it("registers an accepted token and returns the adapter id", async () => {
-    const res = await appRbacOff.request("/v1/channel-adapter/register", {
+    const res = await app.request("/v1/channel-adapter/register", {
       method: "POST",
       headers: { ...CHA_AUTH, "content-type": "application/json" },
       body: JSON.stringify({ name: "adapter-1" }),
@@ -643,7 +596,7 @@ describe("POST /v1/channel-adapter/register", () => {
       adapterId: "ad-2",
       mintedToken: "cha_minted-instance-credential",
     });
-    const res = await appRbacOff.request("/v1/channel-adapter/register", {
+    const res = await app.request("/v1/channel-adapter/register", {
       method: "POST",
       headers: { ...CHA_AUTH, "content-type": "application/json" },
       body: JSON.stringify({ name: "adapter-2", perInstance: true }),
@@ -661,7 +614,7 @@ describe("POST /v1/channel-adapter/register", () => {
   });
 
   it("rejects a body without a name", async () => {
-    const res = await appRbacOff.request("/v1/channel-adapter/register", {
+    const res = await app.request("/v1/channel-adapter/register", {
       method: "POST",
       headers: { ...CHA_AUTH, "content-type": "application/json" },
       body: "{}",
@@ -673,7 +626,7 @@ describe("POST /v1/channel-adapter/register", () => {
 
 describe("the adapter wire (authenticated by a registered cha_ token)", () => {
   it("serves the config feed, and 304s on a matching etag", async () => {
-    const first = await appRbacOff.request("/v1/channel-adapter/config", {
+    const first = await app.request("/v1/channel-adapter/config", {
       headers: CHA_AUTH,
     });
     expect(first.status).toBe(200);
@@ -683,7 +636,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
     // The route hands the If-None-Match to the SERVICE (which now owns the
     // compare + the decrypt-skip), never comparing locally: proven by the arg
     // and by the 304 still carrying the ETag header.
-    const cached = await appRbacOff.request("/v1/channel-adapter/config", {
+    const cached = await app.request("/v1/channel-adapter/config", {
       headers: { ...CHA_AUTH, "if-none-match": "etag-1" },
     });
     expect(cached.status).toBe(304);
@@ -695,7 +648,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
   });
 
   it("serves the work poll", async () => {
-    const res = await appRbacOff.request("/v1/channel-adapter/work", {
+    const res = await app.request("/v1/channel-adapter/work", {
       headers: CHA_AUTH,
     });
     expect(res.status).toBe(200);
@@ -732,7 +685,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
       },
     });
 
-    const res = await appRbacOff.request("/v1/channel-adapter/ingest", {
+    const res = await app.request("/v1/channel-adapter/ingest", {
       method: "POST",
       headers: { ...CHA_AUTH, "content-type": "application/json" },
       body: JSON.stringify({
@@ -773,7 +726,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
   it("REJECTS an ingest body carrying an email (the strict schema drops it)", async () => {
     // The wire no longer accepts a caller-asserted email — .strict() turns a
     // body with one into a 422, closing the adapter-impersonation vector.
-    const res = await appRbacOff.request("/v1/channel-adapter/ingest", {
+    const res = await app.request("/v1/channel-adapter/ingest", {
       method: "POST",
       headers: { ...CHA_AUTH, "content-type": "application/json" },
       body: JSON.stringify({
@@ -788,7 +741,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
   });
 
   it("ingest answers 404 for an unknown presence", async () => {
-    const res = await appRbacOff.request("/v1/channel-adapter/ingest", {
+    const res = await app.request("/v1/channel-adapter/ingest", {
       method: "POST",
       headers: { ...CHA_AUTH, "content-type": "application/json" },
       body: JSON.stringify({
@@ -802,7 +755,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
   });
 
   it("forwards a decision to the shared decide flow", async () => {
-    const res = await appRbacOff.request("/v1/channel-adapter/decision", {
+    const res = await app.request("/v1/channel-adapter/decision", {
       method: "POST",
       headers: { ...CHA_AUTH, "content-type": "application/json" },
       body: JSON.stringify({
@@ -826,19 +779,16 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
       kind: "decided",
       status: "executed",
     });
-    const res = await appRbacOff.request(
-      "/v1/channel-adapter/action-decision",
-      {
-        method: "POST",
-        headers: { ...CHA_AUTH, "content-type": "application/json" },
-        body: JSON.stringify({
-          presenceId: "pr-1",
-          approvalId: "act-1",
-          decision: "approve",
-          clickerExternalUserId: "U1",
-        }),
-      },
-    );
+    const res = await app.request("/v1/channel-adapter/action-decision", {
+      method: "POST",
+      headers: { ...CHA_AUTH, "content-type": "application/json" },
+      body: JSON.stringify({
+        presenceId: "pr-1",
+        approvalId: "act-1",
+        decision: "approve",
+        clickerExternalUserId: "U1",
+      }),
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ kind: "decided", status: "executed" });
     expect(services.decideActionApprovalFromChannel).toHaveBeenCalledWith({
@@ -850,7 +800,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
   });
 
   it("advances the mirror cursor through the CAS service", async () => {
-    const res = await appRbacOff.request("/v1/channel-adapter/cursor", {
+    const res = await app.request("/v1/channel-adapter/cursor", {
       method: "POST",
       headers: { ...CHA_AUTH, "content-type": "application/json" },
       body: JSON.stringify({
@@ -873,7 +823,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
     // the twin that actually posts the answer finds the reaction already
     // gone — the "seen" mark disappears with no answer next to it.
     const claim = (turnId?: string) =>
-      appRbacOff.request("/v1/channel-adapter/cursor", {
+      app.request("/v1/channel-adapter/cursor", {
         method: "POST",
         headers: { ...CHA_AUTH, "content-type": "application/json" },
         body: JSON.stringify({
@@ -908,10 +858,10 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
       rotated: 2,
       failed: 1,
     });
-    const res = await appRbacOff.request(
-      "/v1/channel-adapter/rotate-integrations",
-      { method: "POST", headers: CHA_AUTH },
-    );
+    const res = await app.request("/v1/channel-adapter/rotate-integrations", {
+      method: "POST",
+      headers: CHA_AUTH,
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ rotated: 2, failed: 1 });
     expect(services.rotateStaleIntegrations).toHaveBeenCalledTimes(1);
@@ -932,17 +882,17 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
       { authorization: "Bearer cha_never-registered" },
     ];
     for (const headers of attempts) {
-      const res = await appRbacOff.request(
-        "/v1/channel-adapter/rotate-integrations",
-        { method: "POST", headers },
-      );
+      const res = await app.request("/v1/channel-adapter/rotate-integrations", {
+        method: "POST",
+        headers,
+      });
       expect(res.status).toBe(401);
     }
     expect(services.rotateStaleIntegrations).not.toHaveBeenCalled();
   });
 
   it("reads a LINKED conversation's transcript (the link is the fence)", async () => {
-    const res = await appRbacOff.request(
+    const res = await app.request(
       "/v1/channel-adapter/conversations/cv-1/events",
       { headers: CHA_AUTH },
     );
@@ -959,7 +909,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
     services.requireLinkedConversation.mockRejectedValue(
       new ServiceError("NOT_FOUND", "Conversation not found"),
     );
-    const res = await appRbacOff.request(
+    const res = await app.request(
       "/v1/channel-adapter/conversations/cv-foreign/events",
       { headers: CHA_AUTH },
     );
@@ -970,7 +920,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
 
   it("claim parses an ISO expiresAt into a Date for the service", async () => {
     services.claimToolApprovalCard.mockResolvedValue({ claimed: true });
-    const res = await appRbacOff.request("/v1/channel-adapter/prompts/claim", {
+    const res = await app.request("/v1/channel-adapter/prompts/claim", {
       method: "POST",
       headers: { ...CHA_AUTH, "content-type": "application/json" },
       body: JSON.stringify({
@@ -991,7 +941,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
 
   it("claim carries a null expiresAt through as null", async () => {
     services.claimToolApprovalCard.mockResolvedValue({ claimed: true });
-    const res = await appRbacOff.request("/v1/channel-adapter/prompts/claim", {
+    const res = await app.request("/v1/channel-adapter/prompts/claim", {
       method: "POST",
       headers: { ...CHA_AUTH, "content-type": "application/json" },
       body: JSON.stringify({
@@ -1011,7 +961,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
   });
 
   it("claim rejects a body with no expiresAt key (422) — the field is required", async () => {
-    const res = await appRbacOff.request("/v1/channel-adapter/prompts/claim", {
+    const res = await app.request("/v1/channel-adapter/prompts/claim", {
       method: "POST",
       headers: { ...CHA_AUTH, "content-type": "application/json" },
       body: JSON.stringify({
@@ -1045,10 +995,9 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
         createdAt: new Date("2026-08-06T12:00:00.000Z"),
       },
     ]);
-    const res = await appRbacOff.request(
-      "/v1/channel-adapter/prompts/unsettled",
-      { headers: CHA_AUTH },
-    );
+    const res = await app.request("/v1/channel-adapter/prompts/unsettled", {
+      headers: CHA_AUTH,
+    });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       prompts: { approvalId: string; expiresAt: string | null }[];
@@ -1064,7 +1013,7 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
 
 describe("/v1/agents/:agentId/channels", () => {
   it("serves the section payload, workspace-fenced", async () => {
-    const res = await appRbacOff.request("/v1/agents/ag-1/channels", {
+    const res = await app.request("/v1/agents/ag-1/channels", {
       headers: WORKSPACE_HEADERS,
     });
     expect(res.status).toBe(200);
@@ -1078,7 +1027,7 @@ describe("/v1/agents/:agentId/channels", () => {
   });
 
   it("creates a presence (201) as the authenticated user, and audits", async () => {
-    const res = await appRbacOff.request("/v1/agents/ag-1/channels/slack", {
+    const res = await app.request("/v1/agents/ag-1/channels/slack", {
       method: "POST",
       headers: WORKSPACE_HEADERS,
     });
@@ -1094,7 +1043,7 @@ describe("/v1/agents/:agentId/channels", () => {
   });
 
   it("passes an explicit transport choice through to the create", async () => {
-    const res = await appRbacOff.request("/v1/agents/ag-1/channels/slack", {
+    const res = await app.request("/v1/agents/ag-1/channels/slack", {
       method: "POST",
       headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
       body: JSON.stringify({ transport: "socket" }),
@@ -1110,7 +1059,7 @@ describe("/v1/agents/:agentId/channels", () => {
   });
 
   it("rejects an unknown transport at the schema shell with 422", async () => {
-    const res = await appRbacOff.request("/v1/agents/ag-1/channels/slack", {
+    const res = await app.request("/v1/agents/ag-1/channels/slack", {
       method: "POST",
       headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
       body: JSON.stringify({ transport: "carrier-pigeon" }),
@@ -1125,27 +1074,21 @@ describe("/v1/agents/:agentId/channels", () => {
     services.createPresence.mockRejectedValueOnce(
       new ServiceError("UNPROCESSABLE", "Socket Mode isn't available"),
     );
-    const unavailable = await appRbacOff.request(
-      "/v1/agents/ag-1/channels/slack",
-      {
-        method: "POST",
-        headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ transport: "socket" }),
-      },
-    );
+    const unavailable = await app.request("/v1/agents/ag-1/channels/slack", {
+      method: "POST",
+      headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ transport: "socket" }),
+    });
     expect(unavailable.status).toBe(422);
 
     services.createPresence.mockRejectedValueOnce(
       new ServiceError("CONFLICT", "Setup already started"),
     );
-    const mismatch = await appRbacOff.request(
-      "/v1/agents/ag-1/channels/slack",
-      {
-        method: "POST",
-        headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ transport: "events" }),
-      },
-    );
+    const mismatch = await app.request("/v1/agents/ag-1/channels/slack", {
+      method: "POST",
+      headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ transport: "events" }),
+    });
     expect(mismatch.status).toBe(409);
   });
 
@@ -1154,7 +1097,7 @@ describe("/v1/agents/:agentId/channels", () => {
       transport: "socket",
       material: {},
     });
-    const res = await appRbacOff.request(
+    const res = await app.request(
       "/v1/agents/ag-1/channels/slack/manifest?transport=socket",
       { headers: WORKSPACE_HEADERS },
     );
@@ -1166,7 +1109,7 @@ describe("/v1/agents/:agentId/channels", () => {
       "socket",
     );
 
-    const bad = await appRbacOff.request(
+    const bad = await app.request(
       "/v1/agents/ag-1/channels/slack/manifest?transport=carrier-pigeon",
       { headers: WORKSPACE_HEADERS },
     );
@@ -1181,19 +1124,16 @@ describe("/v1/agents/:agentId/channels", () => {
       status: "active",
       transport: "socket",
     });
-    const res = await appRbacOff.request(
-      "/v1/agents/ag-1/channels/slack/complete",
-      {
-        method: "POST",
-        headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({
-          botToken: "xoxb-1",
-          appToken: "xapp-1",
-          appId: "A100",
-          transport: "socket",
-        }),
-      },
-    );
+    const res = await app.request("/v1/agents/ag-1/channels/slack/complete", {
+      method: "POST",
+      headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({
+        botToken: "xoxb-1",
+        appToken: "xapp-1",
+        appId: "A100",
+        transport: "socket",
+      }),
+    });
     expect(res.status).toBe(200);
     expect(services.completePresence).toHaveBeenCalledWith(
       "p1",
@@ -1205,7 +1145,7 @@ describe("/v1/agents/:agentId/channels", () => {
   });
 
   it("rejects an unknown provider with 404", async () => {
-    const res = await appRbacOff.request("/v1/agents/ag-1/channels/teams", {
+    const res = await app.request("/v1/agents/ag-1/channels/teams", {
       method: "POST",
       headers: WORKSPACE_HEADERS,
     });
@@ -1221,7 +1161,7 @@ describe("/v1/agents/:agentId/channels", () => {
     services.createPresence.mockRejectedValue(
       new SlackApiError("apps.manifest.create", "managed_app_limit_reached"),
     );
-    const res = await appRbacOff.request("/v1/agents/ag-1/channels/slack", {
+    const res = await app.request("/v1/agents/ag-1/channels/slack", {
       method: "POST",
       headers: WORKSPACE_HEADERS,
     });
@@ -1231,20 +1171,17 @@ describe("/v1/agents/:agentId/channels", () => {
   });
 
   it("rejects a malformed complete body with 422", async () => {
-    const res = await appRbacOff.request(
-      "/v1/agents/ag-1/channels/slack/complete",
-      {
-        method: "POST",
-        headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ appToken: "xapp-only" }),
-      },
-    );
+    const res = await app.request("/v1/agents/ag-1/channels/slack/complete", {
+      method: "POST",
+      headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ appToken: "xapp-only" }),
+    });
     expect(res.status).toBe(422);
     expect(services.completePresence).not.toHaveBeenCalled();
   });
 
   it("detaches with 204, honouring deleteRemote", async () => {
-    const res = await appRbacOff.request("/v1/agents/ag-1/channels/slack", {
+    const res = await app.request("/v1/agents/ag-1/channels/slack", {
       method: "DELETE",
       headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
       body: JSON.stringify({ deleteRemote: true }),
@@ -1273,7 +1210,7 @@ describe("POST /v1/channels/slack/events", () => {
     });
 
   it("echoes url_verification WITHOUT a signature — and with NO side effects", async () => {
-    const res = await appRbacOff.request("/v1/channels/slack/events", {
+    const res = await app.request("/v1/channels/slack/events", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ type: "url_verification", challenge: "ch-42" }),
@@ -1291,7 +1228,7 @@ describe("POST /v1/channels/slack/events", () => {
     // `&& envelope.challenge` truthiness check would reflect an arbitrary JSON
     // value (here a number) straight back on our origin. It must not echo — it
     // is unsigned and carries no api_app_id, so it lands on the 401.
-    const res = await appRbacOff.request("/v1/channels/slack/events", {
+    const res = await app.request("/v1/channels/slack/events", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ type: "url_verification", challenge: 1234 }),
@@ -1304,7 +1241,7 @@ describe("POST /v1/channels/slack/events", () => {
     // MUTATION-TESTED (the `.length <= 256` guard): removing it lets a caller
     // reflect a megabyte string back through our origin. A 300-char challenge
     // must not be echoed.
-    const res = await appRbacOff.request("/v1/channels/slack/events", {
+    const res = await app.request("/v1/channels/slack/events", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -1329,7 +1266,7 @@ describe("POST /v1/channels/slack/events", () => {
       event_id: "Ev-1",
       event: { type: "message" },
     });
-    const res = await appRbacOff.request("/v1/channels/slack/events", {
+    const res = await app.request("/v1/channels/slack/events", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -1346,7 +1283,7 @@ describe("POST /v1/channels/slack/events", () => {
     // The declared length is checked FIRST — the body here is tiny, so the only
     // way to reach 413 is the Content-Length pre-check (buffering the 4-byte
     // body would pass the byte-length gate and fall through to 401).
-    const res = await appRbacOff.request("/v1/channels/slack/events", {
+    const res = await app.request("/v1/channels/slack/events", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -1372,7 +1309,7 @@ describe("POST /v1/channels/slack/events", () => {
           event_id: eventId,
           event: { type: "message" },
         });
-        return appRbacOff.request("/v1/channels/slack/events", {
+        return app.request("/v1/channels/slack/events", {
           method: "POST",
           headers: { "content-type": "application/json", ...slackSigned(body) },
           body,
@@ -1390,7 +1327,7 @@ describe("POST /v1/channels/slack/events", () => {
 
   it("REFUSES an event with a bad signature — hint-free 401", async () => {
     const body = envelope({ type: "message", text: "forged" });
-    const res = await appRbacOff.request("/v1/channels/slack/events", {
+    const res = await app.request("/v1/channels/slack/events", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -1405,7 +1342,7 @@ describe("POST /v1/channels/slack/events", () => {
 
   it("refuses an event with NO signature headers at all", async () => {
     const body = envelope({ type: "message", text: "unsigned" });
-    const res = await appRbacOff.request("/v1/channels/slack/events", {
+    const res = await app.request("/v1/channels/slack/events", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body,
@@ -1421,7 +1358,7 @@ describe("POST /v1/channels/slack/events", () => {
       event_id: "Ev-1",
       event: { type: "message" },
     });
-    const res = await appRbacOff.request("/v1/channels/slack/events", {
+    const res = await app.request("/v1/channels/slack/events", {
       method: "POST",
       headers: { "content-type": "application/json", ...slackSigned(body) },
       body,
@@ -1432,7 +1369,7 @@ describe("POST /v1/channels/slack/events", () => {
   it("dispatches a correctly signed event to the shared door", async () => {
     const event = { type: "message", channel: "D1", text: "hello" };
     const body = envelope(event);
-    const res = await appRbacOff.request("/v1/channels/slack/events", {
+    const res = await app.request("/v1/channels/slack/events", {
       method: "POST",
       headers: { "content-type": "application/json", ...slackSigned(body) },
       body,
@@ -1476,7 +1413,7 @@ describe("POST /v1/channels/slack/events", () => {
         user: "UBOT",
         inviter: "U404",
       });
-      const res = await appRbacOff.request("/v1/channels/slack/events", {
+      const res = await app.request("/v1/channels/slack/events", {
         method: "POST",
         headers: { "content-type": "application/json", ...slackSigned(body) },
         body,
@@ -1530,7 +1467,7 @@ describe("POST /v1/channels/slack/events", () => {
           inviter: "U404",
         },
       });
-      const res = await appRbacOff.request("/v1/channels/slack/events", {
+      const res = await app.request("/v1/channels/slack/events", {
         method: "POST",
         headers: { "content-type": "application/json", ...slackSigned(body) },
         body,
@@ -1561,7 +1498,7 @@ describe("POST /v1/channels/slack/events", () => {
       type: "app_rate_limited",
       api_app_id: "A100",
     });
-    const res = await appRbacOff.request("/v1/channels/slack/events", {
+    const res = await app.request("/v1/channels/slack/events", {
       method: "POST",
       headers: { "content-type": "application/json", ...slackSigned(body) },
       body,
@@ -1571,7 +1508,7 @@ describe("POST /v1/channels/slack/events", () => {
   });
 
   it("rejects unparseable JSON with 400", async () => {
-    const res = await appRbacOff.request("/v1/channels/slack/events", {
+    const res = await app.request("/v1/channels/slack/events", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: "not json",
@@ -1593,7 +1530,7 @@ describe("POST /v1/channels/slack/interactivity", () => {
 
   it("REFUSES a bad signature before reading any action", async () => {
     const body = interactivityBody(approvePayload);
-    const res = await appRbacOff.request("/v1/channels/slack/interactivity", {
+    const res = await app.request("/v1/channels/slack/interactivity", {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
@@ -1608,7 +1545,7 @@ describe("POST /v1/channels/slack/interactivity", () => {
 
   it("decides a correctly signed button click as THAT clicker", async () => {
     const body = interactivityBody(approvePayload);
-    const res = await appRbacOff.request("/v1/channels/slack/interactivity", {
+    const res = await app.request("/v1/channels/slack/interactivity", {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
@@ -1641,7 +1578,7 @@ describe("POST /v1/channels/slack/interactivity", () => {
         ...approvePayload,
         response_url: "http://169.254.169.254/latest/meta-data/",
       });
-      const res = await appRbacOff.request("/v1/channels/slack/interactivity", {
+      const res = await app.request("/v1/channels/slack/interactivity", {
         method: "POST",
         headers: {
           "content-type": "application/x-www-form-urlencoded",
@@ -1667,7 +1604,7 @@ describe("POST /v1/channels/slack/interactivity", () => {
         ...approvePayload,
         response_url: responseUrl,
       });
-      const res = await appRbacOff.request("/v1/channels/slack/interactivity", {
+      const res = await app.request("/v1/channels/slack/interactivity", {
         method: "POST",
         headers: {
           "content-type": "application/x-www-form-urlencoded",
@@ -1688,7 +1625,7 @@ describe("POST /v1/channels/slack/interactivity", () => {
       ...approvePayload,
       actions: [{ action_id: "some_other_button", value: "x" }],
     });
-    const res = await appRbacOff.request("/v1/channels/slack/interactivity", {
+    const res = await app.request("/v1/channels/slack/interactivity", {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
@@ -1701,7 +1638,7 @@ describe("POST /v1/channels/slack/interactivity", () => {
   });
 
   it("rejects a body with no payload field", async () => {
-    const res = await appRbacOff.request("/v1/channels/slack/interactivity", {
+    const res = await app.request("/v1/channels/slack/interactivity", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: "not_payload=1",
@@ -1718,7 +1655,7 @@ describe("GET /v1/channels/slack/oauth/callback", () => {
       workspaceId: "p1",
     });
 
-    const res = await appRbacOff.request(
+    const res = await app.request(
       "/v1/channels/slack/oauth/callback?state=signed-state&code=slack-code",
     );
 
@@ -1740,7 +1677,7 @@ describe("GET /v1/channels/slack/oauth/callback", () => {
       new ServiceError("UNPROCESSABLE", "This install link is not valid"),
     );
 
-    const res = await appRbacOff.request(
+    const res = await app.request(
       "/v1/channels/slack/oauth/callback?state=forged&code=slack-code",
     );
 
@@ -1750,7 +1687,7 @@ describe("GET /v1/channels/slack/oauth/callback", () => {
   });
 
   it("a missing code is refused WITHOUT calling the service", async () => {
-    const res = await appRbacOff.request(
+    const res = await app.request(
       "/v1/channels/slack/oauth/callback?state=only-a-state",
     );
     expect(res.status).toBe(400);
@@ -1761,7 +1698,7 @@ describe("GET /v1/channels/slack/oauth/callback", () => {
     // An install begun in Slack's app directory has no state to sign — no
     // OneCLI session existed when it started. Refusing it (the old behavior)
     // is what a Marketplace reviewer would have seen.
-    const res = await appRbacOff.request(
+    const res = await app.request(
       "/v1/channels/slack/oauth/callback?code=directory-code",
     );
     expect(res.status).toBe(302);
@@ -1773,7 +1710,7 @@ describe("GET /v1/channels/slack/oauth/callback", () => {
   });
 
   it("a cancelled install is a friendly 400, not an error page", async () => {
-    const res = await appRbacOff.request(
+    const res = await app.request(
       "/v1/channels/slack/oauth/callback?error=access_denied",
     );
     expect(res.status).toBe(400);

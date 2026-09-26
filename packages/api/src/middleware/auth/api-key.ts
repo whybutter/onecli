@@ -1,7 +1,7 @@
 import { db } from "@onecli/db";
 import type { AuthContext } from "../../providers";
 import { getRoleResolver, ROLE_HIERARCHY } from "../../providers";
-import { CAPS } from "../../lib/env";
+import { recordApiKeyUse } from "../../services/api-key-service";
 import { resolveUserEmail, canAccessWorkspaceAsUser } from "./resolve";
 
 /**
@@ -41,28 +41,44 @@ export const authenticateApiKey = async (
   if (token.startsWith("oc_org_")) {
     const apiKey = await db.apiKey.findUnique({
       where: { key: token },
-      select: { userId: true, organizationId: true, scope: true },
+      // `id`/`key`/`lastUsedAt` ride along for the usage write-back — the row
+      // is already being read, so recency costs nothing extra here. `key`
+      // pins the write to the secret that authenticated, so a concurrent
+      // rotation cannot inherit this request's use.
+      select: {
+        id: true,
+        key: true,
+        userId: true,
+        organizationId: true,
+        scope: true,
+        lastUsedAt: true,
+      },
     });
     if (!apiKey || apiKey.scope !== "organization" || !apiKey.organizationId)
       return "invalid-key";
 
     // Org keys are an admin capability — re-check the key's user still holds
-    // admin/owner in the org (only when RBAC is active; non-RBAC editions enforce
-    // no roles). Closes the gap where a key keeps working after a demotion.
-    if (CAPS.rbac) {
-      const resolver = getRoleResolver();
-      const role = resolver
-        ? await resolver.getUserRole(apiKey.userId, apiKey.organizationId)
-        : null;
-      if (!role || ROLE_HIERARCHY[role] < ROLE_HIERARCHY.admin)
-        return "invalid-key";
-    }
+    // admin/owner in the org. Closes the gap where a key keeps working after
+    // a demotion.
+    const resolver = getRoleResolver();
+    const role = resolver
+      ? await resolver.getUserRole(apiKey.userId, apiKey.organizationId)
+      : null;
+    if (!role || ROLE_HIERARCHY[role] < ROLE_HIERARCHY.admin)
+      return "invalid-key";
 
     const userEmail = await resolveUserEmail(apiKey.userId);
     const headerWorkspaceId = request.headers.get("x-workspace-id");
 
+    // Not a recorded use: the credential checked out, but the request never
+    // resolved to a caller. `lastUsedAt` answers "did this key authenticate",
+    // and only the AuthContext returns below are that.
     if (requireWorkspace && !headerWorkspaceId) return "missing-workspace";
 
+    // Resolved once so the success path — and the usage write-back on it —
+    // has a single exit. Unset stays `undefined` (an org-wide context), a
+    // header naming a workspace outside the key's org is still "invalid-key".
+    let scopedWorkspaceId: string | undefined;
     if (headerWorkspaceId) {
       const workspace = await db.workspace.findFirst({
         where: {
@@ -72,20 +88,15 @@ export const authenticateApiKey = async (
         select: { id: true },
       });
       if (!workspace) return "invalid-key";
-
-      return {
-        userId: apiKey.userId,
-        userEmail,
-        workspaceId: workspace.id,
-        organizationId: apiKey.organizationId,
-        scope: "organization",
-      };
+      scopedWorkspaceId = workspace.id;
     }
+
+    await recordApiKeyUse(apiKey);
 
     return {
       userId: apiKey.userId,
       userEmail,
-      workspaceId: undefined,
+      workspaceId: scopedWorkspaceId,
       organizationId: apiKey.organizationId,
       scope: "organization",
     };
@@ -94,7 +105,14 @@ export const authenticateApiKey = async (
   // Workspace key (oc_*)
   const apiKey = await db.apiKey.findUnique({
     where: { key: token },
-    select: { userId: true, workspaceId: true, kind: true },
+    select: {
+      id: true,
+      key: true,
+      userId: true,
+      workspaceId: true,
+      kind: true,
+      lastUsedAt: true,
+    },
   });
   if (!apiKey || !apiKey.workspaceId) return "invalid-key";
 
@@ -120,6 +138,8 @@ export const authenticateApiKey = async (
     return "invalid-key";
 
   const userEmail = await resolveUserEmail(apiKey.userId);
+
+  await recordApiKeyUse(apiKey);
 
   return {
     userId: apiKey.userId,

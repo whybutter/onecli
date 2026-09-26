@@ -10,31 +10,13 @@ const ORG_KEY = "oc_org_test-key";
 
 // This suite pins the unwired and the standard boot-wired semantics, so it
 // must be hermetic to the ambient edition: CI runs the whole workflow with
-// NEXT_PUBLIC_EDITION=cloud, under which CAPS.rbac flips the org-key auth
-// re-check and oauth-state requires OAUTH_STATE_SECRET. Pinned onprem.
-// lib/env captures the env at first load, so pin everything before any import
-// evaluates (vi.hoisted runs first).
+// NEXT_PUBLIC_EDITION=cloud, under which oauth-state requires
+// OAUTH_STATE_SECRET. Pinned onprem. lib/env captures the env at first load,
+// so pin everything before any import evaluates (vi.hoisted runs first).
 vi.hoisted(() => {
   process.env.NEXT_PUBLIC_EDITION = "onprem";
   process.env.SECRET_ENCRYPTION_KEY = "test-oauth-state-secret";
   process.env.OAUTH_STATE_SECRET = "test-oauth-state-secret";
-});
-
-// Flat team vs enforced roles rides CAPS.rbac (captured at lib/env load) —
-// flip it per test through a mutable getter.
-const caps = vi.hoisted(() => ({ rbac: false }));
-
-vi.mock("../lib/env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/env")>();
-  return {
-    ...actual,
-    CAPS: {
-      ...actual.CAPS,
-      get rbac() {
-        return caps.rbac;
-      },
-    },
-  };
 });
 
 const store = vi.hoisted(() => ({
@@ -266,7 +248,7 @@ vi.mock("../apps/registry", () => ({
 }));
 
 import { createApiApp } from "../app";
-import { initRoleResolver, initCrypto, initOAuthOrg } from "../providers";
+import { initCrypto, initOAuthOrg } from "../providers";
 import { getUserRole } from "../ee/services/authorization-service";
 import * as oauthOrg from "../apps/oauth-org";
 
@@ -329,12 +311,15 @@ describe("with the org handlers unwired (mis-wired host)", () => {
     // createApiApp boot-injects the shared org handlers on every edition —
     // undo that here: this describe is exactly the mis-wired-host scenario,
     // whose property is that an explicit org context fails LOUD (400) rather
-    // than silently minting a workspace-scoped connection.
+    // than silently minting a workspace-scoped connection. The role resolver
+    // stays wired (RBAC is enforced in every edition of this build; an org
+    // key cannot authenticate at all without one — see CLAUDE.md) so these
+    // cases exercise the org-handlers wiring specifically, not key auth.
     app = createApiApp(nullSession, {
+      roleResolver: { getUserRole },
       eeRoutes: () => {},
     });
     initOAuthOrg(null);
-    initRoleResolver(null);
   });
 
   it("fails loud on explicit org context in connect instead of mis-scoping", async () => {
@@ -360,18 +345,6 @@ describe("with the org handlers unwired (mis-wired host)", () => {
     expect(await res.json()).toEqual({
       error: "Organization-scoped connections are not supported on this server",
     });
-  });
-
-  it("flat team: admin-gated org routes open to active members with no resolver", async () => {
-    // The org-apps router mounts in the FREE block now, so the request
-    // reaches the role gate; membership was proven at key resolution and no
-    // RBAC means no role enforcement (caps.rbac defaults false here).
-    const res = await app.request("/v1/org/apps/configured", {
-      headers: orgKeyHeaders,
-    });
-
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual([]);
   });
 });
 
@@ -425,33 +398,28 @@ describe("with the standard boot wiring", () => {
     });
   });
 
-  it("RBAC: an org key held by a mere member dies at authentication", async () => {
-    // With roles enforced, the org-key admin re-check refuses the key itself
-    // (a demoted holder's key stops working) — the request never reaches the
-    // role gate or the handler.
-    caps.rbac = true;
-    try {
-      store.members = [
-        { organizationId: "org-1", userId: "user-1", role: "member" },
-      ];
+  it("an org key held by a mere member dies at authentication", async () => {
+    // The org-key admin re-check refuses the key itself (a demoted holder's
+    // key stops working) — the request never reaches the role gate or the
+    // handler.
+    store.members = [
+      { organizationId: "org-1", userId: "user-1", role: "member" },
+    ];
 
-      const res = await app.request("/v1/org/apps/keyapp/connect", {
-        method: "POST",
-        headers: orgKeyHeaders,
-        body: JSON.stringify({ fields: { apiKey: "sk-1" } }),
-      });
+    const res = await app.request("/v1/org/apps/keyapp/connect", {
+      method: "POST",
+      headers: orgKeyHeaders,
+      body: JSON.stringify({ fields: { apiKey: "sk-1" } }),
+    });
 
-      expect(res.status).toBe(401);
-      expect(await res.json()).toEqual({
-        error: {
-          message: "Invalid API key or token.",
-          type: "authentication_error",
-        },
-      });
-      expect(store.connections).toHaveLength(0);
-    } finally {
-      caps.rbac = false;
-    }
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({
+      error: {
+        message: "Invalid API key or token.",
+        type: "authentication_error",
+      },
+    });
+    expect(store.connections).toHaveLength(0);
   });
 
   it("starts an org-scoped OAuth dance via the canonical authorize route", async () => {
@@ -523,21 +491,16 @@ describe("with the standard boot wiring", () => {
     expect(externalId).not.toBe("onecli-org-2-external-id");
   });
 
-  it("RBAC: a mere member cannot read the org external id", async () => {
-    caps.rbac = true;
-    try {
-      store.members = [
-        { organizationId: "org-1", userId: "user-1", role: "member" },
-      ];
+  it("a mere member cannot read the org external id", async () => {
+    store.members = [
+      { organizationId: "org-1", userId: "user-1", role: "member" },
+    ];
 
-      const res = await app.request("/v1/org/apps/aws-external-id", {
-        headers: orgKeyHeaders,
-      });
+    const res = await app.request("/v1/org/apps/aws-external-id", {
+      headers: orgKeyHeaders,
+    });
 
-      expect(res.status).toBe(401);
-    } finally {
-      caps.rbac = false;
-    }
+    expect(res.status).toBe(401);
   });
 
   it("refuses a legacy connect naming an org the caller is not in", async () => {
