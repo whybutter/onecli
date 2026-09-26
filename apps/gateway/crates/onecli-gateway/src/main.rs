@@ -26,6 +26,7 @@ use clap::Parser;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
+use binding::BindingMode;
 use ca::CertificateAuthority;
 use context::PolicyEngine;
 use server::{Entrypoint, GatewayServer};
@@ -51,6 +52,29 @@ struct Cli {
     /// image healthcheck run without curl/wget in the runtime image.
     #[arg(long)]
     healthcheck: bool,
+
+    /// Optional subcommand. With none given, `onecli-gateway` (optionally
+    /// with `--port`/`--data-dir`) parses exactly as it always has and runs
+    /// the MITM gateway server — see the module doc on `Command` below for
+    /// why that byte-for-byte compatibility matters.
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+/// Subcommands layered onto the historically flag-only `onecli-gateway` CLI.
+///
+/// `command` on [`Cli`] is `Option<Command>`, not `Command`, specifically so
+/// that omitting it entirely — the only way this binary has ever been
+/// invoked before this change — continues to select the server, not a clap
+/// error demanding a subcommand. `main` dispatches on it before any of the
+/// server's own CA/DB/crypto/vault bootstrapping runs, so `relay` never pays
+/// for (or requires) any of that.
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// Run a local mTLS relay: a blind byte-splice between a plain
+    /// HTTP-proxy agent and a remote OneCLI gateway. See the `relay` crate's
+    /// module doc for the security property this preserves.
+    Relay(relay::RelayArgs),
 }
 
 /// Cap on the final telemetry flush, inside the overall shutdown budget.
@@ -106,6 +130,15 @@ async fn main() -> Result<()> {
     // the startup below simply sets the flag, and the accept loop exits on its
     // first poll.
     shutdown::install();
+
+    // Relay mode is an entirely separate program sharing only the process's
+    // signal handling and rustls crypto provider install above: no CA, no
+    // database, no crypto service, no vault. Dispatched here, before any of
+    // the server-only bootstrapping below runs, so it never pays for (or
+    // requires) any of it.
+    if let Some(Command::Relay(args)) = cli.command {
+        return relay::run(args).await;
+    }
 
     let data_dir = expand_tilde(&cli.data_dir);
 
@@ -188,6 +221,59 @@ async fn main() -> Result<()> {
     let ca = CertificateAuthority::load_or_generate(&data_dir).await?;
     info!("CA certificate loaded");
 
+    // Client-certificate minting authority. Only meaningful when the mTLS
+    // trust anchor is the gateway's OWN generated client CA: if an operator
+    // has configured GATEWAY_CLIENT_CA (an externally managed trust anchor
+    // cert, whose matching private key we never hold), minting against a
+    // locally generated CA would produce certificates nobody trusts. In that
+    // case, skip generating/loading a client CA entirely and leave minting
+    // unavailable (the internal endpoint 503s) rather than silently minting
+    // from an unrelated CA. Any OTHER failure here (a corrupt on-disk key, an
+    // unwritable data dir, ...) aborts startup — fail closed, mirroring
+    // `CertificateAuthority::load_or_generate` above.
+    let operator_configured_client_ca = std::env::var("GATEWAY_CLIENT_CA")
+        .ok()
+        .is_some_and(|v| !v.trim().is_empty());
+    let client_ca: Option<Arc<client_ca::ClientCa>> = if operator_configured_client_ca {
+        info!(
+            "GATEWAY_CLIENT_CA is set — GATEWAY_CLIENT_CA_KEY/GATEWAY_CLIENT_CA_CERT (if set) \
+             are ignored, and client-certificate minting stays unavailable (POST \
+             /v1/internal/client-cert/issue 503s); the trust anchor is externally managed"
+        );
+        None
+    } else {
+        let authority = client_ca::ClientCa::load_or_generate(&data_dir).await?;
+        info!("client-certificate CA loaded");
+        Some(Arc::new(authority))
+    };
+    let fallback_client_ca_pem = client_ca.as_ref().map(|c| c.ca_cert_pem());
+
+    // mTLS is opt-in: unset GATEWAY_MTLS_PORT and this is a no-op (full
+    // backward compatibility). When it IS requested, any load failure here
+    // must abort startup — the gateway must never silently fall back to
+    // plaintext-only when mTLS was asked for. Validated here, before
+    // `server::entrypoint::run_all` starts either entrypoint, so a bad mTLS
+    // config is a boot failure rather than a mid-flight teardown of the
+    // plaintext listener (see `entrypoint::run_all`'s "abort every
+    // entrypoint on the first fatal error" semantics).
+    let mtls = client_ca::MtlsConfig::from_env(
+        &ca.ca_cert_pem(),
+        cli.port,
+        fallback_client_ca_pem.as_deref(),
+    )?;
+    match &mtls {
+        Some(m) => info!(port = m.port, "mTLS client-certificate listener configured"),
+        None => info!("mTLS disabled (GATEWAY_MTLS_PORT not set)"),
+    }
+
+    // Cert-identity ↔ agent-token tenant binding enforcement posture. Read
+    // once at startup (a mid-process env change is invisible by contract,
+    // same as every other startup-only knob here) and logged so the active
+    // posture is always visible in the boot log, not just inferable from
+    // whether the var happens to be set.
+    let binding_mode = BindingMode::from_env();
+    info!(mode = ?binding_mode, "cert/token tenant binding enforcement configured");
+
     // Support both DATABASE_URL (OSS) and individual DB_* vars (cloud ECS from Secrets Manager)
     let database_url = match std::env::var("DATABASE_URL") {
         Ok(url) => url,
@@ -257,7 +343,7 @@ async fn main() -> Result<()> {
     // OS is asked to choose. The listening line logs the address actually bound.
     info!("gateway ready");
 
-    // Serve until a shutdown signal stops the listener.
+    // Serve until a shutdown signal stops the listener(s).
     let server = GatewayServer::new(
         ca,
         cli.port,
@@ -265,8 +351,70 @@ async fn main() -> Result<()> {
         vault_service,
         cache,
         approval_store,
-    );
-    let entrypoints: Vec<Box<dyn Entrypoint>> = vec![Box::new(server)];
+        client_ca,
+        binding_mode,
+    )?;
+
+    // The plaintext listener has no client-certificate check at all — if
+    // mTLS is configured but this isn't loopback, anyone who can reach the
+    // plaintext port bypasses certificate authentication entirely. Not just
+    // the literal wildcard address: a specific-looking but still
+    // off-host-reachable address (a pod/cluster IP) is just as much a bypass
+    // (see `mtls_bypasses_plain_listener`'s doc comment). Evaluated here (not
+    // inside `GatewayServer::new`) because `mtls.is_some()` is the real "is
+    // the mTLS listener configured" signal; `client_ca` above only tracks
+    // whether *this process* holds the minting authority, which is `None`
+    // even with mTLS configured when an operator supplies an external
+    // `GATEWAY_CLIENT_CA`.
+    if server::mtls_bypasses_plain_listener(mtls.is_some(), server.plain_bind()) {
+        warn!(
+            plain_bind = %server.plain_bind(),
+            "GATEWAY_MTLS_PORT is set but the plaintext listener is not bound to loopback \
+             — anyone who can reach that port bypasses certificate authentication entirely. \
+             Set GATEWAY_PLAIN_BIND=127.0.0.1 to restrict it, but note that loopback also \
+             breaks Docker-published browser -> gateway vault/approval/cache calls, which \
+             arrive on the plaintext listener."
+        );
+    }
+
+    // A second, narrower warning beside the one above: cert/token binding
+    // enforcement is only as strong as the listener it applies to.
+    // `enforce_binding` exempts the plain listener BY DESIGN (it has no
+    // client certificate to bind at all) — but if that listener is reachable
+    // from anywhere an attacker can reach, they simply skip the mTLS port and
+    // the binding check entirely. Broader than the warning above (which only
+    // fires on the literal unspecified address, 0.0.0.0): any non-loopback
+    // bind — including a specific, deliberately "reachable" address like a
+    // pod/cluster IP — still lets the plain listener see traffic from
+    // off-host, so this warns on anything that isn't loopback, not just the
+    // wildcard address. Fires independently of the mTLS warning above: mTLS
+    // can be configured without binding enforcement (Off/Log), and binding
+    // enforcement requires mTLS to be configured at all (`enforce_binding`
+    // is a no-op off the mTLS listener), so this only ever fires alongside
+    // the warning above, never instead of it.
+    if server::plain_bind_bypasses_binding_enforcement(binding_mode, server.plain_bind()) {
+        warn!(
+            plain_bind = %server.plain_bind(),
+            "GATEWAY_BINDING_ENFORCEMENT=enforce is set but the plaintext listener is \
+             bound to a non-loopback address — cert/token binding is only checked on the \
+             mTLS listener, so anyone who can reach the plaintext port bypasses it \
+             entirely, same as the mTLS bypass warning above. Restrict GATEWAY_PLAIN_BIND \
+             to loopback (127.0.0.1) or another trusted-network-only address (same \
+             tradeoff noted above applies)."
+        );
+    }
+
+    let mut entrypoints: Vec<Box<dyn Entrypoint>> = Vec::with_capacity(2);
+    // Cloned before `server` is moved into the entrypoints vec below — the
+    // mTLS entrypoint needs its own handle to the same shared state so it
+    // serves the identical router/context as the plaintext listener.
+    if let Some(mtls_config) = mtls {
+        entrypoints.push(Box::new(server::MtlsEntrypoint::new(
+            server.state().clone(),
+            mtls_config,
+        )));
+    }
+    entrypoints.push(Box::new(server));
     let result = server::entrypoint::run_all(entrypoints).await;
 
     // The drain, in the one order that does not lose data: connections first

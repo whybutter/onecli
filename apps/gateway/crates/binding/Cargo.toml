@@ -1,0 +1,13 @@
+[package]
+name = "binding"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+db = { path = "../db" }
+tracing = { workspace = true }
+
+[dev-dependencies]
+time = { workspace = true }

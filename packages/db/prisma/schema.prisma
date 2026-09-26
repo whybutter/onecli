@@ -78,6 +78,7 @@ model Organization {
   userProvisions               UserProvision[]
   awsMarketplace               AwsMarketplaceSubscription? // cloud-only: AWS Marketplace billing link (inert in OSS)
   awsMarketplaceMeteredRecords AwsMarketplaceMeteredRecord[]
+  clientHosts                  ClientHost[]
 
   @@map("organizations")
 }
@@ -300,6 +301,7 @@ model Workspace {
   accessBindings          WorkspaceAccess[]
   skills                  Skill[]
   agentDefaultConnections WorkspaceAgentDefaultConnection[]
+  clientHosts             ClientHost[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -1995,6 +1997,35 @@ model WorkspaceAgentDefaultConnection {
   @@index([workspaceId])
   @@index([connectionId])
   @@map("workspace_agent_default_connections")
+}
+
+// A gateway mTLS client's durable identity (Phase 4 relay stack). Minted on
+// first enrollment (`spiffe://onecli/host/<id>`, derived from `id` in
+// `ensureClientHost`); a renewal (the caller passes its existing `id` back
+// as `hostId`, scoped to its own workspace — see `ensureClientHost`'s IDOR
+// guard) re-mints a certificate for the SAME row rather than creating a new
+// one, so `lastSerial`/`lastIssuedAt` always reflect the most recently
+// minted cert. No key material is ever stored here — the gateway signs from
+// a CSR and returns only the cert chain.
+model ClientHost {
+  id             String    @id @default(uuid())
+  workspaceId    String    @map("workspace_id")
+  organizationId String?   @map("organization_id")
+  label          String?
+  spiffeUri      String    @unique @map("spiffe_uri")
+  lastSerial     String?   @map("last_serial")
+  lastIssuedAt   DateTime? @map("last_issued_at")
+  // Unused hook: no revocation flow exists yet (no CRL/OCSP wiring in the
+  // gateway's mTLS verifier). Reserved so a future revocation feature
+  // doesn't need a migration.
+  revokedAt      DateTime? @map("revoked_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@map("client_hosts")
 }
 
 model AppConfig {

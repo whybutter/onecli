@@ -104,6 +104,10 @@ export const AUDIT_SERVICES = {
   // terminator-reported session open/close. Free shared code, dark without
   // an SSH CA configured; sourceIp in metadata is terminator-reported.
   SSH: "ssh",
+  // Remote-gateway relay stack (Phase 4): a `ClientHost`'s short-lived mTLS
+  // client certificate mint (MINT) — enrollment or renewal. Metadata carries
+  // hostId/spiffeUri/serial/notAfter only, never cert/CA/key material.
+  CLIENT_HOST: "client-host",
 } as const;
 
 export const AUDIT_STATUS = {

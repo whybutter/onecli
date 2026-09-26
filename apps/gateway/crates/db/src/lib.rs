@@ -87,6 +87,63 @@ pub struct VaultConnectionRow {
     pub connection_data: Option<serde_json::Value>,
 }
 
+/// A `client_hosts` row (mTLS enrollment; cert↔token tenant-binding
+/// enforcement) — the allowlist entry `binding::evaluate` checks a cert
+/// identity's tenant against. One row per enrolled host, keyed by its unique
+/// `spiffe_uri`; see the model's doc comment in `schema.prisma` for the
+/// enrollment/renewal semantics. `Serialize`/`Deserialize` so it can ride the
+/// same JSON cache-serialization path as `connect::ConnectResponse`
+/// (`server`'s `resolve_host_tenant` caches `Option<ClientHostRow>` —
+/// including the negative "no such host" result — for 60s).
+#[derive(Debug, Clone, PartialEq, FromRow, serde::Serialize, serde::Deserialize)]
+pub struct ClientHostRow {
+    pub workspace_id: String,
+    pub organization_id: Option<String>,
+    /// `Some` means revoked (the timestamp itself is never read — only
+    /// presence/absence matters to `binding::evaluate`).
+    ///
+    /// Deliberately `PrimitiveDateTime`, NOT `OffsetDateTime`: the column is
+    /// `TIMESTAMP` — WITHOUT time zone — and sqlx-postgres maps `TIMESTAMP`
+    /// to `PrimitiveDateTime` / `TIMESTAMPTZ` to `OffsetDateTime`. Decoding a
+    /// non-null value through the wrong one of the two is a hard decode
+    /// error at the `sqlx::FromRow` level, not silently wrong data —
+    /// `OffsetDateTime` here would only ever have been exercised the first
+    /// time a real row had a non-null `revoked_at`, at which point every
+    /// lookup for that host would fail closed as a (wrongly retryable) 502
+    /// instead of a 403 `host_revoked` deny. Since only `.is_some()` is ever
+    /// read, the timezone this type carries (none) is irrelevant to
+    /// `binding::evaluate` — this is the minimal fix, no schema/migration
+    /// change needed.
+    ///
+    /// Serialized via `time`'s own `serde` impl (its internal representation,
+    /// not RFC 3339 text) — fine for a value that only ever round-trips
+    /// through this process's own cache and is never read by anything else.
+    pub revoked_at: Option<time::PrimitiveDateTime>,
+}
+
+/// Look up a `client_hosts` row by its unique `spiffe_uri` — the identity
+/// carried in a client certificate's URI SAN (`client_ca::ClientIdentity::primary()`).
+///
+/// BIND ONLY: `spiffe_uri` is attacker-controlled (it comes from a
+/// certificate's SAN, which anyone holding a cert signed by the configured
+/// client CA picks themselves) and is never string-interpolated into the
+/// query. Looked up by the unique column directly — the `<id>` embedded in
+/// `spiffe://onecli/host/<id>` is never parsed back out of the string; the
+/// whole URI is the lookup key, matching how `ensureClientHost` (Node side)
+/// stores it.
+pub async fn find_client_host_by_spiffe(
+    pool: &PgPool,
+    spiffe_uri: &str,
+) -> Result<Option<ClientHostRow>> {
+    sqlx::query_as::<_, ClientHostRow>(
+        r#"SELECT workspace_id, organization_id, revoked_at FROM client_hosts WHERE spiffe_uri = $1 LIMIT 1"#,
+    )
+    .bind(spiffe_uri)
+    .fetch_optional(pool)
+    .await
+    .context("querying client_hosts by spiffe_uri")
+}
+
 // ── Queries ─────────────────────────────────────────────────────────────
 
 /// Look up a user by their external auth ID (the identity provider's subject).
@@ -851,4 +908,72 @@ pub async fn delete_vault_connection(
         .await
         .context("deleting vault_connection")?;
     Ok(())
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────
+//
+// This module has no live-Postgres test tier — every query function here
+// takes a `&PgPool` and needs a real server to exercise. That means the
+// actual `sqlx::FromRow` DECODE of a `client_hosts` row — the thing the
+// `PrimitiveDateTime` fix on `ClientHostRow` is about — is NOT exercised by
+// anything below. What IS tested here is the OTHER place `ClientHostRow` has
+// to round-trip correctly: the JSON cache-serialization path `server`'s
+// `resolve_host_tenant` uses (`CacheStore::set`/`get`, which go through
+// `serde_json` under the hood — see `cache`'s `impl dyn CacheStore`). If a
+// live-DB test tier is ever added to this crate, the test this really needs
+// is: insert a `client_hosts` row with a non-null `revoked_at`, call
+// `find_client_host_by_spiffe`, and assert it decodes without error.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `PrimitiveDateTime` stand-in for "now" — see `ClientHostRow`'s doc
+    /// comment for why the field is `PrimitiveDateTime`, not `OffsetDateTime`.
+    fn some_primitive_datetime() -> time::PrimitiveDateTime {
+        let now = time::OffsetDateTime::now_utc();
+        time::PrimitiveDateTime::new(now.date(), now.time())
+    }
+
+    /// Proves `ClientHostRow` — with a NON-NULL `revoked_at`, the exact value
+    /// the `PrimitiveDateTime` fix is about — round-trips through
+    /// `serde_json` unchanged. This is the real code path `resolve_host_tenant`
+    /// depends on (`CacheStore::set`/`get`, both JSON under the hood): a
+    /// positive cache hit for a revoked host must deserialize back to
+    /// `revoked_at: Some(_)`, not silently lose it or fail to deserialize.
+    ///
+    /// This does NOT exercise the sqlx-postgres wire decode from an actual
+    /// `TIMESTAMP` column — see the module doc above for why that gap exists.
+    #[test]
+    fn client_host_row_json_round_trip_with_revoked_at_present() {
+        let row = ClientHostRow {
+            workspace_id: "workspace-A".to_string(),
+            organization_id: Some("org-1".to_string()),
+            revoked_at: Some(some_primitive_datetime()),
+        };
+
+        let json = serde_json::to_string(&row).expect("serialize");
+        let round_tripped: ClientHostRow = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(round_tripped, row);
+        assert!(round_tripped.revoked_at.is_some());
+    }
+
+    /// The negative-cache counterpart: `revoked_at: None` must also round-trip
+    /// — `resolve_host_tenant` caches `Option<ClientHostRow>` (including the
+    /// "unknown host" `None` case) the same way regardless of which field is
+    /// null.
+    #[test]
+    fn client_host_row_json_round_trip_with_revoked_at_absent() {
+        let row = ClientHostRow {
+            workspace_id: "workspace-A".to_string(),
+            organization_id: None,
+            revoked_at: None,
+        };
+
+        let json = serde_json::to_string(&row).expect("serialize");
+        let round_tripped: ClientHostRow = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(round_tripped, row);
+        assert!(round_tripped.revoked_at.is_none());
+    }
 }

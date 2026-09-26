@@ -12,8 +12,10 @@ axum = { workspace = true }
 base64 = { workspace = true }
 futures-util = { workspace = true }
 approval = { path = "../approval" }
+binding = { path = "../binding" }
 ca = { path = "../ca" }
 cache = { path = "../cache" }
+client-ca = { path = "../client-ca" }
 common = { path = "../common" }
 crypto = { path = "../crypto" }
 db = { path = "../db" }
