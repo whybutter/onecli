@@ -11,6 +11,12 @@ This is an independent OSS fork, rebased onto upstream OneCLI v2. The fork's cha
 - The hosted-agent runner (`apps/runner`, `apps/ssh-terminator`, `apps/channel-adapter`) stays in the tree but off by default (`profiles:`-gated in `docker/docker-compose.yml`, not part of our publish matrix — see CI & Release below). **Nanoclaw is this fork's agent runtime**; BYO agents are the primary door regardless of whether a runner is registered.
 - Upstream sync runs via the `/upstream-sync` skill against v2 releases (`docs/upstream-sync/`, `.agents/skills/upstream-sync/`). `docs/upstream-sync/v2-migration/plan.md` is the living roadmap for the v1→v2 rebase this fork is built from.
 
+## Fork documentation
+
+[`docs/fork/README.md`](docs/fork/README.md) is the index of everything this fork adds or changes on top of upstream OneCLI — one table per area (gateway, API, web, auth, deployment, nanoclaw) with what it does, where it lives, its env vars, its tests, and the PR/plan section that introduced it. `docs/fork/upstream-divergences.md` lists every free (non-`ee/`) file the fork has modified, which is the conflict surface a future upstream merge has to cross.
+
+**Any PR that touches fork-owned behaviour, a free file, an env var, or a migration updates the relevant `docs/fork/` page and `upstream-divergences.md` in the same PR.** A plan for that work states which `docs/fork/` pages it will touch; a review checks that the pages were actually updated before approving.
+
 ## Commands
 
 ```bash

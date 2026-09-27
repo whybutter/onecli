@@ -70,6 +70,8 @@ Workflow({
 })
 ```
 
+Feed `docs/fork/upstream-divergences.md` into `forkContext` alongside the git log — it is the maintained list of every free file the fork has modified and why, which is exactly the "where does upstream collide with ours" answer this step needs.
+
 It runs one `sonnet` agent per area (survey work — mechanical diff reading over a wide scope), one
 agent at the session model per conflicted file (resolution needs judgement), then a single synthesis
 agent that merges everything and resolves reporter disagreements. Surveys and conflict analyses run

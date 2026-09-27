@@ -117,15 +117,23 @@ agents (memory per sandbox, the held-awake ceiling) is covered in
 
 ## Accounts and registration
 
-The first visit asks you to **create an account** — email and password.
-Registration stays open by design: every new account gets its own
-organization, fenced from everyone else's, so a stranger signing up takes
-nothing from existing users. Joining somebody **else's** organization
-goes through an invitation; registering without one starts a fresh org.
-A deployment that must not accept strangers keeps its dashboard behind the
-network boundary — there is deliberately no registration switch. (The one
-narrow refusal: sign-ups are blocked during a pre-2.0 upgrade window until the
-legacy account is adopted.)
+The first visit asks you to **create an account** — email and password. That
+very first account is always allowed. After it, who may register is an
+instance setting, `ONECLI_REGISTRATION`:
+
+- `invite` (the default): a new account is created only for an email that
+  holds a pending invitation from an existing member. The public signup form
+  is replaced by an "Invite only" screen, and the login page shows no
+  "Create an account" link. Invitation links keep working.
+- `open`: anyone who can reach the signup page may register. Every new
+  account gets its own organization, fenced from everyone else's.
+
+Both the `api` and `web` processes read the variable, so set it on both
+(`docker-compose.yml` already threads it through). Joining somebody
+**else's** organization goes through an invitation in either mode. One more
+refusal applies regardless: sign-ups are blocked during a pre-2.0 upgrade
+window until the legacy account is adopted. Details and history:
+[`docs/fork/auth-and-registration.md`](fork/auth-and-registration.md).
 
 Setting `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` adds a "Continue with
 Google" button beside the password form (redirect URI:
@@ -159,6 +167,7 @@ what ends that). If your `.env` still sets `NEXTAUTH_SECRET`, rename it to
 | `GATEWAY_UPSTREAM_HEADER_TIMEOUT_SECS` | Bound on the gateway's wait for upstream response headers | `300`                         |
 | `GOOGLE_CLIENT_ID`                     | Optional — adds a Google sign-in button                   | —                             |
 | `GOOGLE_CLIENT_SECRET`                 | Optional — Google OAuth client secret                     | —                             |
+| `ONECLI_REGISTRATION`                  | `open` or `invite` — who may create a new account         | `invite`                      |
 
 Every required value is generated for you — by `pnpm dev` into `.env` for
 development, by `pnpm run setup` into `docker/.env` for a self-host stack,
