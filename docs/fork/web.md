@@ -1,0 +1,83 @@
+# Web (`apps/web`)
+
+The fork's Next.js dashboard additions: the org admin surfaces (Members, Groups, Domains, General),
+the workspace-scoped access/agent-defaults cards, budgets and usage, key masking, the BYO-first
+create-agent door, the GitHub repository picker, and a real create-org flow. Auth/registration
+screens live in [`auth-and-registration.md`](auth-and-registration.md). See
+[`../upstream-sync/v2-migration/web-ee-behaviour.md`](../upstream-sync/v2-migration/web-ee-behaviour.md)
+for the behaviour spec this was built from.
+
+## Purpose
+
+Upstream gates most of this behind billing/license checks (`enterprise-locked-card.tsx`,
+`license-required-dialog.tsx`, `usePlanGate`) with "Enterprise license required" stand-ins.
+`apps/web/src/ee/` is this fork's clean-room Apache-2.0 rewrite of the same surfaces, mounted
+unconditionally — `usePlanGate` collapsed to a permanent no-op, and the locked-card/dialog
+components were deleted rather than kept dead.
+
+## Design decisions that differ from upstream (or the pre-v2 fork)
+
+| Decision                                                                                              | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Budgets mount under the **org-scoped** Global Connections tabs, not per-workspace connections tabs    | Phase 2's API only supports org-owned budget secrets; the pre-v2 fork's per-workspace placement is superseded. Recorded explicitly so a reviewer doesn't "fix" it back ([`phase3-plan.md`](../upstream-sync/v2-migration/phase3-plan.md) vetting note 1).                                                                                                                                                                                                                                                                                                      |
+| BYO is the **primary** create-agent door on self-host, regardless of runner presence or agent history | A self-host-only decision ("Nanoclaw/BYO-first"): a hosted surface (a registered, reachable runner) only ever appears as a secondary chevron option, never the primary button — see the design-decision doc comment in [`src/lib/agents/create-door.ts`](../../apps/web/src/lib/agents/create-door.ts). The existing `create-door.test.ts` pinned upstream's hosted-first behaviour before this change; that test was rewritten, not just re-passed, as part of the same PR ([`phase3-plan.md`](../upstream-sync/v2-migration/phase3-plan.md) vetting note 4). |
+| GitHub picker ships; Dropbox folder browser does not                                                  | The picker was never planned for Dropbox — GitHub-only is sufficient ([`phase2-plan.md`](../upstream-sync/v2-migration/phase2-plan.md) vetting note 4). Shipping it required removing an `IS_CLOUD` gate on `ResourceScopeFields` in `lib/policy-editor/resource-scope.tsx` that made the picker permanently unreachable in this fork (`IS_CLOUD` is always false here).                                                                                                                                                                                       |
+| Create-org has **no cap**                                                                             | `MAX_ORGS_PER_USER` and the quota-service org limit are removed rather than defaulted — any user may create organizations ([`plan.md`](../upstream-sync/v2-migration/plan.md) decision 2).                                                                                                                                                                                                                                                                                                                                                                     |
+| Org General gates the rename form on **owner**, not admin                                             | Matches the API's owner-only `PATCH /org` ([`phase3-plan.md`](../upstream-sync/v2-migration/phase3-plan.md) vetting note 5).                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| The org switcher is query-backed (`useActiveOrg` keyed on `queryKeys.org.list()`), not a static prop  | A rename on Org General used to leave the sidebar switcher showing the old name until a full reload; making the switcher's query invalidate on `useUpdateOrg` fixed it live, in the same page, no reload — a Phase 3 fix-round finding.                                                                                                                                                                                                                                                                                                                        |
+| Role-mappings UI is omitted from the Groups page                                                      | Deferred along with the API router — no product surface for it yet.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| App Availability nav entry removed                                                                    | The gateway keeps only the pure block function with an always-unrestricted loader; there's no UI decision to expose ([`plan.md`](../upstream-sync/v2-migration/plan.md) decision 3).                                                                                                                                                                                                                                                                                                                                                                           |
+
+## Entry points
+
+| Feature                                             | File(s)                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Org admin surfaces (Members/Groups/Domains/General) | [`src/app/(dashboard)/org/[orgId]/(admin)/{team,groups,settings/domains,settings/general}/page.tsx`](<../../apps/web/src/app/(dashboard)/org/[orgId]/(admin)/>), components under [`src/ee/{team,groups,settings}/`](../../apps/web/src/ee/)                                                                                                                                                                             |
+| Workspace access + agent-defaults cards             | [`src/ee/workspaces/_components/{workspace-access-card,agent-defaults-card}.tsx`](../../apps/web/src/ee/workspaces/_components/), rendered from [`src/lib/workspaces/settings-page.tsx`](../../apps/web/src/lib/workspaces/settings-page.tsx)                                                                                                                                                                            |
+| Budgets tab                                         | [`src/app/(dashboard)/org/[orgId]/(admin)/global-connections/(tabs)/budgets/page.tsx`](<../../apps/web/src/app/(dashboard)/org/[orgId]/(admin)/global-connections/(tabs)/budgets/page.tsx>), components in [`src/ee/budgets/_components/`](../../apps/web/src/ee/budgets/_components/)                                                                                                                                   |
+| Usage page                                          | [`src/app/(dashboard)/org/[orgId]/usage/page.tsx`](<../../apps/web/src/app/(dashboard)/org/[orgId]/usage/page.tsx>), components in [`src/ee/usage/`](../../apps/web/src/ee/usage/)                                                                                                                                                                                                                                       |
+| Key masking                                         | [`src/lib/mask-secret.ts`](../../apps/web/src/lib/mask-secret.ts), used by [`src/app/(dashboard)/w/[workspaceId]/overview/_components/api-key-card.tsx`](<../../apps/web/src/app/(dashboard)/w/[workspaceId]/overview/_components/api-key-card.tsx>) and [`.../settings/install/_components/install-content.tsx`](<../../apps/web/src/app/(dashboard)/w/[workspaceId]/settings/install/_components/install-content.tsx>) |
+| BYO create door                                     | [`src/lib/agents/create-door.ts`](../../apps/web/src/lib/agents/create-door.ts), [`src/app/(dashboard)/w/[workspaceId]/agents/_components/agent-create-door.tsx`](<../../apps/web/src/app/(dashboard)/w/[workspaceId]/agents/_components/agent-create-door.tsx>)                                                                                                                                                         |
+| GitHub picker                                       | [`src/lib/granular-access/github-app/policy-dialog-content.tsx`](../../apps/web/src/lib/granular-access/github-app/policy-dialog-content.tsx), config at [`src/lib/granular-access/configs/github-app.ts`](../../apps/web/src/lib/granular-access/configs/github-app.ts), gate removed in [`src/lib/policy-editor/resource-scope.tsx`](../../apps/web/src/lib/policy-editor/resource-scope.tsx)                          |
+| Create-org                                          | [`src/app/create-org/page.tsx`](../../apps/web/src/app/create-org/page.tsx), [`src/ee/account/create-org-page.tsx`](../../apps/web/src/ee/account/create-org-page.tsx), form at [`src/ee/account/_components/create-org-form.tsx`](../../apps/web/src/ee/account/_components/create-org-form.tsx)                                                                                                                        |
+| Org switcher (query-backed)                         | [`src/lib/dashboard/use-active-org.ts`](../../apps/web/src/lib/dashboard/use-active-org.ts)                                                                                                                                                                                                                                                                                                                              |
+| Entitlement placeholders (ComingSoon)               | [`src/lib/components/{coming-soon-card,feature-coming-soon-dialog}.tsx`](../../apps/web/src/lib/components/)                                                                                                                                                                                                                                                                                                             |
+| Closed-signup / login                               | see [`auth-and-registration.md`](auth-and-registration.md)                                                                                                                                                                                                                                                                                                                                                               |
+
+## Env vars
+
+None specific to web beyond what's already covered in [`api.md`](api.md)'s and
+[`auth-and-registration.md`](auth-and-registration.md)'s env-var tables — the web app reads
+`ONECLI_REGISTRATION`, `ONECLI_EXTERNAL_URL`, and the standard auth vars via `apps/web/src/lib/env.ts`.
+
+## Testing
+
+- Component tests sit beside every `_components/*.tsx` listed above (e.g.
+  [`workspace-access-card.test.tsx`](../../apps/web/src/ee/workspaces/_components/workspace-access-card.test.tsx),
+  [`agent-defaults-card.test.tsx`](../../apps/web/src/ee/workspaces/_components/agent-defaults-card.test.tsx),
+  [`budgets-content.test.tsx`](../../apps/web/src/ee/budgets/_components/budgets-content.test.tsx),
+  [`create-org-form.test.tsx`](../../apps/web/src/ee/account/_components/create-org-form.test.tsx),
+  [`policy-dialog-content.test.tsx`](../../apps/web/src/lib/granular-access/github-app/policy-dialog-content.test.tsx)).
+- [`src/lib/agents/create-door.test.ts`](../../apps/web/src/lib/agents/create-door.test.ts) covers
+  the BYO-primary decision table across cloud/self-host and hosted-surface states.
+- **Browser QA** (manual, no automated e2e for the dashboard): run against an isolated worktree —
+  never the main checkout's `:10254` stack — with its own ports and a scratch database cloned from
+  an e2e template (Phase 3 used `onecli_phase3_qa`, ports web `:10354` / api `:10356` / gateway
+  `:10355`). See the QA checklist and record in
+  [`../upstream-sync/v2-migration/phase3-plan.md`](../upstream-sync/v2-migration/phase3-plan.md#browser-qa-record-2026-09-15-orchestrator).
+
+## Known limitations / follow-ups
+
+- **GitHub picker was not exercised in live browser QA** (needs a real GitHub App installation) —
+  covered by component tests only.
+- **Dropbox folder browser** is not planned.
+- Minor nits from the Phase 3 QA fix rounds are tracked as still-open in that record: two unlabeled
+  icon-only copy buttons on the Install page.
+
+## History
+
+| PR                                                 | What it added here                                                                                                                                        |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#53](https://github.com/whybutter/onecli/pull/53) | Phase 0: ComingSoon placeholders for the not-yet-built org admin pages, `ee` component stand-ins                                                          |
+| [#56](https://github.com/whybutter/onecli/pull/56) | Phase 3: real org admin surfaces, workspace access/agent-defaults cards, budgets tab, usage page, key masking, BYO create door, GitHub picker, create-org |
+| [#59](https://github.com/whybutter/onecli/pull/59) | Consolidated onto `v2`                                                                                                                                    |
