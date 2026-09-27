@@ -12,7 +12,6 @@ import {
   ShieldCheck,
   Plug,
   Shield,
-  LayoutGrid,
   LayoutDashboard,
   Download,
   Activity,
@@ -113,7 +112,8 @@ export const getNavItems = (
   // RBAC builds (cloud) and once the runtime entitlement is known either way.
   // App Availability is org administration and lives under Organization
   // Settings (`getSettingsSections`), beside the other org-wide controls.
-  // Usage + Billing need billing.
+  // Usage is member-visible and needs no billing capability; Billing itself
+  // still needs it.
   const adminGroup: NavItem[] = [
     // "Members" (not "Team"/"Users"): for humans OneCLI is the SP — the label
     // matches the /v1/org/members API resource. The /team URL is historical,
@@ -123,8 +123,12 @@ export const getNavItems = (
   if (CAPS.rbac || entitlementKnown) {
     adminGroup.push({ title: "Groups", url: `${p}/groups`, icon: Boxes });
   }
+  // Usage (recorded gateway requests) needs no billing capability — this
+  // fork has no plan tiers, and the page itself is member-visible. Billing
+  // stays behind CAPS.billing, which is permanently false in this
+  // onprem-only fork, so it naturally never renders.
+  adminGroup.push({ title: "Usage", url: `${p}/usage`, icon: BarChart3 });
   if (CAPS.billing) {
-    adminGroup.push({ title: "Usage", url: `${p}/usage`, icon: BarChart3 });
     adminGroup.push({
       title: "Billing",
       url: `${p}/billing`,
@@ -198,13 +202,10 @@ export const getSettingsSections = (orgId?: string): SettingsNavSection[] => {
       items: [
         { title: "General", url: `${p}/settings/general`, icon: Building2 },
         { title: "Domains", url: `${p}/settings/domains`, icon: Globe },
-        // Deferred to a later phase; the page itself renders a placeholder
-        // until it ships (there is no license dial left to gate on).
-        {
-          title: "App Availability",
-          url: `${p}/settings/app-availability`,
-          icon: LayoutGrid,
-        },
+        // App Availability is deferred (v2 migration Decision 3) — the page
+        // itself still renders a placeholder if reached directly, but the
+        // nav entry is hidden rather than linking to a feature that isn't
+        // built yet.
         {
           title: "API Keys",
           url: `${p}/settings/org-api-keys`,

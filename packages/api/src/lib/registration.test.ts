@@ -1,25 +1,45 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  assertRegistrationAllowed,
   assertUpgradeWindowClear,
   registrationState,
   SIGNUP_BLOCKED_BY_UPGRADE,
+  SIGNUP_REQUIRES_INVITATION,
 } from "./registration";
 import {
   LEGACY_LOCAL_AUTH_ID,
   LEGACY_LOCAL_EMAIL,
 } from "./legacy-local-identity";
 
-// Registration is open by design — anyone may create an account, and each
-// account gets its own organization. What remains to prove is smaller and
-// sharper: the screens learn the right moment to stop funnelling everyone to
-// the signup form, and the ONE refusal left (the pre-2.0 upgrade window)
-// fires exactly when adoption would otherwise be stranded, and never else.
+// Account creation is governed by `REGISTRATION_MODE` (`./env`): "open"
+// admits anyone, "invite" (default) requires a pending invitation or that
+// the instance has no real users yet. What remains to prove here is
+// smaller and sharper: the screens learn the right moment to stop
+// funnelling everyone to the signup form, the upgrade window (checked
+// first, unconditionally) fires exactly when adoption would otherwise be
+// stranded, and the invite gate admits/refuses exactly per that policy.
 
 type Row = { id: string; email: string; externalAuthId: string };
+type Invitation = { email: string; status: string; expiresAt: Date };
 
 const state = {
   users: [] as Row[],
   accountsByUser: {} as Record<string, number>,
+  invitations: [] as Invitation[],
+};
+
+/**
+ * A faithful-enough model of Postgres `ILIKE` (what Prisma's
+ * `mode: "insensitive"` compiles to): `_` matches any single character, `%`
+ * matches any run of characters, case-insensitively. The production code
+ * under test uses this as a PRE-filter only — see `assertRegistrationAllowed`
+ * — but the mock has to actually behave like ILIKE, or a test asserting the
+ * strict post-check does anything would be vacuous.
+ */
+const ilikeMatch = (pattern: string, value: string): boolean => {
+  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regexBody = escaped.replace(/%/g, ".*").replace(/_/g, ".");
+  return new RegExp(`^${regexBody}$`, "i").test(value);
 };
 
 const prisma = {
@@ -34,6 +54,25 @@ const prisma = {
   account: {
     count: async ({ where }: { where: { userId: string } }) =>
       state.accountsByUser[where.userId] ?? 0,
+  },
+  invitation: {
+    findMany: async ({
+      where,
+    }: {
+      where: {
+        email: { equals: string; mode: "insensitive" };
+        status: string;
+        expiresAt: { gt: Date };
+      };
+    }) =>
+      state.invitations
+        .filter(
+          (i) =>
+            i.status === where.status &&
+            i.expiresAt > where.expiresAt.gt &&
+            ilikeMatch(where.email.equals, i.email),
+        )
+        .map((i) => ({ email: i.email })),
   },
 } as unknown as Parameters<typeof registrationState>[0];
 
@@ -52,6 +91,12 @@ const realUser = (n: number): Row => ({
 beforeEach(() => {
   state.users = [];
   state.accountsByUser = {};
+  state.invitations = [];
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.resetModules();
 });
 
 describe("registrationState", () => {
@@ -190,5 +235,156 @@ describe("assertUpgradeWindowClear", () => {
       realUser(1),
     ];
     await expect(assertUpgradeWindowClear(prisma)).resolves.toBeUndefined();
+  });
+
+  it("orders the upgrade-window refusal before the invite gate", async () => {
+    // Both conditions that refuse are true at once: an unclaimed upgrade
+    // window (legacyGhost + one unfinished claimer) AND no invitation for
+    // the newcomer's email. `better-auth.ts`'s creation hook calls these two
+    // guards in exactly this sequence — the upgrade window must win, since
+    // it protects data an upgrading operator already has and its refusal
+    // must never be masked by the invite gate's.
+    state.users = [legacyGhost, realUser(1)];
+
+    const runHookOrder = async (email: string) => {
+      await assertUpgradeWindowClear(prisma);
+      await assertRegistrationAllowed(email, prisma);
+    };
+
+    await expect(runHookOrder("stranger@example.test")).rejects.toMatchObject({
+      body: { code: SIGNUP_BLOCKED_BY_UPGRADE },
+    });
+  });
+});
+
+describe("assertRegistrationAllowed", () => {
+  it("in open mode, admits anyone regardless of established users or invitations", async () => {
+    vi.stubEnv("ONECLI_REGISTRATION", "open");
+    vi.resetModules();
+    const openModule = await import("./registration");
+
+    state.users = [realUser(1), realUser(2)];
+    state.invitations = [];
+
+    await expect(
+      openModule.assertRegistrationAllowed("stranger@example.test", prisma),
+    ).resolves.toBeUndefined();
+  });
+
+  it("in invite mode, admits the first account regardless of any invitation", async () => {
+    // No users yet: a fresh install. The bootstrap exception must not
+    // require an invitation.
+    state.users = [];
+    state.invitations = [];
+
+    await expect(
+      assertRegistrationAllowed("first-admin@example.test", prisma),
+    ).resolves.toBeUndefined();
+  });
+
+  it("in invite mode, admits an established instance's pending, unexpired, exact-case invitation", async () => {
+    state.users = [realUser(1)];
+    state.invitations = [
+      {
+        email: "invited@example.test",
+        status: "pending",
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    ];
+
+    await expect(
+      assertRegistrationAllowed("invited@example.test", prisma),
+    ).resolves.toBeUndefined();
+  });
+
+  it("in invite mode, matches the invitation's email case-insensitively", async () => {
+    state.users = [realUser(1)];
+    state.invitations = [
+      {
+        email: "Invited@Example.test",
+        status: "pending",
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    ];
+
+    await expect(
+      assertRegistrationAllowed("invited@example.test", prisma),
+    ).resolves.toBeUndefined();
+  });
+
+  it("in invite mode, refuses an established instance's expired invitation", async () => {
+    state.users = [realUser(1)];
+    state.invitations = [
+      {
+        email: "invited@example.test",
+        status: "pending",
+        expiresAt: new Date(Date.now() - 60_000),
+      },
+    ];
+
+    await expect(
+      assertRegistrationAllowed("invited@example.test", prisma),
+    ).rejects.toMatchObject({
+      body: { code: SIGNUP_REQUIRES_INVITATION },
+    });
+  });
+
+  it("in invite mode, refuses an established instance with no invitation at all", async () => {
+    state.users = [realUser(1)];
+    state.invitations = [];
+
+    await expect(
+      assertRegistrationAllowed("stranger@example.test", prisma),
+    ).rejects.toMatchObject({
+      body: { code: SIGNUP_REQUIRES_INVITATION },
+    });
+  });
+
+  it("in invite mode, a pending invitation for a DIFFERENT email does not admit the signup", async () => {
+    // Google (or password) sign-up is keyed on the email being created, never
+    // on which invite token (if any) was in the URL. An invitation that
+    // exists for somebody else's address must not leak an allow to this one.
+    state.users = [realUser(1)];
+    state.invitations = [
+      {
+        email: "someone-else@example.test",
+        status: "pending",
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    ];
+
+    await expect(
+      assertRegistrationAllowed("stranger@example.test", prisma),
+    ).rejects.toMatchObject({
+      body: { code: SIGNUP_REQUIRES_INVITATION },
+    });
+  });
+
+  it("in invite mode, a wildcard-shaped signup email does not admit via a same-length invitation it ILIKE-matches", async () => {
+    // The pre-filter is a real ILIKE (Prisma's `mode: "insensitive"`), and
+    // `_` is both a legal email character AND a single-character wildcard: a
+    // signup for "_____@corp.example" ILIKE-matches ANY 5-character local
+    // part, including a genuine pending invitation for "alice@corp.example".
+    // The pre-filter is allowed to return that row as a candidate — the
+    // post-check must still refuse, because the literal strings differ.
+    state.users = [realUser(1)];
+    state.invitations = [
+      {
+        email: "alice@corp.example",
+        status: "pending",
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    ];
+
+    // Sanity check on the mock itself: the ILIKE pre-filter really does
+    // treat this as a match, so the test is exercising the post-check and
+    // not merely a mock that never returns a candidate.
+    expect(ilikeMatch("_____@corp.example", "alice@corp.example")).toBe(true);
+
+    await expect(
+      assertRegistrationAllowed("_____@corp.example", prisma),
+    ).rejects.toMatchObject({
+      body: { code: SIGNUP_REQUIRES_INVITATION },
+    });
   });
 });

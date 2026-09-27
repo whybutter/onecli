@@ -78,6 +78,9 @@ export const getInstallInfo = async (options?: ResolveOptions) => {
 
   return {
     apiKey: keyResult.apiKey,
+    lastUsedAt: keyResult.lastUsedAt
+      ? keyResult.lastUsedAt.toISOString()
+      : null,
     appUrl: appOrigin(),
     apiUrl: apiOrigin(),
   };

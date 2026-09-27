@@ -88,6 +88,13 @@ describe.skipIf(!PROOF_URL)("self-hosted session over real PostgreSQL", () => {
   beforeAll(async () => {
     process.env.DATABASE_URL = PROOF_URL;
     process.env.BETTER_AUTH_SECRET = SECRET;
+    // This suite proves the session WIRE (cookie ⇄ row), not the
+    // registration policy — stub the instance open so signUpEmail is never
+    // refused by ONECLI_REGISTRATION=invite's established-instance gate for
+    // reasons this suite doesn't test (the shared proof database already
+    // holds real accounts from other suites).
+    vi.stubEnv("ONECLI_REGISTRATION", "open");
+    vi.resetModules();
 
     ({ db } = await import("@onecli/db"));
     // The server does this at boot, and provisioning an organization depends
@@ -117,6 +124,8 @@ describe.skipIf(!PROOF_URL)("self-hosted session over real PostgreSQL", () => {
 
   afterAll(async () => {
     await cleanup();
+    vi.unstubAllEnvs();
+    vi.resetModules();
   });
 
   it("resolves a cookie the auth API issued into our own identity", async () => {

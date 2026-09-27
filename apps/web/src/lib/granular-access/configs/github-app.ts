@@ -1,5 +1,17 @@
+import dynamic from "next/dynamic";
 import { GitBranch } from "lucide-react";
 import type { GranularAccessConfig } from "../types";
+
+// The picker loads on demand: this config sits in the shared chunk (connection
+// rows and the policy editor read it for summaries), the picker is only
+// needed once someone opens Manage.
+const GithubAppPolicyDialogContent = dynamic(
+  () =>
+    import("../github-app/policy-dialog-content").then(
+      (m) => m.GithubAppPolicyDialogContent,
+    ),
+  { ssr: false },
+);
 
 export const githubAppConfig: GranularAccessConfig = {
   // Granular repo scoping applies whenever the connection can be scoped: an
@@ -20,4 +32,5 @@ export const githubAppConfig: GranularAccessConfig = {
   getSelectedItems: (policy) => (policy.repositories as string[]) ?? [],
   itemLabel: { singular: "repository", plural: "repositories" },
   Icon: GitBranch,
+  PolicyDialogContent: GithubAppPolicyDialogContent,
 };

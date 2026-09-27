@@ -38,19 +38,30 @@ export interface OnpremSignupContentProps {
     email: string;
     organizationName: string;
   };
+  /**
+   * This instance's registration policy is `invite` and this visitor is
+   * neither invited nor the deployment's first account. Renders a static
+   * "invite only" screen instead of the form — a fourth, distinct state from
+   * `firstAccount`/`invitation`, never combined with them. An `invitation`
+   * always wins over `closed`: an invited joiner must always see the join
+   * form regardless of this flag.
+   */
+  closed?: boolean;
 }
 
 /**
- * Create an account. Registration is open — the route serves this screen to
- * anyone — and the server-resolved props pick the framing: the deployment's
- * first account, a pre-2.0 takeover, an invited teammate, or an ordinary
- * signup that starts an organization of its own.
+ * Create an account. The server-resolved props pick the framing: the
+ * deployment's first account, a pre-2.0 takeover, an invited teammate, an
+ * ordinary signup that starts an organization of its own, or — when this
+ * instance's registration policy is `invite` and none of the above apply —
+ * a static "invite only" screen with no form at all (`closed`).
  */
 export const OnpremSignupContent = ({
   googleConfigured,
   firstAccount,
   adoptsExistingInstall,
   invitation,
+  closed = false,
 }: OnpremSignupContentProps) => {
   const { isAuthenticated, isLoading, signIn, signUpWithPassword } = useAuth();
   const searchParams = useSearchParams();
@@ -113,6 +124,22 @@ export const OnpremSignupContent = ({
         label={isAuthenticated ? "Setting things up..." : null}
         error={syncError}
       />
+    );
+  }
+
+  if (closed && !invitation) {
+    return (
+      <AuthScreen
+        title="Invite only"
+        subtitle="This OneCLI instance only accepts new accounts by invitation. Ask an existing member to send you an invite link."
+      >
+        <p className="text-muted-foreground text-center text-xs">
+          Already have an account?{" "}
+          <a href="/auth/login" className="hover:text-foreground underline">
+            Log in
+          </a>
+        </p>
+      </AuthScreen>
     );
   }
 

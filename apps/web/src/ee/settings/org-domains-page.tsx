@@ -1,16 +1,20 @@
-import { ComingSoonCard } from "@/lib/components/coming-soon-card";
+import { PageHeader } from "@dashboard/page-header";
 import { requireOrgAdmin } from "@/lib/auth/require-org-admin";
+import { OrgDomainsCard } from "./_components/org-domains-card";
 
 /**
- * Phase 0 stand-in for Organization Settings → Domains (DNS TXT domain
- * verification). KEEP per the v2 migration plan, built out in Phase 3.
+ * Organization settings → Domains (DNS TXT verification). No SSO-referencing
+ * copy anywhere — SSO/SCIM are permanently dropped in this fork.
  */
 export default async function OrgDomainsPage() {
   await requireOrgAdmin();
   return (
-    <ComingSoonCard
-      title="Domains"
-      description="Claiming and verifying your organization's email domains is available in a later phase."
-    />
+    <div className="flex flex-1 flex-col gap-4">
+      <PageHeader
+        title="Domains"
+        description="Claim your company's email domains and verify them via DNS."
+      />
+      <OrgDomainsCard />
+    </div>
   );
 }

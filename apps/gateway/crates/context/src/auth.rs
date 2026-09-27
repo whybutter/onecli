@@ -33,7 +33,7 @@ use base64::Engine as _;
 use hyper::HeaderMap;
 use ring::hmac;
 use sqlx::PgPool;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::GatewayState;
 use common::edition::{edition, Edition};
@@ -189,6 +189,11 @@ impl FromRequestParts<GatewayState> for AuthUser {
                 );
                 AuthError("X-Workspace-Id (formerly X-Project-Id) header is required".to_string())
             })?;
+            // Finalised: liveness + role rechecks passed (inside
+            // `validate_api_key`) and a workspace resolved — this request is
+            // authenticated. Stamp usage now, not before (a "missing
+            // workspace" 401 above must not read as a use).
+            stamp_api_key_use(pool, token).await;
             return Ok(Self {
                 user_id: auth.user_id,
                 workspace_id,
@@ -272,6 +277,10 @@ impl FromRequestParts<GatewayState> for OrgAuthUser {
         // `classify_bearer`).
         if let BearerDisposition::ApiKey(token) = classify_bearer(bearer_token(&parts.headers)) {
             let auth = validate_api_key(pool, token, &parts.headers).await?;
+            // Finalised: `OrgAuthUser` has no workspace requirement to fail
+            // on, so a successful `validate_api_key` is the whole story —
+            // liveness + role rechecks already passed inside it.
+            stamp_api_key_use(pool, token).await;
             return Ok(Self {
                 user_id: auth.user_id,
                 workspace_id: auth.workspace_id,
@@ -357,6 +366,17 @@ struct ApiKeyAuth {
 /// logs carry the specific reason.
 fn invalid_api_key() -> AuthError {
     AuthError("invalid API key".to_string())
+}
+
+/// Stamp `api_keys.last_used_at` for a key that just authenticated
+/// SUCCESSFULLY — call only where an `oc_`/`oc_org_` key's [`AuthUser`] or
+/// [`OrgAuthUser`] is being finalised, i.e. after `validate_api_key` has
+/// already run every liveness and role recheck. Never fails the request: an
+/// error here is logged and swallowed (see [`db::stamp_api_key_last_used`]).
+async fn stamp_api_key_use(pool: &PgPool, token: &str) {
+    if let Err(e) = db::stamp_api_key_last_used(pool, token).await {
+        debug!(error = %e, "api key auth: failed to stamp last_used_at");
+    }
 }
 
 /// How the request's bearer token routes authentication.
@@ -762,6 +782,13 @@ fn parse_cookie<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
+
+// `api_keys.last_used_at` stamp DB tests, driving `validate_api_key` +
+// `stamp_api_key_use` against a real Postgres. Same convention as
+// `ee::rbac::pg_test` / `policy_engine::enforce_pg_test`: gated on
+// `GATEWAY_TEST_DATABASE_URL`.
+#[cfg(test)]
+mod pg_test;
 
 #[cfg(test)]
 mod tests {

@@ -29,7 +29,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@onecli/ui/components/dialog";
-import { UpgradeDialogShell } from "@/lib/components/upgrade-dialog-shell";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,10 +41,8 @@ import {
 } from "@onecli/ui/components/alert-dialog";
 import { Button } from "@onecli/ui/components/button";
 import { Input } from "@onecli/ui/components/input";
-import { UpgradeToTeamButton } from "@/ee/billing/_components/upgrade-to-team-button";
 import { switchWorkspaceAction } from "../actions";
 import { getInitials } from "@/lib/user-display";
-import { isPlanAtLeast, type Plan } from "@onecli/api/ee/billing/plans";
 import type { WorkspaceOwner } from "@onecli/api/ee/services/workspace-service";
 import { useRenameWorkspace, useDeleteWorkspace } from "@/hooks/use-workspaces";
 import { setDefaultOrgCookie } from "@/lib/auth/set-active-scope";
@@ -60,7 +57,6 @@ interface Props {
   canManage: boolean;
   isLastWorkspace: boolean;
   organizationId: string;
-  plan: Plan;
 }
 
 export const WorkspaceCard = ({
@@ -72,9 +68,7 @@ export const WorkspaceCard = ({
   canManage,
   isLastWorkspace,
   organizationId,
-  plan,
 }: Props) => {
-  const isTeam = isPlanAtLeast(plan, "team");
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [shareOpen, setShareOpen] = useState(false);
@@ -175,6 +169,7 @@ export const WorkspaceCard = ({
               <DropdownMenu>
                 <DropdownMenuTrigger
                   onClick={(e) => e.stopPropagation()}
+                  aria-label={`Actions for ${name ?? "this workspace"}`}
                   className="text-muted-foreground hover:text-foreground -mr-1 flex size-7 shrink-0 items-center justify-center rounded-md"
                 >
                   <MoreVertical className="size-4" />
@@ -220,29 +215,11 @@ export const WorkspaceCard = ({
         </Card>
       </div>
 
-      {isTeam ? (
-        <WorkspaceAccessDialog
-          workspaceId={id}
-          open={shareOpen}
-          onOpenChange={setShareOpen}
-        />
-      ) : (
-        <UpgradeDialogShell
-          open={shareOpen}
-          onOpenChange={setShareOpen}
-          icon={<Users className="text-muted-foreground size-6" />}
-          title="Share workspace"
-          pill="Team"
-          description="Invite team members to collaborate on workspaces with shared agents, secrets, and connections."
-          footer={
-            <UpgradeToTeamButton
-              label="Upgrade now"
-              size="default"
-              className="w-full"
-            />
-          }
-        />
-      )}
+      <WorkspaceAccessDialog
+        workspaceId={id}
+        open={shareOpen}
+        onOpenChange={setShareOpen}
+      />
 
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>

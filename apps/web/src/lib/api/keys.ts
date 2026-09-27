@@ -102,6 +102,12 @@ export const queryKeys = {
     // a route matching NEITHER regex would key to ["org","default","default"]
     // and must not trust that entry across org switches.
     all: () => ["org", ...scope()] as const,
+    // The org switcher's own read (`getUserOrganizations` +
+    // `getActiveOrganizationId`, server actions in `lib/workspaces/actions.ts`,
+    // not the `GET /v1/org` fetch `all()` backs) — its own key under the
+    // `org` namespace so a rename/switch invalidation reaches the switcher
+    // without also invalidating (or being invalidated by) the `all()` read.
+    list: () => [...queryKeys.org.all(), "list"] as const,
   },
   orgMembers: {
     all: () => ["org-members", ...scope()] as const,
@@ -137,6 +143,33 @@ export const queryKeys = {
     all: () => ["workspace-access", ...scope()] as const,
     list: (workspaceId: string) =>
       [...queryKeys.workspaceAccess.all(), workspaceId] as const,
+  },
+  // Org-scoped spend caps (`/v1/org/budgets`) — admin-only, org-scoped
+  // credential (§ org-budgets.ts). scope()'s org slot is the real
+  // discriminator here; the workspace slot is always "default" since this
+  // is only ever read from an org-scoped route.
+  budgets: {
+    all: () => ["budgets", ...scope()] as const,
+    list: () => [...queryKeys.budgets.all(), "list"] as const,
+  },
+  // Org-scoped recorded-gateway-requests summary (`/v1/org/usage`) —
+  // member-visible, org-scoped credential.
+  usage: {
+    all: () => ["usage", ...scope()] as const,
+    summary: () => [...queryKeys.usage.all(), "summary"] as const,
+  },
+  // The workspace's default-connections template for brand-new agents
+  // (`/v1/workspaces/:id/agent-defaults`) — workspace-scoped, deliberately
+  // NOT org-scoped like the two above (risk 2: don't "fix" this to match).
+  agentDefaults: {
+    all: () => ["agent-defaults", ...scope()] as const,
+    // Keyed by the explicit workspaceId argument, like workspaceAccess.list
+    // — not derived from the URL alone, so a caller passing a workspaceId
+    // that doesn't match the URL-scoped `all()` prefix (or a background
+    // refetch racing a workspace switch) can't read/invalidate the wrong
+    // workspace's template.
+    list: (workspaceId: string) =>
+      [...queryKeys.agentDefaults.all(), workspaceId] as const,
   },
   workspaces: {
     all: () => ["workspaces", ...scope()] as const,

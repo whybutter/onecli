@@ -3,6 +3,7 @@ import {
   authErrorMessage,
   redirectErrorMessage,
   SIGNUP_BLOCKED_BY_UPGRADE,
+  SIGNUP_REQUIRES_INVITATION,
 } from "./auth-errors";
 
 /**
@@ -30,6 +31,9 @@ describe("authErrorMessage", () => {
     expect(authErrorMessage({ code: "INVALID_EMAIL_OR_PASSWORD" })).toMatch(
       /don't match/i,
     );
+    expect(authErrorMessage({ code: SIGNUP_REQUIRES_INVITATION })).toMatch(
+      /by invitation/i,
+    );
   });
 
   it("reports rate limiting, which arrives with no code of its own", () => {
@@ -54,6 +58,9 @@ describe("redirectErrorMessage", () => {
   it("maps our own refusal", () => {
     expect(redirectErrorMessage(SIGNUP_BLOCKED_BY_UPGRADE)).toMatch(
       /finishing an upgrade/i,
+    );
+    expect(redirectErrorMessage(SIGNUP_REQUIRES_INVITATION)).toMatch(
+      /by invitation/i,
     );
   });
 

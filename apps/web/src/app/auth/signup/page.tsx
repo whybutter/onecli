@@ -1,23 +1,30 @@
 import { redirect } from "next/navigation";
-import { registrationState } from "@onecli/api/lib/registration";
+import {
+  registrationState,
+  REGISTRATION_MODE,
+} from "@onecli/api/lib/registration";
 import { findPendingInvitationByToken } from "@onecli/api/services/invitation-service";
 import { logger } from "@onecli/api/lib/logger";
 import { GOOGLE_CLIENT_ID, IS_CLOUD } from "@/lib/env";
 import { SignupContent } from "./_components/signup-content";
 
 /**
- * Creating an account. Registration is open on self-host — every account gets
- * its own organization — so this page is always reachable; the server only
- * decides which framing the visitor sees:
+ * Creating an account. This page is always reachable; the server decides
+ * which framing the visitor sees:
  *
  *  - **First run** — the instance has no account yet, and the one being
  *    created is its first (possibly adopting a pre-2.0 install's data).
+ *    Unconditional allow regardless of `REGISTRATION_MODE` — bootstrap.
  *  - **Invited** — this visitor holds an invitation and is joining an
  *    existing organization. Their email is fixed by that invitation, so the
  *    form shows it locked: registering under a different address would
- *    produce an account the invitation cannot be accepted by.
- *  - **Otherwise** — an ordinary signup that starts an organization of its
- *    own.
+ *    produce an account the invitation cannot be accepted by. An invitation
+ *    link always works, at any `REGISTRATION_MODE`.
+ *  - **Closed** — `REGISTRATION_MODE` is `"invite"`, this is not the first
+ *    account, and no invitation token was given: the visitor sees a static
+ *    "invite only" screen instead of a form.
+ *  - **Otherwise** (`REGISTRATION_MODE === "open"`) — an ordinary signup
+ *    that starts an organization of its own.
  *
  * Self-hosted only; cloud sign-up lives inside its Cognito login screen. If
  * the state cannot be read, the visitor is sent to the login screen, which
@@ -65,6 +72,17 @@ export default async function SignupPage({
       "could not read the deployment's account state — showing sign-in",
     );
     redirect("/auth/login");
+  }
+
+  if (REGISTRATION_MODE === "invite" && !state.firstAccount) {
+    return (
+      <SignupContent
+        googleConfigured={Boolean(GOOGLE_CLIENT_ID)}
+        firstAccount={false}
+        adoptsExistingInstall={false}
+        closed
+      />
+    );
   }
 
   return (

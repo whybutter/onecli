@@ -28,6 +28,7 @@ const state = vi.hoisted(() => ({
   runners: undefined as InstanceInfo["runners"],
   pathname: "/org/o1/workspaces",
   agents: [] as Array<{ id: string; name: string; kind: string }>,
+  role: "owner" as "owner" | "admin" | "member",
 }));
 
 // The ONLY data mock: the wire. Everything from here to the DOM is real.
@@ -52,7 +53,7 @@ vi.mock("next/image", () => ({
   ),
 }));
 vi.mock("@/ee/team/actions", () => ({
-  getUserOrgRole: async () => "owner",
+  getUserOrgRole: async () => state.role,
 }));
 vi.mock("@/ee/billing/_components/sidebar-quota", () => ({
   SidebarQuota: () => null,
@@ -102,6 +103,7 @@ beforeEach(() => {
   state.runners = undefined;
   state.pathname = "/org/o1/workspaces";
   state.agents = [];
+  state.role = "owner";
 });
 
 describe("org tier: the hosted-only entries follow the availability wire", () => {
@@ -143,6 +145,25 @@ describe("org tier: the hosted-only entries follow the availability wire", () =>
     // caption (the wire reports version "test") stayed out of the footer.
     await screen.findByText("Channels");
     expect(screen.queryByText("vtest")).toBeNull();
+  });
+});
+
+describe("member role: only allow-listed org nav paths show", () => {
+  it("shows Workspaces and Usage, but hides admin-only entries", async () => {
+    state.role = "member";
+    renderSidebar();
+    await screen.findByText("Workspaces");
+    expect(screen.getByText("Usage")).toBeInTheDocument();
+    expect(screen.queryByText("Members")).toBeNull();
+    expect(screen.queryByText("Organization Settings")).toBeNull();
+  });
+
+  it("an owner sees every org nav entry, Usage included", async () => {
+    state.role = "owner";
+    renderSidebar();
+    await screen.findByText("Members");
+    expect(screen.getByText("Usage")).toBeInTheDocument();
+    expect(screen.getByText("Organization Settings")).toBeInTheDocument();
   });
 });
 

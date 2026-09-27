@@ -11,6 +11,7 @@ export const GlobalConnectionsTabs = () => {
     <ConnectionsTabs
       getSecrets={getOrgSecrets}
       showVaults={false}
+      showBudgets
       basePath={`${orgPrefix}/global-connections`}
       pageScope="organization"
     />

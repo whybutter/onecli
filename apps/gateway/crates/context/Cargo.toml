@@ -12,8 +12,10 @@ axum = { workspace = true }
 base64 = { workspace = true }
 futures-util = { workspace = true }
 approval = { path = "../approval" }
+binding = { path = "../binding" }
 ca = { path = "../ca" }
 cache = { path = "../cache" }
+client-ca = { path = "../client-ca" }
 common = { path = "../common" }
 crypto = { path = "../crypto" }
 db = { path = "../db" }
@@ -26,3 +28,10 @@ ring = { workspace = true }
 sqlx = { workspace = true }
 tokio-rustls = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+# The api_keys.last_used_at DB tests (auth/pg_test.rs) write rows against a
+# shared, migrated Postgres (GATEWAY_TEST_DATABASE_URL), not a scratch-per-test
+# one, so every row they insert needs a collision-proof id.
+uuid = { workspace = true }

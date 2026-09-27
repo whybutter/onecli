@@ -13,13 +13,16 @@ path = "src/main.rs"
 # Workspace crates. The bin is the composition root: it wires these together
 # and owns no domain logic of its own.
 approval = { path = "../approval" }
+binding = { path = "../binding" }
 ca = { path = "../ca" }
 cache = { path = "../cache" }
+client-ca = { path = "../client-ca" }
 common = { path = "../common" }
 context = { path = "../context" }
 crypto = { path = "../crypto" }
 db = { path = "../db" }
 ee = { path = "../ee/ee" }
+relay = { path = "../relay" }
 server = { path = "../server" }
 shutdown = { path = "../shutdown" }
 telemetry = { path = "../telemetry" }

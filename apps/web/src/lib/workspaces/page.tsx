@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { normalizePlan } from "@onecli/api/ee/billing/plans";
 import { PageHeader } from "@dashboard/page-header";
 import { getWorkspaces, getWorkspaceQuotaAction } from "./actions";
 import { CreateWorkspaceButton } from "./_components/create-workspace-button";
@@ -40,7 +39,6 @@ export default async function OrgWorkspacesPage() {
               canManage={workspace.canManage}
               isLastWorkspace={quota.workspaceCount <= 1}
               organizationId={quota.organizationId}
-              plan={normalizePlan(quota.plan)}
             />
           ))}
         </div>

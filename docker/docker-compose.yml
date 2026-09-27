@@ -81,6 +81,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-onecli}:${POSTGRES_PASSWORD:-onecli}@postgres:5432/${POSTGRES_DB:-onecli}
       # Self-hosted default: each user owns one organization (raise to allow more).
       MAX_ORGS_PER_USER: ${MAX_ORGS_PER_USER:-1}
+      # Who may create a new account. "open": anyone. "invite" (default):
+      # only an existing member's invite link, or the instance's first account.
+      ONECLI_REGISTRATION: ${ONECLI_REGISTRATION:-}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?put BETTER_AUTH_SECRET in the .env beside this file (openssl rand -base64 32), or install via https://onecli.sh/install}
       # Encrypts stored secrets at rest — losing it orphans them, so it is
       # required rather than generated per start. install.sh creates and
@@ -184,6 +187,9 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-onecli}:${POSTGRES_PASSWORD:-onecli}@postgres:5432/${POSTGRES_DB:-onecli}
       MAX_ORGS_PER_USER: ${MAX_ORGS_PER_USER:-1}
+      # Who may create a new account. "open": anyone. "invite" (default):
+      # only an existing member's invite link, or the instance's first account.
+      ONECLI_REGISTRATION: ${ONECLI_REGISTRATION:-}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?put BETTER_AUTH_SECRET in the .env beside this file (openssl rand -base64 32), or install via https://onecli.sh/install}
       SECRET_ENCRYPTION_KEY: ${SECRET_ENCRYPTION_KEY:?put SECRET_ENCRYPTION_KEY in the .env beside this file (head -c 32 /dev/urandom | base64), or install via https://onecli.sh/install}
       # Same resolver inputs as the api service: the dashboard derives the

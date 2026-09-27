@@ -22,12 +22,20 @@ export interface OnpremLoginContentProps {
    * without a provider the link would promise a message nobody can receive.
    */
   emailConfigured: boolean;
+  /**
+   * Whether this instance admits an ordinary (uninvited) signup. Gates the
+   * "Create an account" link — when false the signup page would only show
+   * its closed "invite only" state anyway, so the link is hidden rather than
+   * offered and then refused.
+   */
+  signupOpen: boolean;
 }
 
 /** The self-hosted sign-in screen: email and password, plus Google if wired. */
 export const OnpremLoginContent = ({
   googleConfigured,
   emailConfigured,
+  signupOpen,
 }: OnpremLoginContentProps) => {
   const { isAuthenticated, isLoading, signIn, signInWithPassword } = useAuth();
   const searchParams = useSearchParams();
@@ -143,12 +151,14 @@ export const OnpremLoginContent = ({
         </p>
       )}
 
-      <p className="text-muted-foreground mt-4 text-center text-xs">
-        New here?{" "}
-        <a href="/auth/signup" className="hover:text-foreground underline">
-          Create an account
-        </a>
-      </p>
+      {signupOpen && (
+        <p className="text-muted-foreground mt-4 text-center text-xs">
+          New here?{" "}
+          <a href="/auth/signup" className="hover:text-foreground underline">
+            Create an account
+          </a>
+        </p>
+      )}
 
       <AuthFormError
         message={

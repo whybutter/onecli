@@ -1,0 +1,31 @@
+[package]
+name = "relay"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+arc-swap = { workspace = true }
+# `env` turns on every `RelayArgs` field's `env = "RELAY_*"` fallback — not
+# in the workspace default (`derive` only), since no other crate needs it.
+clap = { workspace = true, features = ["env"] }
+client-ca = { path = "../client-ca" }
+rcgen = { workspace = true }
+reqwest = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+serde = { workspace = true }
+shutdown = { path = "../shutdown" }
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+# Enables `client_ca::test_support` (the loopback-handshake PKI harness) for
+# this crate's own tests only — the plain `[dependencies]` entry above never
+# turns this feature on, so a production build of `relay` never carries it.
+client-ca = { path = "../client-ca", features = ["test-support"] }
+tempfile = { workspace = true }
