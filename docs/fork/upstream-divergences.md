@@ -1,168 +1,186 @@
-# Upstream Divergences
+# Upstream divergences
 
-This is the fork's **upstream-conflict surface**: every file *outside* the three `ee/`
-directories (`apps/gateway/crates/ee`, `packages/api/src/ee`, `apps/web/src/ee`) that this fork
-has modified relative to upstream commit `8ea47cd` (`upstream/main`, tag-equivalent to v2.6.0 plus
-two fixes). The `ee/` directories are expected to diverge completely — they are Apache-2.0
-clean-room rebuilds of code upstream ships under its enterprise license, so they are out of scope
-here. Everything below is a file a future `git merge upstream/main` (or the `/upstream-sync`
-skill's merge trial) can actually conflict on.
+Every file **outside** the three `ee/` roots (`apps/web/src/ee/`, `packages/api/src/ee/`,
+`apps/gateway/crates/ee/ee/`) that this fork has modified relative to upstream commit
+[`8ea47cd`](https://github.com/onecli/onecli) (`upstream/main`, OneCLI v2.6.0 + 2 fixes) — the
+commit `docs/upstream-sync/v2-migration/plan.md` rebased onto. This is the conflict surface a
+future `git merge`/rebase from a newer upstream tag has to cross: the three `ee/` roots never
+conflict (upstream's licensed code lives at the same paths, but a `/upstream-sync` run treats
+those roots as fully ours and never merges into them — see `docs/upstream-sync/v2-migration/plan.md`
+principle 2).
 
-Derived from:
+Derived from `git diff --stat 8ea47cd HEAD -- . ':!apps/web/src/ee' ':!packages/api/src/ee' ':!apps/gateway/crates/ee'`
+(302 files) plus each phase PR's own "free-file conflict surface" section, which is the source for
+the "why" column below. Every path listed here was verified to appear in that diff.
 
-```
-git diff --stat 8ea47cd HEAD -- . ':!apps/web/src/ee' ':!packages/api/src/ee' ':!apps/gateway/crates/ee'
-```
+**How `/upstream-sync` should use this file:** feed it into `forkContext` alongside the git log
+(`.agents/skills/upstream-sync/SKILL.md` step 3) — it is the maintained answer to "where does
+upstream collide with ours," which a diff alone cannot show. A file listed here that upstream also
+touches in the delta being reviewed is where a clean auto-merge is most likely to hide a real
+conflict (the skill's own "gotchas" section documents two past incidents of exactly this).
 
-cross-referenced against each PR's own "Free-file conflict surface" section (`gh pr view <N>
---repo CarbonoDev/onecli`, N in 53–59) and, for Phase 0, the "Phase 0 free-file conflict surface"
-section of [`docs/upstream-sync/v2-migration/phase0-plan.md`](../upstream-sync/v2-migration/phase0-plan.md#l613).
-Every path listed below was verified to exist in the diff at the time of writing (2026-09-27).
+Legend: **A** added by the fork, **M** modified an existing upstream file, **D** deleted, **R**
+renamed. A/D/R pairs at the same logical file are noted as a rename.
 
-## How `/upstream-sync` should use this file
+## Repo identity, licensing, CI/CD (Phase 0 — PR #53)
 
-The skill's review workflow (`.agents/skills/upstream-sync/SKILL.md`, step 3) asks for a
-`forkContext` string — "the local work this branch carries." Feed it this file (or the relevant
-section of it) instead of reconstructing that context from `git log`: it is the authoritative,
-already-verified list of exactly which non-`ee` files upstream can conflict with, why each one
-changed, and which PR to consult for the full rationale. When upstream touches a file listed here,
-the reviewing agent should read that file's row plus the linked PR/plan section before deciding
-how to reconcile the merge.
+Rebrand from `onecli/onecli` to `whybutter/onecli`, drop the enterprise license, trim the publish
+matrix to four images.
 
-## PR / phase index
+| File                                                                                                          | Change | Reason                                                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.github/workflows/publish.yml`, `.github/workflows/release.yml`, `.github/workflows/ci.yml`                  | M      | Repo guard `onecli/onecli` → `whybutter/onecli`; publish matrix trimmed to `web, api, gateway, migrations`                                                                                                          |
+| `.github/workflows/cla.yml`, `.github/workflows/ci-cache-seed.yml`                                            | D      | Not needed by this fork                                                                                                                                                                                             |
+| `CLA.md`, `LICENSE-ENTERPRISE`                                                                                | D      | Whole tree is Apache-2.0 now                                                                                                                                                                                        |
+| `CLAUDE.md`                                                                                                   | A      | Fork-only file — does not exist upstream at `8ea47cd` at all, so it can never conflict; rewritten per phase as the tree changed                                                                                     |
+| `CONTRIBUTING.md`, `README.md`, `NOTICE`                                                                      | M      | Drop enterprise-license paragraphs and `onecli/onecli` references                                                                                                                                                   |
+| `SECURITY.md`                                                                                                 | M      | Repo identity                                                                                                                                                                                                       |
+| `package.json`, `packages/api/package.json`, `apps/web/package.json`                                          | M      | `"license"` field → `Apache-2.0`; drop `test:licensing` script                                                                                                                                                      |
+| `turbo.json`                                                                                                  | M      | Drop the `test:licensing` pipeline entry (Phase 0), later touched again by Phase 5a for `ONECLI_REGISTRATION` hermetic-env wiring                                                                                   |
+| `docker/docker-compose.yml`                                                                                   | M      | Image refs → `ghcr.io/whybutter/onecli-*`; later gains `ONECLI_REGISTRATION` (Phase 5a)                                                                                                                             |
+| `docker/{api,web,gateway,agent,runner,channel-adapter}.Dockerfile`                                            | M      | License label → `Apache-2.0`                                                                                                                                                                                        |
+| `scripts/dev.mjs`, `scripts/install.sh`                                                                       | M      | Repo identity; `dev.mjs` also gains dev-secret generation for later phases                                                                                                                                          |
+| `scripts/publish-workflow.test.mjs`                                                                           | M      | Rewritten drift guard: four built images must be a subset of the eight Dockerfiles, with the four upstream-passthrough images (`runner`, `agent`, `channel-adapter`, `ssh-terminator`) as an explicit exclusion set |
+| `scripts/cloud-boundary.test.mjs`                                                                             | D      | The licensed-boundary snapshot machinery it tested no longer exists                                                                                                                                                 |
+| `packages/api/src/licensing/**` (10 files + snapshot), except `third-party-notices.test.ts`                   | D      | `ee-boundary`/`ee-mount-lock`/`enterprise-lock` snapshot suites are meaningless once `ee/` is Apache-2.0                                                                                                            |
+| `packages/api/src/licensing/third-party-notices.test.ts` → `packages/api/src/lib/third-party-notices.test.ts` | R      | Unrelated to licensing, just moved out of the deleted directory                                                                                                                                                     |
+| `packages/api/src/lib/entitlements-guard.ts`                                                                  | D      | No more license gate to guard                                                                                                                                                                                       |
+| `packages/api/src/lib/entitlements.ts`, `entitlements.test.ts`                                                | M      | `isEntitled()` is now an unconditional `true`                                                                                                                                                                       |
+| `packages/api/src/edition-defaults.ts`                                                                        | M      | `ENTERPRISE_ENABLED` removed                                                                                                                                                                                        |
+| `apps/gateway/crates/common/src/edition.rs`                                                                   | M      | `entitled()` is now an unconditional `true`                                                                                                                                                                         |
+| `.env.example`                                                                                                | M      | Drop `ENTERPRISE_ENABLED`; later gains `ONECLI_REGISTRATION` (Phase 5a)                                                                                                                                             |
 
-| # | Title | Phase |
-| --- | --- | --- |
-| [#53](https://github.com/whybutter/onecli/pull/53) | Rebase on v2.6.0, replace `ee/` with Apache-2.0 code | Phase 0 |
-| [#54](https://github.com/whybutter/onecli/pull/54) | Real RBAC rechecks, group principals, budgets, condition-matching superset | Phase 1 (gateway) |
-| [#55](https://github.com/whybutter/onecli/pull/55) | Org routers, group access-law arm, budgets API, fork extras | Phase 2 (API) |
-| [#56](https://github.com/whybutter/onecli/pull/56) | Real web dashboard surfaces on the Phase 2 API | Phase 3 (web) |
-| [#57](https://github.com/whybutter/onecli/pull/57) | Invite-only registration as an instance setting | Phase 5a |
-| [#58](https://github.com/whybutter/onecli/pull/58) | Remote-gateway relay stack (mTLS, CSR, relay, binding) | Phase 4 |
-| [#59](https://github.com/whybutter/onecli/pull/59) | Consolidates #56, #57, #58 + the gateway last-used stamp onto `v2` | integration |
+## Gateway `ee` seam call sites and free-crate ports (Phase 0 + Phase 1 — PRs #53, #54)
 
-Where a file was shaped by more than one PR, all are listed; the plan doc linked is the one with
-the fullest rationale.
+Files the free gateway crates edit to call the rewritten `ee` crate, plus the condition-matching
+superset ported into the free `policy` crate.
 
-## Root & repository meta
+| File                                                                                                          | Change | Reason                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `apps/gateway/crates/context/src/auth.rs`, `context/src/auth/pg_test.rs`                                      | M/A    | RBAC recheck call sites (Phase 1); new DB-backed test module                                                             |
+| `apps/gateway/crates/context/src/lib.rs`                                                                      | M      | `GatewayState` gains fields the ee rewrite and later phases need (`client_ca`, `binding_mode` — Phase 4)                 |
+| `apps/gateway/crates/db/src/lib.rs`                                                                           | M      | New row/query pairs (`ClientHostRow` — Phase 4)                                                                          |
+| `apps/gateway/crates/policy/src/condition_match.rs`, `policy/src/lib.rs`, `policy/Cargo.toml`                 | M      | Condition-matching superset (body/header × contains/equals/regex/exists) ported from the pre-v2 fork into the free crate |
+| `apps/gateway/crates/policy-engine/src/{catalog,corpus_test,enforce,evaluate}.rs`, `policy-engine/Cargo.toml` | M      | Threading `headers` through every `condition_match::matches` call site                                                   |
+| `apps/gateway/crates/proxy/src/forward.rs`                                                                    | M      | Truncated-body fail-closed: pass `None` to the request guard instead of a partial buffer                                 |
+| `apps/gateway/crates/proxy/src/websocket.rs`                                                                  | M      | Condition-matching call site update                                                                                      |
+| `apps/gateway/crates/proxy/src/response.rs`                                                                   | M      | New response builders (`binding_denied()` — Phase 4)                                                                     |
+| `apps/gateway/crates/onecli-gateway/src/main.rs`                                                              | M      | Wiring for the RBAC/budget rewrite, then the `relay` subcommand and mTLS/binding startup (Phase 4)                       |
+| `apps/gateway/Cargo.toml`, `Cargo.lock`                                                                       | M      | New workspace members and dependencies across phases                                                                     |
 
-| Files | Reason | PR |
-| --- | --- | --- |
-| `.github/workflows/{ci,publish,release}.yml`, `.github/workflows/{cla,ci-cache-seed}.yml` (deleted) | Repo identity (`whybutter/onecli`, `ghcr.io/whybutter/*` images), CLA process dropped, e2e runs without Redis | #53 |
-| `CLA.md`, `LICENSE-ENTERPRISE` (deleted), `NOTICE`, `CONTRIBUTING.md`, `README.md`, `SECURITY.md` | Whole tree re-licensed Apache-2.0, no enterprise license text remains | #53 |
-| `CLAUDE.md` | Rewritten for the OSS-only v2 tree | #53, then updated for `ONECLI_REGISTRATION` | #57 |
-| `package.json`, `turbo.json`, `packages/api/package.json`, `apps/web/package.json` | Repo identity / build graph | #53 |
-| `.env.example` | `ONECLI_REGISTRATION` documented | #57 |
-| `.github/pull_request_template.md` | Minor identity edit during the rebase | #53 |
-| `scripts/dev.mjs`, `scripts/install.sh` | `ENTERPRISE_ENABLED` removed from dev tooling; install script identity | #53 |
-| `scripts/publish-workflow.test.mjs` | Asserts the four-image publish matrix is a documented subset | #53 |
-| `scripts/cloud-boundary.test.mjs` (deleted) | Asserted a cloud/OSS boundary that no longer exists in an OSS-only fork | #53 |
-| `docs/nanoclaw-integration.md`, `docs/paid-parity/**`, `docs/upstream-sync/**` | Brought over from the pre-v2 fork's history (not authored by the v2 migration itself) | #53 |
+## Remote-gateway relay stack (Phase 4 — PR #58)
 
-## `apps/gateway` (Rust, non-`ee`)
+New crates plus the free-file seams the relay stack requires. See
+[`remote-gateway-relay.md`](remote-gateway-relay.md) for the operator-facing detail.
 
-| Files | Reason | PR |
-| --- | --- | --- |
-| `Cargo.toml`, `Cargo.lock` | New crate members (`binding`, `client-ca`, `relay`, `server` split) and dependencies (`memchr`, `x509-parser`, `arc-swap`, `sqlx` `time`, `time` `serde`) | #54 (`memchr`), #58 (rest) |
-| `crates/common/src/edition.rs` | `entitled()` returns true unconditionally | #53 |
-| `crates/onecli-gateway/{Cargo.toml,src/main.rs}` | New `relay` CLI subcommand, mTLS entrypoint wiring, binding-mode wiring | #58 |
-| `crates/policy/{condition_match.rs,lib.rs,Cargo.toml}` | Condition-matching superset (`contains/equals/regex/exists`, tri-state truncated-body semantics) | #54 |
-| `crates/policy-engine/{evaluate.rs,catalog.rs,enforce.rs,corpus_test.rs,Cargo.toml}` | Headers threaded through every policy-engine call site for the new condition types | #54 |
-| `crates/proxy/src/{forward.rs,websocket.rs}` | Truncated-body fail-closed guard call site | #54 |
-| `crates/proxy/src/response.rs` | New response builder(s) for the client-cert/relay paths | #58 |
-| `crates/context/src/{lib.rs,auth.rs}`, `crates/context/src/auth/pg_test.rs` | `RbacRoleResolver` real rechecks, `GatewayState.client_ca`/`binding_mode` fields | #54 (rechecks), #58 (state fields) |
-| `crates/context/src/auth.rs` (last-used call site) | `api_keys.last_used_at` stamp after the auth chain | #59 |
-| `crates/db/src/lib.rs` | `client_hosts` queries, `last_used_at` UPDATE statement | #58, #59 |
-| `crates/server/{Cargo.toml,src/lib.rs,src/mtls.rs,src/binding_enforce.rs,src/client_cert_route.rs}` | Second `Entrypoint` for mTLS, binding enforcement at both proxy doors, internal client-cert issuance route | #58 |
-| `crates/binding/**`, `crates/client-ca/**`, `crates/relay/**` (new crates) | Binding enforcement, client CA / mTLS, relay sidecar — entirely new, ported from the pre-v2 flat gateway (PRs #2–#5 in the remote-gateway-hardening effort) onto the v2 crate workspace | #58 |
+| File                                                                             | Change | Reason                                                                                                                                                          |
+| -------------------------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/gateway/crates/client-ca/**` (5 files)                                     | A      | New crate: mTLS identity, `ClientCa`/CSR signing, test harness                                                                                                  |
+| `apps/gateway/crates/relay/**` (5 files)                                         | A      | New crate: the `relay` subcommand                                                                                                                               |
+| `apps/gateway/crates/binding/src/lib.rs`, `Cargo.toml`                           | A      | New crate: cert↔token binding enforcement decision table                                                                                                        |
+| `apps/gateway/crates/server/src/mtls.rs`                                         | A      | Second `Entrypoint` for the mTLS listener                                                                                                                       |
+| `apps/gateway/crates/server/src/client_cert_route.rs`                            | A      | Gateway-internal CSR issuance route                                                                                                                             |
+| `apps/gateway/crates/server/src/binding_enforce.rs`                              | A      | `resolve_host_tenant` + `enforce_binding`, called from both proxy doors                                                                                         |
+| `apps/gateway/crates/server/src/lib.rs`, `server/Cargo.toml`                     | M      | Router extraction (`build_router`), `client_identity`/`on_mtls` threaded through `handle_connect`/`handle_http_proxy`/`handle_connection`, `GATEWAY_PLAIN_BIND` |
+| `packages/api/src/routes/gateway.ts`                                             | M      | New `clientCertRoutes` factory                                                                                                                                  |
+| `packages/api/src/app.ts`                                                        | M      | Mounts `clientCertRoutes()`                                                                                                                                     |
+| `packages/api/src/services/errors.ts`, `middleware/error-handler.ts`             | M      | Error shapes for the new route                                                                                                                                  |
+| `packages/api/src/services/audit-service.ts`                                     | M      | New `AUDIT_SERVICES.CLIENT_HOST` entry                                                                                                                          |
+| `packages/db/prisma/schema.prisma` + migration `20260915120200_add_client_hosts` | M/A    | `ClientHost` model                                                                                                                                              |
+| `apps/gateway-e2e/src/mtlsPki.ts`                                                | A      | Shared e2e mTLS certificate helper                                                                                                                              |
 
-## `apps/gateway-e2e` / `apps/hosted-e2e`
+## API control plane (Phase 2 — PR #55)
 
-| Files | Reason | PR |
-| --- | --- | --- |
-| `apps/gateway-e2e/{README.md,src/env.ts,src/gateway.ts,src/scenario.ts}` | Redis made optional (harness no longer requires `E2E_REDIS_HOST`) | #53 |
-| `apps/gateway-e2e/src/fixtures.ts` | Additive fixtures for RBAC/group/budget scenarios | #54 |
-| `apps/gateway-e2e/src/mtlsPki.ts` (new) | Shared mTLS test PKI helper (real leaf certs, `CA:FALSE`, `serverAuth`) | #58 |
-| `apps/gateway-e2e/tests/{policy,resource-boundary}.test.ts` | Extended for the condition-matching superset | #54 |
-| `apps/gateway-e2e/tests/{rbac,budget}.test.ts` (new) | RBAC recheck and budget-enforcement coverage | #54 |
-| `apps/gateway-e2e/tests/api-key-usage.test.ts` (new) | `lastUsedAt` write-back coverage | #55, #59 |
-| `apps/gateway-e2e/tests/{binding,client-cert,mtls,relay}.test.ts` (new) | mTLS handshake matrix, CSR issuance, relay round-trip, binding off/log/enforce | #58 |
-| `apps/gateway-e2e/tests/{control,shutdown}.test.ts` | Adjusted for the Redis-optional harness | #53 |
-| `apps/gateway-e2e/tests/{platform-llm,unlicensed}.test.ts` (deleted) | Asserted the unlicensed/hosted-platform arm, which no longer exists once entitlement is always true | #53 |
-| `apps/hosted-e2e/{README.md,src/api-server.ts,src/env.ts,src/gateway.ts}` | Same Redis-optional / entitlement-always-true baseline | #53 |
+Group arm of the access law, org routers, and the fork's own extras (`lastUsedAt`, usage, agent
+defaults, org rename).
 
-## `packages/api` (non-`ee`)
+| File                                                                                                                                                                                                                                                                                                                                                                                                     | Change | Reason                                                                                                                                                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/api/src/middleware/auth.ts`, `auth.test.ts`, `auth-strict.test.ts`                                                                                                                                                                                                                                                                                                                             | M      | Dead `!CAPS.rbac` arm removed (tidy)                                                                                                                                                        |
+| `packages/api/src/middleware/auth/api-key.ts`, new `api-key-last-used.test.ts`                                                                                                                                                                                                                                                                                                                           | M/A    | `lastUsedAt` throttled stamp on key auth                                                                                                                                                    |
+| `packages/api/src/services/api-key-service.ts`, new `services/api-key-usage.test.ts`                                                                                                                                                                                                                                                                                                                     | M/A    | `recordApiKeyUse`                                                                                                                                                                           |
+| `packages/api/src/routes/user.ts`                                                                                                                                                                                                                                                                                                                                                                        | M      | `lastUsedAt` in the personal-key response                                                                                                                                                   |
+| `packages/api/src/routes/org.ts`, `org.test.ts`                                                                                                                                                                                                                                                                                                                                                          | M      | `PATCH /org` owner-only rename                                                                                                                                                              |
+| `packages/api/src/routes/agents.ts`, `agents.test.ts`                                                                                                                                                                                                                                                                                                                                                    | M      | `afterCreateAgent` hook call site (agent defaults)                                                                                                                                          |
+| `packages/api/src/services/agent-service.ts`, `agent-service.test.ts`                                                                                                                                                                                                                                                                                                                                    | M      | Calls the new hook after `autoAttachLlmKeys`                                                                                                                                                |
+| `packages/api/src/providers/hooks/resource-hooks.ts`                                                                                                                                                                                                                                                                                                                                                     | M      | New optional `afterCreateAgent?` hook slot                                                                                                                                                  |
+| `packages/api/src/providers/access-checker.ts`                                                                                                                                                                                                                                                                                                                                                           | M      | Tidy comment                                                                                                                                                                                |
+| `packages/api/src/validations/policy-rule.ts`, `policy-rule.test.ts`                                                                                                                                                                                                                                                                                                                                     | M/A    | Widened condition-shape schema (matches the gateway's Phase 1 matrix)                                                                                                                       |
+| `packages/api/src/validations/condition-syntax.ts`                                                                                                                                                                                                                                                                                                                                                       | A      | Dependency-free port of the condition-shape validator                                                                                                                                       |
+| `packages/api/src/validations/org.ts`                                                                                                                                                                                                                                                                                                                                                                    | A      | Org-rename input schema                                                                                                                                                                     |
+| `packages/api/src/lib/legacy-project-compat.test.ts`                                                                                                                                                                                                                                                                                                                                                     | M      | Un-skip the `/access` alias test                                                                                                                                                            |
+| `packages/api/src/apps/oauth-org.ts`, `routes/{org-skills,runners,org-channels}.ts`, `services/workspace-access-check.ts` (+`.test.ts`), `services/channels/agent-channel-service.ts`, `services/channels/providers/slack/shared-install-service.ts` (+`.pg.test.ts`), `services/channels/{action-approval,agent-reach,channels}.pg.test.ts`, `routes/channel-routes.test.ts`, `routes/org-apps.test.ts` | M      | Tidy: dead `!CAPS.rbac` arms removed now that every deployment is entitled                                                                                                                  |
+| `apps/web/src/lib/actions/resolve-user.ts`                                                                                                                                                                                                                                                                                                                                                               | M      | Consumes the widened condition schema                                                                                                                                                       |
+| `apps/web/src/lib/components/condition-builder.tsx`                                                                                                                                                                                                                                                                                                                                                      | M      | UI for the widened condition schema                                                                                                                                                         |
+| `packages/db/prisma/schema.prisma` + migrations `20260915120000_add_api_key_last_used_at`, `20260915120100_add_workspace_agent_default_connections`                                                                                                                                                                                                                                                      | M/A    | `ApiKey.lastUsedAt`, `WorkspaceAgentDefaultConnection`                                                                                                                                      |
+| `packages/api/src/routes/{instance,instance-ssh}.test.ts`, `providers/edition-resolution.test.ts`                                                                                                                                                                                                                                                                                                        | M      | Rewritten for always-entitled                                                                                                                                                               |
+| `packages/api/src/routes/workspaces.test.ts`                                                                                                                                                                                                                                                                                                                                                             | M      | Exercises the real (not stubbed) workspace service                                                                                                                                          |
+| `packages/api/src/services/policy-onprem-validator.test.ts`                                                                                                                                                                                                                                                                                                                                              | M      | `eePolicyValidator` re-export decision                                                                                                                                                      |
+| `packages/api/src/testing/hermetic-env.ts`, `hermetic-env.test.ts`                                                                                                                                                                                                                                                                                                                                       | M      | `AMBIENT_HAZARD_VARS` additions (`MAX_ORGS_PER_USER` removed, later `ONECLI_REGISTRATION` added in Phase 5a)                                                                                |
+| `packages/api/src/lib/identity-conflict.test.ts`                                                                                                                                                                                                                                                                                                                                                         | M      | Always-entitled rewrite                                                                                                                                                                     |
+| `packages/api/src/services/invitation-email.ts`                                                                                                                                                                                                                                                                                                                                                          | M      | Entitlement-related copy                                                                                                                                                                    |
+| `packages/api/src/providers/hooks/{policy-validator,rule-action-gate}.ts`                                                                                                                                                                                                                                                                                                                                | M      | Always-entitled arm                                                                                                                                                                         |
+| `packages/api/src/services/{conversation,cron,due-work,home-sync,processes,ssh}.pg.test.ts`                                                                                                                                                                                                                                                                                                              | M      | Environmental — see `docs/fork/README.md` "Known limitations"; unrelated to fork behaviour, fails identically on pristine v2.6.0 on a Postgres instance with `TimeZone=America/Mexico_City` |
 
-| Files | Reason | PR |
-| --- | --- | --- |
-| `src/edition-defaults.ts`, `src/lib/entitlements.ts` (+test), `src/lib/entitlements-guard.ts` (deleted) | `isEntitled()` always true; the separate guard helper became dead code | #53 |
-| `src/providers/hooks/{policy-validator,rule-action-gate}.ts`, `src/services/invitation-email.ts`, `src/testing/hermetic-env.ts` (+test), `src/providers/edition-resolution.test.ts` | Entitlement-always-true baseline adjustments | #53 |
-| `src/licensing/**` (all deleted), `src/{licensing→lib}/third-party-notices.test.ts` (renamed) | Boundary-snapshot suites deleted rather than re-snapshotted; the whole tree is Apache-2.0 | #53 |
-| `src/lib/better-auth.ts` | User-creation hook enforces the registration gate | #57 |
-| `src/lib/env.ts` | `ONECLI_REGISTRATION`, `GATEWAY_INTERNAL_URL` and related vars | #57, #58 |
-| `src/lib/registration.ts` (+test, +pg.test), `src/lib/onprem-session-provider.pg.test.ts` | Invite-only registration logic and the case-insensitive-equality review fix | #57 |
-| `src/lib/gateway-client-cert.ts` (+test, new) | CSR forwarding to the gateway's internal issue route | #58 |
-| `src/lib/identity-conflict.test.ts`, `src/lib/legacy-project-compat.test.ts` | RBAC-always-on / entitlement-always-true test adjustments | #53, #55 |
-| `src/app.ts` | Mounts the client-cert route | #58 |
-| `src/apps/oauth-org.ts`, `src/routes/{org-skills,runners,org-channels}.ts`, `src/services/workspace-access-check.ts`, `src/services/channels/agent-channel-service.ts`, `src/services/channels/providers/slack/shared-install-service.ts` (+tests) | Tidy: removed dead `!CAPS.rbac` arms now that RBAC is on everywhere | #55 |
-| `src/middleware/auth.ts`, `src/middleware/auth/api-key.ts`, `src/middleware/auth/api-key-last-used.test.ts` (new) | Throttled `lastUsedAt` write-back after key auth | #55 |
-| `src/middleware/error-handler.ts`, `src/services/errors.ts` | Client-cert error mapping | #58 |
-| `src/providers/access-checker.ts`, `src/services/workspace-access-check.ts` (+test) | Workspace-access group-binding arm | #55 |
-| `src/providers/hooks/resource-hooks.ts` | `afterCreateAgent` hook for agent-default connections | #55 |
-| `src/routes/{user,org,agents}.ts` (+tests) | Org routers mounted, `PATCH /org` rename, agent defaults | #55 |
-| `src/routes/{channel-routes,org-apps,instance,instance-ssh,workspaces}.test.ts` | RBAC-always-on / router-mount test adjustments | #53, #55 |
-| `src/routes/gateway.ts`, `src/routes/gateway-client-cert.test.ts` (new) | `POST /v1/gateway/client-cert` route | #58 |
-| `src/services/agent-service.ts` (+test, new) | Agent-default-connections service | #55 |
-| `src/services/api-key-service.ts`, `src/services/api-key-usage.test.ts` (new) | `ApiKey.lastUsedAt` | #55 |
-| `src/services/audit-service.ts` | `MINT` audit action for `client-host` | #58 |
-| `src/services/client-host-service.ts` (+pg.test, new) | `client_hosts` CRUD, renewal fenced to the caller's workspace | #58 |
-| `src/services/{conversation,cron,due-work,home-sync,processes,ssh}.pg.test.ts` | Hermetic-env / entitlement-always-true adjustments | #53 |
-| `src/services/policy-onprem-validator.test.ts` | Condition-shape matrix widened | #55 |
-| `src/validations/client-cert.ts` (new) | CSR PEM validation, 16 KiB cap | #58 |
-| `src/validations/condition-syntax.ts` (new, +test) | Dependency-free condition-shape validator shared with the web condition builder | #55 |
-| `src/validations/org.ts` | Org-rename validation | #55 |
-| `src/validations/policy-rule.ts` (+test) | Condition matrix widened to match the gateway's Phase 1 superset | #55 |
+## Web dashboard (Phase 3 — PR #56)
 
-## `packages/db`
+Response types imported from `@onecli/api/ee/...`, nav/plan-branch cleanup, the BYO-first
+create-agent door.
 
-| Files | Reason | PR |
-| --- | --- | --- |
-| `prisma/schema.prisma`, `migrations/20260915120000_add_api_key_last_used_at`, `migrations/20260915120100_add_workspace_agent_default_connections` | `ApiKey.lastUsedAt`, `WorkspaceAgentDefaultConnection` | #55 |
-| `migrations/20260915120200_add_client_hosts` | `ClientHost` table for CSR-issued certs | #58 |
+| File                                                                                                                                                                                                                                                                       | Change | Reason                                                                             |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------- |
+| `apps/web/src/lib/api/types.ts`                                                                                                                                                                                                                                            | M      | Eight local interfaces replaced with re-exports from `@onecli/api/ee/...`          |
+| `apps/web/src/lib/api/{keys,org,budgets,usage,agent-defaults}.ts`                                                                                                                                                                                                          | M/A    | New API client namespaces                                                          |
+| `apps/web/src/lib/nav-config.ts` (+3 test files)                                                                                                                                                                                                                           | M      | "Usage" moved out of the `CAPS.billing` gate                                       |
+| `apps/web/src/lib/agents/create-door.ts`, `create-door.test.ts`                                                                                                                                                                                                            | M      | BYO is the primary create-agent door on self-host (was hosted-first)               |
+| `apps/web/src/lib/dashboard/{dashboard-sidebar,use-active-org}.tsx` (+tests)                                                                                                                                                                                               | M      | Org switcher made query-backed so rename reaches the sidebar without a reload      |
+| `apps/web/src/lib/dashboard/{dashboard-header,sidebar-version}.tsx`                                                                                                                                                                                                        | M      | Repo-identity links (Phase 0), then entitlement-collapse cleanup                   |
+| `apps/web/src/lib/policy-editor/resource-scope.tsx`, `resource-scope-types.ts`                                                                                                                                                                                             | M/A    | Removed the `IS_CLOUD` gate that made the GitHub picker unreachable on self-host   |
+| `apps/web/src/lib/policy-editor/{_components/org-identity-picker,editable-rule-row}.tsx`                                                                                                                                                                                   | M      | Widened condition schema, entitlement cleanup                                      |
+| `apps/web/src/lib/granular-access/configs/github-app.ts`, new `granular-access/github-app/policy-dialog-content.tsx` (+test)                                                                                                                                               | M/A    | Real GitHub repo picker                                                            |
+| `apps/web/src/lib/workspaces/{page,settings-page}.tsx`, `_components/workspace-card.tsx`                                                                                                                                                                                   | M      | Plan-branch removal (no plan tiers); mounts the access + agent-defaults cards      |
+| `apps/web/src/lib/mask-secret.ts` (+test)                                                                                                                                                                                                                                  | A      | Key masking, ported from the pre-v2 fork                                           |
+| `apps/web/src/lib/actions/{api-key,secrets}.ts`                                                                                                                                                                                                                            | M      | Thread `lastUsedAt` through                                                        |
+| `apps/web/src/lib/agents/../agents-content.tsx`, `overview/_components/api-key-card.tsx` (+test), `connections/_components/connections-tabs.tsx`, `global-connections/_components/global-connections-tabs.tsx`, `settings/install/_components/install-content.tsx` (+test) | M      | Masking, `lastUsedAt` display, Budgets tab                                         |
+| `apps/web/src/hooks/{use-agent-defaults,use-budgets,use-usage}.ts`                                                                                                                                                                                                         | A      | New data hooks                                                                     |
+| `apps/web/src/hooks/{use-instance,use-org}.ts` (+test)                                                                                                                                                                                                                     | M      | Always-entitled instance state                                                     |
+| `apps/web/src/lib/auth/require-org-admin.ts` (+test)                                                                                                                                                                                                                       | A      | Shared server-side guard                                                           |
+| `apps/web/src/lib/components/{coming-soon-card,feature-coming-soon-dialog}.tsx`                                                                                                                                                                                            | A      | Replace `EnterpriseLockedCard`/`LicenseRequiredDialog` (deleted)                   |
+| `apps/web/src/lib/components/{cloud-upsell,request-app-slot-local}.tsx`                                                                                                                                                                                                    | M      | Entitlement/plan cleanup                                                           |
+| `apps/web/src/lib/plan-gate.tsx` (+test)                                                                                                                                                                                                                                   | M      | No plan tiers                                                                      |
+| `apps/web/src/lib/install-command.ts`                                                                                                                                                                                                                                      | M      | Repo-identity string                                                               |
+| `apps/web/src/app/(dashboard)/org/[orgId]/(admin)/**` (groups, settings/{general,domains,app-availability,sso}, global-connections budgets tab, admin-wrappers test)                                                                                                       | M/A    | Real KEEP pages replacing Phase 0's ComingSoon stubs                               |
+| `apps/web/src/app/(dashboard)/org/[orgId]/usage/**`, deleted `(admin)/usage/page.tsx`                                                                                                                                                                                      | A/D    | Usage page moved out from under the billing-gated admin group to be member-visible |
+| `apps/web/src/app/create-org/**`                                                                                                                                                                                                                                           | M/A    | Real create-org page                                                               |
+| `apps/web/src/app/auth/{login,signup}/page.tsx`                                                                                                                                                                                                                            | M      | Registration-mode gating (Phase 5a)                                                |
+| `apps/web/src/app/auth/login/sso/page.tsx`, `claim/page.tsx`                                                                                                                                                                                                               | M      | Permanently-dropped surfaces redirect instead of rendering an `ee` stub            |
+| `apps/web/src/app/aws-marketplace/edition-gate.{onprem,cloud}.test.ts`                                                                                                                                                                                                     | M      | Always-entitled arm                                                                |
+| `apps/web/src/app/(dashboard)/w/[workspaceId]/agents/_components/agents-content.tsx`                                                                                                                                                                                       | M      | BYO-first create door wiring                                                       |
+| `apps/web/src/lib/components/condition-builder.tsx`                                                                                                                                                                                                                        | M      | Widened condition schema (shared with Phase 2)                                     |
 
-## `apps/web` (non-`ee`)
+## Instance registration (Phase 5a — PR #57)
 
-| Files | Reason | PR |
-| --- | --- | --- |
-| `package.json` | Repo identity | #53 |
-| `src/app/(dashboard)/org/[orgId]/(admin)/{groups,settings/domains,settings/general,settings/sso}/*`, `.../usage/page.tsx` → `org/[orgId]/usage/*` | ComingSoon placeholder wrappers (Phase 0) become real pages (Phase 3); SSO permanently redirects | #53 (wrappers/redirect), #56 (real pages) |
-| `src/app/(dashboard)/org/[orgId]/global-connections/(tabs)/budgets/*` (new), `_components/global-connections-tabs.tsx` | Budgets placed as an org-scoped Global Connections tab, not per-workspace | #56 |
-| `src/app/(dashboard)/agents/_components/agents-content.tsx`, `.../connections/_components/connections-tabs.tsx` | BYO is the primary create-agent door on self-host | #56 |
-| `src/app/(dashboard)/overview/_components/api-key-card.tsx` (+test) | Key masking, `lastUsedAt` display | #56 |
-| `src/app/(dashboard)/install/_components/install-content.tsx` (+test) | Install-page adjustments | #56 |
-| `src/app/auth/login/{page.tsx,sso/page.tsx}` (+test), `src/app/auth/signup/page.tsx` | Registration-gate UI (invite-only screen, hidden "Create an account") | #57 |
-| `src/app/auth/login/sso/page.tsx` (baseline), `src/app/claim/page.tsx` (+test) | Permanently-dropped SSO/claim surfaces redirect instead of rendering a stub | #53 |
-| `src/app/aws-marketplace/edition-gate*.test.ts` | Entitlement-always-true adjustments | #53 |
-| `src/app/create-org/{page.tsx,loading.tsx}` (new) | Real create-org page, no org cap | #56 |
-| `src/hooks/{use-agent-defaults,use-budgets,use-usage}.ts` (new), `src/hooks/use-org.ts` (+test), `src/hooks/use-instance.ts` | Dashboard data hooks for the Phase 2 routers | #56 |
-| `src/lib/actions/{api-key,resolve-user,secrets}.ts` | Workspace-access group arm, agent-defaults plumbing | #55, #56 |
-| `src/lib/agents/create-door.ts` (+test) | BYO as the primary create-agent door | #56 |
-| `src/lib/api/{agent-defaults,budgets,keys,org,types,usage}.ts` | Response types imported from the routers instead of hand-copied | #56 |
-| `src/lib/auth/{auth-errors,login-content-onprem,signup-content-onprem}.ts` (+test), `src/lib/auth/require-org-admin.ts` (+test, new) | Registration-gate client logic, `requireOrgAdmin` guard | #57 |
-| `src/lib/components/{cloud-upsell,condition-builder,request-app-slot-local}.tsx`, `{coming-soon-card,feature-coming-soon-dialog}.tsx` (new), `{enterprise-locked-card,license-required-dialog}.tsx` (deleted) | Entitlement-always-true placeholders; ComingSoon replaces license-gated cards | #53 |
-| `src/lib/dashboard/{dashboard-header,sidebar-version}.tsx` | Baseline identity/entitlement adjustments | #53 |
-| `src/lib/dashboard/{dashboard-sidebar,use-active-org}.tsx` (+tests) | Org switcher made query-backed so rename reaches the sidebar without a reload | #56 |
-| `src/lib/granular-access/configs/github-app.ts`, `.../github-app/policy-dialog-content.tsx` (+test, new) | GitHub repository picker ships on self-host (`IS_CLOUD` gate removed) | #56 |
-| `src/lib/install-command.ts` | Baseline identity adjustment | #53 |
-| `src/lib/mask-secret.ts` (+test, new) | API-key masking helper | #56 |
-| `src/lib/nav-config.ts` (+test) | Budgets/usage nav entries added, App Availability removed | #53 (baseline), #56 (nav entries) |
-| `src/lib/plan-gate.tsx` (+test) | `usePlanGate` collapsed to a permanent no-op | #53 |
-| `src/lib/policy-editor/{_components/org-identity-picker,editable-rule-row,resource-scope,resource-scope-types}.tsx` | Condition matrix widened; directory picker fed from the org routers | #55, #56 |
-| `src/lib/workspaces/{page,settings-page}.tsx`, `_components/workspace-card.tsx` | Workspace-access and agent-defaults cards | #56 |
+| File                                                                                      | Change | Reason                                                              |
+| ----------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------- |
+| `packages/api/src/lib/env.ts`                                                             | M      | `REGISTRATION_MODE` constant                                        |
+| `packages/api/src/lib/registration.ts`, `registration.test.ts`, `registration.pg.test.ts` | M      | `assertRegistrationAllowed`, `SIGNUP_REQUIRES_INVITATION`           |
+| `packages/api/src/lib/better-auth.ts`                                                     | M      | Wired into the user-creation hook, after `assertUpgradeWindowClear` |
+| `packages/api/src/lib/onprem-session-provider.pg.test.ts`                                 | M      | Registration-mode-aware fixture                                     |
+| `apps/web/src/app/auth/{signup,login}/page.tsx`                                           | M      | Closed-signup screen; hide "Create an account"                      |
+| `apps/web/src/lib/auth/{signup-content-onprem,login-content-onprem}.tsx` (+tests)         | M      | Invite-only UI states                                               |
+| `apps/web/src/lib/auth/auth-errors.ts` (+test)                                            | M      | `SIGNUP_REQUIRES_INVITATION` copy                                   |
 
-## `docker/`
+## Net-new, fork-only content (no upstream file exists at these paths — never conflicts)
 
-| Files | Reason | PR |
-| --- | --- | --- |
-| `docker-compose.yml` | `ONECLI_REGISTRATION` threaded to both api and web | #57 |
-| `docker-compose.yml`, `{agent,api,channel-adapter,gateway,runner,web}.Dockerfile` | Image renames to `ghcr.io/whybutter/onecli-*` | #53 |
+`docs/upstream-sync/**`, `docs/paid-parity/**`, `docs/nanoclaw-integration.md`, `.agents/skills/upstream-sync/**`,
+`.claude/skills/upstream-sync`, `CLAUDE.md`. These are pure additions carried over from the pre-v2
+fork or written for the migration; a future upstream release cannot touch them because it doesn't
+know they exist. Listed here only for completeness, not because they carry conflict risk.
+
+## Verified but not itemized above
+
+`apps/gateway-e2e/{README.md,src/{env,fixtures,gateway,scenario}.ts}` and
+`apps/hosted-e2e/{README.md,src/{api-server,env,gateway}.ts}` were touched across multiple phases
+(Redis made optional in Phase 0, `fixtures.ts` extended in Phase 1, mTLS/relay/binding scaffolding
+added in Phase 4) — treat the whole `apps/gateway-e2e/src/` and `apps/hosted-e2e/src/` directories
+as fork-touched free-file surface for any upstream e2e-harness change.
