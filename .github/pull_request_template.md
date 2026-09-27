@@ -17,3 +17,7 @@ Feel free to include screenshots if it includes visual changes.
 ## Additional context
 
 Add any other context or screenshots.
+
+## Checklist
+
+- [ ] `docs/fork` updated (or N/A because ...)
