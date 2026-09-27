@@ -80,9 +80,9 @@ strict post-check, `_____@corp.example` would match a pending invitation for `al
 
 ## Env vars
 
-| Var                   | Default  | Read by                                                                                                        |
-| --------------------- | -------- | -------------------------------------------------------------------------------------------------------------- |
-| `ONECLI_REGISTRATION` | `invite` | Both api and web (each evaluates its own copy at startup — must be set on both). Documented in `.env.example`. |
+| Var                   | Default  | Read by                                                                                                                                                                                                                                                                                                                                     |
+| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ONECLI_REGISTRATION` | `invite` | Both api and web (each evaluates its own copy at startup — must be set on both). Documented in `.env.example` and in `docs/self-hosting.md` ("Accounts and registration", configuration table) — the latter is upstream's operator doc and previously stated there was no registration switch; keep it in step when this behaviour changes. |
 
 ## Testing
 

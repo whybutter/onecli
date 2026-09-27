@@ -160,15 +160,16 @@ create-agent door.
 
 ## Instance registration (Phase 5a — PR #57)
 
-| File                                                                                      | Change | Reason                                                              |
-| ----------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------- |
-| `packages/api/src/lib/env.ts`                                                             | M      | `REGISTRATION_MODE` constant                                        |
-| `packages/api/src/lib/registration.ts`, `registration.test.ts`, `registration.pg.test.ts` | M      | `assertRegistrationAllowed`, `SIGNUP_REQUIRES_INVITATION`           |
-| `packages/api/src/lib/better-auth.ts`                                                     | M      | Wired into the user-creation hook, after `assertUpgradeWindowClear` |
-| `packages/api/src/lib/onprem-session-provider.pg.test.ts`                                 | M      | Registration-mode-aware fixture                                     |
-| `apps/web/src/app/auth/{signup,login}/page.tsx`                                           | M      | Closed-signup screen; hide "Create an account"                      |
-| `apps/web/src/lib/auth/{signup-content-onprem,login-content-onprem}.tsx` (+tests)         | M      | Invite-only UI states                                               |
-| `apps/web/src/lib/auth/auth-errors.ts` (+test)                                            | M      | `SIGNUP_REQUIRES_INVITATION` copy                                   |
+| File                                                                                      | Change | Reason                                                                                                                                                                                                |
+| ----------------------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/api/src/lib/env.ts`                                                             | M      | `REGISTRATION_MODE` constant                                                                                                                                                                          |
+| `packages/api/src/lib/registration.ts`, `registration.test.ts`, `registration.pg.test.ts` | M      | `assertRegistrationAllowed`, `SIGNUP_REQUIRES_INVITATION`                                                                                                                                             |
+| `packages/api/src/lib/better-auth.ts`                                                     | M      | Wired into the user-creation hook, after `assertUpgradeWindowClear`                                                                                                                                   |
+| `packages/api/src/lib/onprem-session-provider.pg.test.ts`                                 | M      | Registration-mode-aware fixture                                                                                                                                                                       |
+| `apps/web/src/app/auth/{signup,login}/page.tsx`                                           | M      | Closed-signup screen; hide "Create an account"                                                                                                                                                        |
+| `apps/web/src/lib/auth/{signup-content-onprem,login-content-onprem}.tsx` (+tests)         | M      | Invite-only UI states                                                                                                                                                                                 |
+| `apps/web/src/lib/auth/auth-errors.ts` (+test)                                            | M      | `SIGNUP_REQUIRES_INVITATION` copy                                                                                                                                                                     |
+| `docs/self-hosting.md`                                                                    | M      | "Accounts and registration" section and the configuration table describe `ONECLI_REGISTRATION` (upstream's text says there is no registration switch); fixed with the docs/fork reference, not in #57 |
 
 ## Net-new, fork-only content (no upstream file exists at these paths — never conflicts)
 

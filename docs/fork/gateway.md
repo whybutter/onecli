@@ -10,6 +10,12 @@ for the call-site inventory.
 For the mTLS / CSR / relay / binding stack specifically, see
 [`remote-gateway-relay.md`](remote-gateway-relay.md) — this page covers it only at a summary level.
 
+The `ee/ee` crate also carries permanent stand-ins for what the fork dropped — `ha` (Redis HA),
+`platform_llm` (platform trial credit), `cognito`, `kms_crypto` — because `onecli-gateway`'s
+`wiring.rs` constructs them positionally and `plan.md` principle 4 keeps that free code untouched.
+They are unit structs or infallible constructors whose methods error or return the free default;
+do not turn them into real implementations without a decision to bring the feature back.
+
 ## Purpose
 
 Upstream's gateway ships RBAC, budgets, and granular per-connection access scoping behind an

@@ -112,7 +112,9 @@ as a commented block at the end of [`.env.example`](../../.env.example).
 
 ## Other docs in this tree
 
-- [`../nanoclaw-integration.md`](../nanoclaw-integration.md), [`../vault-integration.md`](../vault-integration.md) — current, accurate for this `v2` tree.
+- [`../vault-integration.md`](../vault-integration.md) — current, accurate for this `v2` tree (the vault providers are free upstream code the migration did not touch).
+- [`../nanoclaw-integration.md`](../nanoclaw-integration.md) — pre-v2, brought over unchanged. The SDK calls still work, but its `ONECLI_URL` guidance (cloud default, web-app origin for self-host) is stale on v2: point it at the api-server origin. Corrected reading in [nanoclaw.md](nanoclaw.md); the rewrite is Phase 5b.
+- [`../self-hosting.md`](../self-hosting.md), [`../development.md`](../development.md) — upstream's operator/developer docs, kept current with the fork's own changes where they differ (registration mode).
 - [`../paid-parity/*`](../paid-parity/) — pre-v2 fork history, brought over unchanged in Phase 0; describes gaps against the paid UI as it stood before this migration, not the current tree.
 - [`../upstream-sync/v2-migration/*`](../upstream-sync/v2-migration/) — the plans, behaviour specs and seam inventories this fork was built from; the primary source for the "why" behind every design decision cited on these pages.
 

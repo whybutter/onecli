@@ -22,6 +22,13 @@ other entitlement-derived capability the server computes are always on
 at the same path, same export names — see [`src/ee/index.ts`](../../packages/api/src/ee/index.ts)'s
 `registerEeRoutes`, mounted unconditionally under `/v1` with **no `requireEnterprise` middleware**.
 
+"Rewrite" does not mean the directory only holds the features above. Upstream's cloud-only
+surfaces that the fork dropped (Cognito identity, SSO/JIT/SCIM, Stripe and AWS-Marketplace billing,
+KMS crypto and the KMS SSH CA, the Redis client/event bus, Discord notifications, app availability)
+still exist under `src/ee/` as null or no-op stand-ins, because free code imports those symbols and
+`plan.md` principle 4 ("trim, don't port") keeps the callers compiling instead of editing them.
+Nothing mounts or configures them; they are inert by construction, not disabled by a flag.
+
 ## Design decisions that differ from upstream
 
 | Decision                                                                                                                                 | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |

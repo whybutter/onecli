@@ -9,17 +9,22 @@ what Phase 5b changes for a remote deployment.
 An operator installs `@onecli-sh/sdk` in their nanoclaw/orchestrator process, sets two env vars,
 and calls `applyContainerConfig` before launching each agent container:
 
-| Var              | Required | Purpose                                                                                                                                    |
-| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ONECLI_API_KEY` | yes      | User API key from the OneCLI dashboard (`oc_...`)                                                                                          |
-| `ONECLI_URL`     | no       | OneCLI instance URL — defaults to `https://app.onecli.sh`; self-hosted installs set it to their own origin (e.g. `http://localhost:10254`) |
+| Var              | Required | Purpose                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ONECLI_API_KEY` | yes      | User API key from the OneCLI dashboard (`oc_...`)                                                                                                                                                                                                                                                                                                                  |
+| `ONECLI_URL`     | no       | OneCLI control-plane URL. The SDK's default (`https://app.onecli.sh`) is upstream's cloud, not this fork; on v2 the value must be an origin that answers `/v1` — the api-server (`http://host:10256` in ports mode) or a proxy-mode single origin. The web app's origin only works under `next dev`, whose `/v1` rewrites are dev-only (`apps/web/next.config.js`) |
 
 `applyContainerConfig` mutates the `docker run`/`docker create` args in place: it adds
 `-e HTTPS_PROXY=...` pointed at the gateway, mounts the gateway's CA cert, and sets whatever else
 the container needs to have its outbound HTTPS traffic MITM'd by the gateway for credential
-injection. See [`../nanoclaw-integration.md`](../nanoclaw-integration.md) for the full setup guide
-— that page describes the current, working, same-host flow and is accurate as of this fork's `v2`
-tree (it is not stale pre-v2 material).
+injection. See [`../nanoclaw-integration.md`](../nanoclaw-integration.md) for the SDK usage. That
+page is pre-v2 material brought over unchanged: the SDK calls it documents still work (the proxy
+hop — `HTTPS_PROXY` at the gateway, same MITM CA — is unchanged on v2), but its `ONECLI_URL`
+guidance is stale: the `https://app.onecli.sh` default is upstream's cloud, and the self-host
+example `http://localhost:10254` (the web app) only answers `/v1` under `next dev`'s dev-only
+rewrites. Against the compose stack, `ONECLI_URL` must be the api-server origin (or a proxy-mode
+single origin) — the repoint that Phase 5b makes official. Also noted in the v2.6.0 upstream review
+(`docs/upstream-sync/reviews/2026-09-14-v2.6.0.md`, "Migration and compatibility facts").
 
 ## What Phase 5b changes (not yet done)
 
