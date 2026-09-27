@@ -105,13 +105,10 @@ cutover), app availability (gateway keeps only the pure block function), role ma
 UI surface), a Dropbox folder browser (GitHub-only picker), OpenAI metering (Anthropic-only budget
 enforcement today), Vanta (#1, parked).
 
-**Env vars introduced by the fork but not yet in `.env.example`:** `GATEWAY_MTLS_PORT`,
-`GATEWAY_TLS_CERT`, `GATEWAY_TLS_KEY`, `GATEWAY_CLIENT_CA`, `GATEWAY_CLIENT_CA_KEY`,
-`GATEWAY_CLIENT_CA_CERT`, `GATEWAY_BINDING_ENFORCEMENT`, `GATEWAY_PLAIN_BIND`, `RELAY_BIND`,
-`RELAY_GATEWAY_ADDR`, `RELAY_GATEWAY_SERVER_NAME`, `RELAY_GATEWAY_SERVER_CA`, `RELAY_API_URL`,
-`RELAY_API_KEY`, `RELAY_LABEL`, `RELAY_STATE_DIR` — all documented in
-[`remote-gateway-relay.md`](remote-gateway-relay.md) instead, since they're operator-facing only
-once a deployment adopts the relay stack, but they should be added to `.env.example` too.
+**Operator env vars for the remote gateway** (`GATEWAY_MTLS_PORT`, `GATEWAY_TLS_CERT`/`_KEY`,
+`GATEWAY_CLIENT_CA*`, `GATEWAY_BINDING_ENFORCEMENT`, `GATEWAY_PLAIN_BIND`, `GATEWAY_INTERNAL_URL`,
+`RELAY_*`) are documented with defaults in [`remote-gateway-relay.md`](remote-gateway-relay.md) and
+as a commented block at the end of [`.env.example`](../../.env.example).
 
 ## Other docs in this tree
 
