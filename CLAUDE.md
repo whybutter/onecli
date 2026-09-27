@@ -130,7 +130,7 @@ When adding components, use shadcn CLI or copy from ui.shadcn.com.
 
 - Server components by default, add `"use client"` only when needed
 - Pages export `default function` (async for data fetching)
-- Auth: better-auth, email/password always available plus optional Google. Registration is open by design — every account gets its own organization on first sign-in; joining someone else's org goes through an invitation
+- Auth: better-auth, email/password always available plus optional Google. `ONECLI_REGISTRATION` (`open`/`invite`, default `invite`) governs who may create a new account — every account still gets its own organization on first sign-in, and joining someone else's org always goes through an invitation either way
 - Validation: Zod for API inputs
 - **Button loading states** - replace icon with spinner, update text (e.g., "Connecting..."), and disable
 - **Verify library APIs are current** - check official docs for deprecated/legacy patterns before implementing

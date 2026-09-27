@@ -23,7 +23,10 @@ import {
   resolveOriginsFromEnv,
 } from "./public-origins";
 import { resolveCookieDomain } from "./cookie-domain";
-import { assertUpgradeWindowClear } from "./registration";
+import {
+  assertRegistrationAllowed,
+  assertUpgradeWindowClear,
+} from "./registration";
 import { sendPasswordResetEmail } from "../services/password-reset-email";
 
 /**
@@ -139,17 +142,30 @@ export const createOnpremAuth = (options: OnpremAuthOptions) => {
       user: {
         create: {
           before: async (user) => {
-            // Registration is open on self-host; the ONE refusal left is the
-            // pre-2.0 upgrade window (`registration.ts`). This hook is the
-            // only place every route that can create a user passes through —
-            // the password sign-up and the social callback both reach the
-            // adapter here — so a configured Google provider cannot become a
-            // way around it.
+            // Two refusals gate every new account, in this order:
+            // (1) the pre-2.0 upgrade window (`registration.ts`) — protects
+            //     an upgrading operator's data and must win first; (2) the
+            //     instance's `ONECLI_REGISTRATION` policy — "open" admits
+            //     anyone, "invite" (default) requires a pending invitation
+            //     for this email or that the instance has no real users yet.
+            // This hook is the only place every BETTER-AUTH route that can
+            // create a user passes through — the password sign-up and the
+            // social callback both reach the adapter here — so a configured
+            // Google provider cannot become a way around either check. It is
+            // NOT the only door in the codebase: org-admin-gated member
+            // provisioning (`createMember`, `ee/services/team-service.ts`,
+            // reached via `POST /v1/org/members`) calls `db.user.create`
+            // directly for an invited teammate who has no account yet, and
+            // does not run through this hook or this policy — an
+            // already-authenticated admin adding a known member is a
+            // different threat model than an anonymous stranger
+            // self-registering, which is what this gate exists to police.
             //
-            // It throws rather than returning `false`; see
+            // Both throw rather than returning `false`; see
             // `signupBlockedByUpgradeError` for why that distinction is
             // load-bearing.
             await assertUpgradeWindowClear(options.prisma ?? db);
+            await assertRegistrationAllowed(user.email, options.prisma ?? db);
 
             // Merged into the insert (better-auth spreads the returned
             // `data`), which is the only point where a value can reach a
@@ -174,11 +190,14 @@ export const createOnpremAuth = (options: OnpremAuthOptions) => {
     },
 
     emailAndPassword: {
-      // Registration is open on self-host, so there is nothing for
-      // `disableSignUp` to do — and the one refusal that does exist (the
-      // pre-2.0 upgrade window) is a per-REQUEST question the user-creation
-      // hook above answers, for the social path too, which `disableSignUp`
-      // would not have covered at all.
+      // `disableSignUp` is a static, request-blind switch flipped at startup;
+      // it is never set here even though `ONECLI_REGISTRATION=invite` can
+      // refuse sign-ups, because both refusals this instance can make (the
+      // pre-2.0 upgrade window, and the invite-mode policy) are per-REQUEST
+      // questions — they depend on the email being created and the current
+      // DB state — which only the user-creation hook above has access to,
+      // for the social path too, which `disableSignUp` would not have
+      // covered at all.
       //
       // Neither `requireEmailVerification` nor `autoSignIn: false` is set,
       // and both must stay unset: either one makes a sign-up for a taken
@@ -306,11 +325,14 @@ export const createOnpremAuth = (options: OnpremAuthOptions) => {
     // - `requireLocalEmailVerified` stays true, so implicit linking still
     //   refuses when the EXISTING account's email is unverified — the common
     //   state on a stock self-host, where no email service runs.
-    //   Registration is open on self-host, so an attacker can pre-register a
-    //   victim's address with a password and wait; refusing unverified-local
-    //   links is what keeps that squatter account from absorbing the
-    //   victim's Google identity. The refused case gets actionable copy
-    //   instead (auth-errors.ts): sign in with the password.
+    //   Whatever ONECLI_REGISTRATION allows in (anyone, in "open" mode; an
+    //   invited or first-account claimant otherwise), a registered address
+    //   is never re-verified after the fact, so an attacker who gets an
+    //   account created can still pre-register a victim's address with a
+    //   password and wait; refusing unverified-local links is what keeps
+    //   that squatter account from absorbing the victim's Google identity.
+    //   The refused case gets actionable copy instead (auth-errors.ts): sign
+    //   in with the password.
     account: {
       accountLinking: {
         enabled: true,

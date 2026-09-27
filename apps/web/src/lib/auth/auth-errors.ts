@@ -14,6 +14,15 @@
 export const SIGNUP_BLOCKED_BY_UPGRADE = "SIGNUP_BLOCKED_BY_UPGRADE";
 
 /**
+ * This instance's registration policy is `invite` and the visitor is neither
+ * invited nor the deployment's first account. Mirrors the API's own literal
+ * of the same name (`@onecli/api/lib/registration`) — this file deliberately
+ * does not import that server-only module, so the string is duplicated here,
+ * the same way `SIGNUP_BLOCKED_BY_UPGRADE` already is.
+ */
+export const SIGNUP_REQUIRES_INVITATION = "SIGNUP_REQUIRES_INVITATION";
+
+/**
  * A Map, not an object literal: the lookup key arrives from the query string
  * on the social-refusal path, so it is attacker-chosen. An object would answer
  * `toString` or `__proto__` with something inherited from the prototype — a
@@ -24,6 +33,10 @@ const MESSAGES = new Map<string, string>([
   [
     SIGNUP_BLOCKED_BY_UPGRADE,
     "This instance is finishing an upgrade. Its owner needs to sign in first; try again in a moment.",
+  ],
+  [
+    SIGNUP_REQUIRES_INVITATION,
+    "This instance only accepts new accounts by invitation. Ask an existing member for an invite link.",
   ],
   [
     "INVALID_EMAIL_OR_PASSWORD",

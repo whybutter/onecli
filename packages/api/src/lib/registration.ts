@@ -1,25 +1,30 @@
 import { APIError } from "better-auth/api";
 import { db } from "@onecli/db";
+import { REGISTRATION_MODE } from "./env";
 import {
   LEGACY_LOCAL_AUTH_ID,
   LEGACY_LOCAL_EMAIL,
 } from "./legacy-local-identity";
 import { logger } from "./logger";
 
+export { REGISTRATION_MODE, type RegistrationMode } from "./env";
+
 /**
- * Who is allowed to create an account on a self-hosted deployment: anyone.
+ * Who is allowed to create an account on a self-hosted deployment: governed
+ * by `REGISTRATION_MODE` (`./env`). `"open"` admits anyone, the product's
+ * original behaviour. `"invite"` (the default) admits only three cases: an
+ * existing member's invite link (a pending, unexpired `Invitation` row for
+ * the email being created), or this deployment's very first account — a
+ * fresh install, or a pre-2.0 upgrade awaiting its claimer (see
+ * `registrationState()` below). Every account, however admitted, is
+ * provisioned its own organization on first sign-in
+ * (`ensureUserOrganization`), fenced from everyone else's; joining somebody
+ * ELSE's organization always goes through an invitation regardless of this
+ * setting. See `assertRegistrationAllowed` for the enforcement.
  *
- * Registration is open by design. Every account is provisioned its own
- * organization on first sign-in (`ensureUserOrganization`), fenced from
- * everyone else's, so a new registration takes nothing from existing users —
- * the same posture as the hosted platform. Joining somebody ELSE's
- * organization still goes through an invitation; registering without one
- * simply starts a fresh org of your own. A deployment that must not accept
- * strangers keeps its dashboard behind the network boundary — the product
- * deliberately offers no registration switch.
- *
- * One narrow refusal survives: the pre-2.0 upgrade window, below. It exists to
- * protect an upgrading operator's data, not to keep people out.
+ * One refusal outranks this policy entirely: the pre-2.0 upgrade window,
+ * below. It exists to protect an upgrading operator's data, not to keep
+ * people out, and it is checked first (see `better-auth.ts`).
  */
 
 /**
@@ -184,4 +189,62 @@ export const assertUpgradeWindowClear = async (
     );
   }
   throw signupBlockedByUpgradeError();
+};
+
+/**
+ * The invite-mode refusal, as a token rather than a sentence — same
+ * reasoning as `SIGNUP_BLOCKED_BY_UPGRADE`: it has to survive the social
+ * path's `?error=` redirect unmangled.
+ */
+export const SIGNUP_REQUIRES_INVITATION = "SIGNUP_REQUIRES_INVITATION";
+
+export const signupRequiresInvitationError = (): APIError =>
+  new APIError("FORBIDDEN", {
+    code: SIGNUP_REQUIRES_INVITATION,
+    message: SIGNUP_REQUIRES_INVITATION,
+  });
+
+/**
+ * Refuse a NEW account unless this instance's registration policy admits
+ * it: the setting is "open"; OR `email` (case-insensitively) holds a
+ * pending, unexpired invitation to some organization; OR the instance
+ * has no real users yet (`registrationState().firstAccount` — a fresh
+ * install, or a pre-2.0 upgrade awaiting its claimer).
+ *
+ * Called from the identity layer's user-creation hook, after
+ * `assertUpgradeWindowClear` — that check must win first: it protects
+ * data an upgrading operator already has, and its refusal must never be
+ * masked by this one.
+ */
+export const assertRegistrationAllowed = async (
+  email: string,
+  prisma: typeof db = db,
+): Promise<void> => {
+  if (REGISTRATION_MODE === "open") return;
+
+  const state = await registrationState(prisma);
+  if (state.firstAccount) return;
+
+  // `mode: "insensitive"` compiles to a Postgres `ILIKE`, which treats `_`
+  // (a legal email character) as a single-character wildcard — a caller
+  // could match `alice@corp.example`'s invitation with `al_ce@corp.example`
+  // or even `_____@corp.example`. It stays as a PRE-filter only (it still
+  // has to catch a genuinely differently-cased invitation, e.g. created by
+  // the Slack onboarding door, which does not normalize case), and the
+  // actual admit decision is a strict, literal comparison below.
+  const needle = email.trim().toLowerCase();
+  const candidates = await prisma.invitation.findMany({
+    where: {
+      email: { equals: email, mode: "insensitive" },
+      status: "pending",
+      expiresAt: { gt: new Date() },
+    },
+    select: { email: true },
+  });
+  const invited = candidates.some(
+    (i) => i.email.trim().toLowerCase() === needle,
+  );
+  if (invited) return;
+
+  throw signupRequiresInvitationError();
 };
