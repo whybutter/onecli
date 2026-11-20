@@ -1,9 +1,9 @@
 {
   "$comment": "Anchor for the recurring upstream review. See ./README.md and .agents/skills/upstream-sync/SKILL.md.",
   "upstream": "https://github.com/onecli/onecli.git",
-  "lastReviewedCommit": "8ea47cd",
-  "lastReviewedTag": "v2.6.0",
-  "lastReviewedAt": "2026-09-14",
+  "lastReviewedCommit": "90e874c0cf4e059401577f687bee93e9f376bc65",
+  "lastReviewedTag": "v2.20.0",
+  "lastReviewedAt": "2026-11-19",
   "forkBase": "v1.45.0",
   "forkBaseCommit": "84ccaf74ce6350f8925675457b48272c29f32c1a",
   "forkBranch": "main",
@@ -18,9 +18,28 @@
       "item": "v2 security cherry-picks (407 untokened proxy, oc_ commit rule, approval 404 collapse, CORS #520, #541, #525, #559)",
       "review": "reviews/2026-09-14-v2.6.0.md",
       "status": "subsumed by the v2 rebase"
+    },
+    {
+      "item": "v2.20.0 adoption on the fork v2 branch",
+      "review": "reviews/2026-11-19-v2.20.0.md",
+      "status": "Review complete. Adoption and verification pending.",
+      "blocker": "Reconcile gateway, API/schema, web and deployment changes. Keep new transports disabled pending a scope decision."
     }
   ],
   "reviews": [
+    {
+      "date": "2026-11-19",
+      "range": "8ea47cd8..v2.20.0",
+      "doc": "reviews/2026-11-19-v2.20.0.md",
+      "commits": 32,
+      "conflicts": 185,
+      "decisions": {
+        "take": 0,
+        "takeWithAdaptation": 5,
+        "skip": 1,
+        "needsDecision": 1
+      }
+    },
     {
       "date": "2026-09-14",
       "range": "v1.45.0..v2.6.0",
