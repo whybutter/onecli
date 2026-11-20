@@ -140,7 +140,6 @@ const surfaces = [
           canManage
           isLastWorkspace={isLastWorkspace}
           organizationId="org-1"
-          plan="free"
         />,
       ),
     open: async (user: ReturnType<typeof userEvent.setup>) => {

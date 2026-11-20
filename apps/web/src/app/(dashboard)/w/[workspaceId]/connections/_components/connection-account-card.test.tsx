@@ -83,11 +83,11 @@ describe("ConnectionAccountCard: missing permissions", () => {
 });
 
 describe("ConnectionAccountCard: tags", () => {
-  it("offers a connection check only for database providers", () => {
+  it("hides the connection check for the deferred database transport", () => {
     renderCard(connection({ provider: "postgres" }));
     expect(
-      screen.getByRole("button", { name: "Test connection" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Test connection" }),
+    ).toBeNull();
   });
   it("does not offer database checks for other providers", () => {
     renderCard(connection());

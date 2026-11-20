@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { InheritedConnectionCard } from "./inherited-connection-card";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -48,7 +48,7 @@ const orgShared = (metadata: Record<string, unknown> | null) => ({
 });
 
 describe("InheritedConnectionCard", () => {
-  it("tests an inherited connection on a workspace page with the actual org header, never the ambient workspace", async () => {
+  it("hides the deferred PostgreSQL check on inherited connections", async () => {
     window.history.replaceState(
       {},
       "",
@@ -67,16 +67,10 @@ describe("InheritedConnectionCard", () => {
         />
       </QueryClientProvider>,
     );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Test connection" }),
-    );
-    await screen.findByText("Connection verified");
-    const [url, options] = fetchMock.mock.calls[0]!;
-    expect(url).toBe("https://gateway.example/v1/connections/conn-org/test");
-    const headers = new Headers(options?.headers);
-    expect(headers.get("X-Organization-Id")).toBe("actual-organization");
-    expect(headers.has("X-Workspace-Id")).toBe(false);
-    expect(options?.body).toBeUndefined();
+    expect(
+      screen.queryByRole("button", { name: "Test connection" }),
+    ).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
   it("hides inherited checks from non-admins even when the org is resolved", async () => {
     access.isAdmin = false;

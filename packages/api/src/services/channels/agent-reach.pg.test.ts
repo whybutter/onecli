@@ -769,8 +769,9 @@ describe.skipIf(!PROOF_URL)("reach — the guest lane", () => {
     await linkUser(integrationId, "U-OWNER", OWNER);
     await linkUser(integrationId, "U-MEMBER", MEMBER);
     // A second owner: the lock is about the role, not the first owner found.
-    const secondOwner = await db.workspaceAccess.create({
-      data: { workspaceId: WORKSPACE, userId: MEMBER, role: "owner" },
+    const secondOwner = await db.workspaceAccess.update({
+      where: { workspaceId_userId: { workspaceId: WORKSPACE, userId: MEMBER } },
+      data: { role: "owner" },
       select: { id: true },
     });
     try {
@@ -841,7 +842,10 @@ describe.skipIf(!PROOF_URL)("reach — the guest lane", () => {
       if (dm.kind !== "message") throw new Error("unreachable");
       expect(dm.outcome.kind).toBe("turn");
     } finally {
-      await db.workspaceAccess.delete({ where: { id: secondOwner.id } });
+      await db.workspaceAccess.update({
+        where: { id: secondOwner.id },
+        data: { role: "member" },
+      });
     }
   });
 

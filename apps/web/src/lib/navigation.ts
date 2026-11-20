@@ -60,6 +60,8 @@ export type OrgPage =
   | "skills"
   | "settings"
   | "settings/general"
+  | "settings/domains"
+  | "global-connections/budgets"
   | "settings/sso"
   | "settings/app-availability"
   | "settings/global-connections"

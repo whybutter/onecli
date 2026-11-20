@@ -275,12 +275,18 @@ describe.skipIf(!PROOF_URL)("lost-connection alerts", () => {
     const lost = await seedAgent("fenced");
     await seedPresence(lost, "disabled");
 
+    await db.workspaceAccess.create({
+      data: { workspaceId: WORKSPACE, userId: MEMBER, role: "member" },
+    });
     for (const viewer of [OWNER, MEMBER]) {
       const res = await alertsAs(viewer);
       expect(res.status).toBe(200);
       const { items } = (await res.json()) as { items: { agentId: string }[] };
       expect(items.map((i) => i.agentId)).toEqual([lost]);
     }
+    await db.workspaceAccess.deleteMany({
+      where: { workspaceId: WORKSPACE, userId: MEMBER },
+    });
     // A foreign tenant: an owner of ANOTHER org naming this workspace.
     const res = await alertsAs(STRANGER);
     expect(res.status).toBeGreaterThanOrEqual(400);

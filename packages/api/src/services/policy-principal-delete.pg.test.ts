@@ -206,7 +206,10 @@ describe.skipIf(!PROOF_URL)(
   "deleting a group drops the rules naming only it",
   () => {
     const deleteGroup = async (groupId: string) =>
-      (await import("../ee/services/group-service")).deleteGroup(ORG, groupId);
+      (await import("../ee/services/group-service")).deleteOrgGroup(
+        ORG,
+        groupId,
+      );
 
     it("a non-member stays blocked past the org's deny default", async () => {
       await makeGroup(GROUP);
@@ -414,7 +417,6 @@ describe.skipIf(!PROOF_URL)(
 
       expect(changed).toEqual([ORG, OTHER_ORG].sort());
     });
-
   },
 );
 

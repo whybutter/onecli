@@ -196,19 +196,12 @@ describe.skipIf(!PROOF_URL)("connectionsForRender over real PostgreSQL", () => {
     expect(await render.connectionsForRender(OTHER_AGENT)).toEqual([]);
   });
 
-  it("names a database by connection id for the front door, with no HTTP facts", async () => {
+  it("omits a persisted PostgreSQL connection while the native transport is unavailable", async () => {
     await grants.setConnectionGrant(SCOPE, AGENT, PG, { access: "full" }, null);
     const database = (await render.connectionsForRender(AGENT)).find(
       (c) => c.provider === "postgres",
     );
-    expect(database).toMatchObject({
-      name: "PostgreSQL",
-      label: "orders-db",
-      host: null,
-      apiHosts: [],
-      endpoints: [],
-      database: { engine: "postgres", connectionId: PG },
-    });
+    expect(database).toBeUndefined();
     await grants.removeConnectionGrant(SCOPE, AGENT, PG, null);
   });
 

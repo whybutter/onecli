@@ -348,6 +348,9 @@ beforeAll(async () => {
       },
     ],
   });
+  await db.workspaceAccess.create({
+    data: { workspaceId: WORKSPACE, userId: MEMBER, role: "member" },
+  });
   await db.channelAdapter.create({
     data: {
       token: ADAPTER_TOKEN,
@@ -460,6 +463,7 @@ const dropAll = async () => {
     where: { organizationId: { in: [ORG, OTHER_ORG] } },
   });
   await db.channelAdapter.deleteMany({ where: { token: ADAPTER_TOKEN } });
+  await db.workspaceAccess.deleteMany({ where: { workspaceId: WORKSPACE } });
   await db.organizationMember.deleteMany({
     where: { organizationId: { in: [ORG, OTHER_ORG] } },
   });

@@ -65,6 +65,7 @@ beforeAll(async () => {
   process.env.APP_URL = "https://app.example.com";
   process.env.PREVIEW_RELAY_SECRET = "r".repeat(32);
   process.env.SECRET_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
+  (await import("../edition-defaults")).ensureEditionDefaults();
   ({ db } = await import("@onecli/db"));
   expose = await import("./preview-expose-service");
   ports = await import("./sandbox-port-service");

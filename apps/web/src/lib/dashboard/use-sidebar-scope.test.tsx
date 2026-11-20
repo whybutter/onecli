@@ -106,15 +106,21 @@ describe("useSidebarScope", () => {
 
   // Fail closed: a member, or a viewer whose membership has not answered
   // yet, sees only the allowlisted org rows; an admin sees the rest.
-  it("shows members, and viewers not known yet, only the workspaces row", () => {
+  it("shows members, and viewers not known yet, the workspaces and usage rows", () => {
     state.pathname = "/org/org-1/workspaces";
     state.isAdmin = false;
     const member = renderHook(() => useSidebarScope()).result.current;
-    expect(urls(member.navItems)).toEqual(["/org/org-1/workspaces"]);
+    expect(urls(member.navItems)).toEqual([
+      "/org/org-1/workspaces",
+      "/org/org-1/usage",
+    ]);
 
     state.isAdmin = undefined;
     const pending = renderHook(() => useSidebarScope()).result.current;
-    expect(urls(pending.navItems)).toEqual(["/org/org-1/workspaces"]);
+    expect(urls(pending.navItems)).toEqual([
+      "/org/org-1/workspaces",
+      "/org/org-1/usage",
+    ]);
 
     state.isAdmin = true;
     const admin = renderHook(() => useSidebarScope()).result.current;

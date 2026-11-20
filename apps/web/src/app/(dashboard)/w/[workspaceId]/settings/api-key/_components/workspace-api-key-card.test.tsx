@@ -43,10 +43,12 @@ const renderCard = () => {
 };
 
 beforeEach(() => {
-  vi.mocked(user.apiKey).mockReset().mockResolvedValue({ apiKey: OLD_KEY });
+  vi.mocked(user.apiKey)
+    .mockReset()
+    .mockResolvedValue({ apiKey: OLD_KEY, lastUsedAt: null });
   vi.mocked(user.regenerateApiKey)
     .mockReset()
-    .mockResolvedValue({ apiKey: NEW_KEY });
+    .mockResolvedValue({ apiKey: NEW_KEY, lastUsedAt: null });
 });
 afterEach(cleanup);
 

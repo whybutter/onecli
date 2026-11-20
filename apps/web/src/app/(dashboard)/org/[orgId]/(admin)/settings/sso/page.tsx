@@ -1,3 +1,4 @@
+import { orgPath } from "@/lib/navigation";
 import { redirect } from "next/navigation";
 
 /**
@@ -12,5 +13,5 @@ export default async function Page({
   params: Promise<{ orgId: string }>;
 }) {
   const { orgId } = await params;
-  redirect(`/org/${orgId}/settings/general`);
+  redirect(orgPath(orgId, "settings/general"));
 }

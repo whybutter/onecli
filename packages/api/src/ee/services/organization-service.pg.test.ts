@@ -181,9 +181,7 @@ describe.skipIf(!PROOF_URL)(
         });
         await expect(
           db.organization.delete({ where: { id: orgId } }),
-        ).rejects.toThrow(
-          /violates RESTRICT setting of foreign key constraint/,
-        );
+        ).rejects.toMatchObject({ code: "P2003" });
       },
     );
 

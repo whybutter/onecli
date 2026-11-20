@@ -589,10 +589,7 @@ describe.skipIf(!PROOF_URL)("context fit (pg)", () => {
       ).toBe(1_000_000);
     });
 
-    it("the hosted platform's own provider: a trial agent's 1M conversation ships at 200k", async () => {
-      // The real licensed provider and its real eligibility rule (env key
-      // configured, empty pool, a trusted owner), not a stub: what the
-      // hosted deployment injects at boot.
+    it("the fork provider leaves the agent context size intact when trial credit is unavailable", async () => {
       const { eePlatformLlm } = await import("../ee/services/platform-llm");
       const saved = process.env.PLATFORM_ANTHROPIC_API_KEY;
       process.env.PLATFORM_ANTHROPIC_API_KEY = "sk-ant-api03-platform-proof";
@@ -603,7 +600,7 @@ describe.skipIf(!PROOF_URL)("context fit (pg)", () => {
         });
         expect(
           await llmCredential.deliveredContextTokens(trialAgent, 1_000_000),
-        ).toBe(200_000);
+        ).toBe(1_000_000);
       } finally {
         if (saved === undefined) delete process.env.PLATFORM_ANTHROPIC_API_KEY;
         else process.env.PLATFORM_ANTHROPIC_API_KEY = saved;

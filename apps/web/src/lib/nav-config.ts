@@ -2,7 +2,6 @@ import {
   FolderOpen,
   Users,
   Boxes,
-  BarChart3,
   CreditCard,
   Settings,
   MessagesSquare,
@@ -83,7 +82,7 @@ export const getNavItems = (
   if (CAPS.rbac || entitlementKnown) {
     adminGroup.push({ title: "Groups", url: p("groups"), icon: Boxes });
   }
-  adminGroup.push({ title: "Usage", url: p("usage"), icon: BarChart3 });
+  adminGroup.push({ title: "Usage", url: p("usage"), icon: Activity });
   if (CAPS.billing) {
     adminGroup.push({
       title: "Billing",

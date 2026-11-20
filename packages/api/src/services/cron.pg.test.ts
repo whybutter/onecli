@@ -94,6 +94,14 @@ beforeAll(async () => {
       externalAuthId: `${P}auth`,
     },
   });
+  await db.organizationMember.create({
+    data: {
+      organizationId: ORG,
+      userId: USER,
+      userEmail: `${P}user@example.com`,
+      role: "owner",
+    },
+  });
 });
 
 afterAll(async () => {
@@ -127,6 +135,9 @@ const resetAll = async () => {
   // The tool-service audits agent-authored writes under the creator, and
   // audit rows pin their user — clear them before the user can go.
   await db.auditLog.deleteMany({ where: { userId: USER } });
+  await db.organizationMember.deleteMany({
+    where: { organizationId: ORG, userId: USER },
+  });
   await db.user.deleteMany({ where: { id: USER } });
   await db.workspace.deleteMany({ where: { id: { startsWith: P } } });
   await db.organization.deleteMany({ where: { id: { startsWith: P } } });

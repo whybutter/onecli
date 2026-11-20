@@ -5,6 +5,7 @@ import { canManageWorkspace } from "@onecli/api/ee/services/authorization-servic
 import { getServerSession } from "@/lib/auth/server";
 import { PageHeader } from "@dashboard/page-header";
 import { RenameWorkspaceForm } from "./_components/rename-workspace-form";
+import { WorkspaceTimezoneCard } from "./_components/workspace-timezone-card";
 import { WorkspaceAccessCard } from "@/ee/workspaces/_components/workspace-access-card";
 import { AgentDefaultsCard } from "@/ee/workspaces/_components/agent-defaults-card";
 import { DeleteWorkspaceButton } from "./_components/delete-workspace-button";
@@ -41,34 +42,30 @@ export default async function WorkspaceSettingsPage({ workspaceId }: Props) {
     select: {
       id: true,
       name: true,
+      timezone: true,
       organizationId: true,
     },
   });
   if (!workspace) redirect("/org");
-  // Manage-only pane (rename / share / delete). A member who can't manage is
-  // sent to Install rather than out of the workspace: it is the other pane in
-  // this section and the one they ARE entitled to.
-  const canManage = await canManageWorkspace(user.id, workspace.id);
-  if (!canManage) {
-    redirect(`/w/${workspace.id}/settings/install`);
-  }
-
-  // The delete guard is org-scoped ("can't delete the org's only workspace") to
-  // match the DELETE /v1/workspaces/:id check and the workspaces-list guard — not
-  // scoped to what this user created, so all three agree.
-  const orgWorkspaceCount = await db.workspace.count({
-    where: { organizationId: workspace.organizationId },
-  });
+  const [canManage, orgWorkspaceCount] = await Promise.all([
+    canManageWorkspace(user.id, workspace.id),
+    db.workspace.count({ where: { organizationId: workspace.organizationId } }),
+  ]);
+  if (!canManage) return null;
 
   return (
     <div className="flex flex-1 flex-col gap-6">
       <PageHeader
-        title="General"
+        title="Settings"
         description="Rename or delete this workspace. Usage is in the sidebar under your organization."
       />
       <RenameWorkspaceForm
         workspaceId={workspace.id}
         currentName={workspace.name}
+      />
+      <WorkspaceTimezoneCard
+        workspaceId={workspace.id}
+        currentTimezone={workspace.timezone}
       />
       <WorkspaceAccessCard workspaceId={workspace.id} />
       <AgentDefaultsCard workspaceId={workspace.id} canManage={canManage} />

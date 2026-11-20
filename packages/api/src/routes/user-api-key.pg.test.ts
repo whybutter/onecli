@@ -161,7 +161,10 @@ describe.skipIf(!PROOF_URL)(
         headers: auth(apiKey),
       });
       expect(read.status).toBe(200);
-      expect(await read.json()).toEqual({ apiKey });
+      expect(await read.json()).toEqual({
+        apiKey,
+        lastUsedAt: expect.any(String),
+      });
 
       // Audited, with ids only: never the old or the new key.
       const audits = await db.auditLog.findMany({

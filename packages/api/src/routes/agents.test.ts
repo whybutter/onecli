@@ -223,6 +223,7 @@ describe("POST /v1/agents", () => {
         kind: "hosted",
       }),
       "user-1",
+      "org-1",
     );
     // No identifier to look up: a derived one is always a new agent, so the
     // quota gate runs and the existence probe is skipped.

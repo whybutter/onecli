@@ -262,10 +262,7 @@ describe.skipIf(!PROOF_URL)(
       expect(status.status).toBe(200);
     });
 
-    // Free self-host is a flat team (no role enforcement): there the same
-    // gate only fences active membership, so a plain member CAN save. The
-    // admin rule above must not lock a self-hoster out of their own setup.
-    it("with roles off (flat-team self-host) a member can save workspace credentials", async () => {
+    it("workspace credential writes remain admin-only when the legacy role flag is off", async () => {
       const env = await import("../lib/env.js");
       Object.defineProperty(env.CAPS, "rbac", {
         value: false,
@@ -278,8 +275,10 @@ describe.skipIf(!PROOF_URL)(
           "member-google",
           WS_A,
         );
-        expect(res.status).toBe(201);
-        expect(await clientIdFor(WS_A, "gmail")).toBe("member-google");
+        expect(res.status).toBe(403);
+        expect(await db.appConfig.count({ where: { workspaceId: WS_A } })).toBe(
+          0,
+        );
       } finally {
         Object.defineProperty(env.CAPS, "rbac", {
           value: true,

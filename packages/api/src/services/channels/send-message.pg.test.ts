@@ -228,6 +228,7 @@ beforeAll(async () => {
   process.env.NEXT_PUBLIC_EDITION = "onprem";
   process.env.SECRET_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 
+  (await import("../../edition-defaults")).ensureEditionDefaults();
   ({ db } = await import("@onecli/db"));
   send = await import("./send-message-service");
   platformTools = await import("../platform-tool-service");

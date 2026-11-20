@@ -6,8 +6,8 @@ import { cleanup, render, screen } from "@testing-library/react";
 //
 // A server component. Two things are pinned: a viewer who can't manage the
 // workspace gets nothing (the backstop behind the modal hiding the page), and
-// the three reads that only need the workspace (manage authority, the org's
-// workspace count, the plan) start together rather than one after another.
+// the two reads that only need the workspace (manage authority and the org's
+// workspace count) start together rather than one after another.
 
 const state = vi.hoisted(() => ({
   canManage: true,
@@ -66,14 +66,6 @@ vi.mock("@onecli/api/ee/services/authorization-service", () => ({
   },
 }));
 
-vi.mock("@onecli/api/ee/services/quota-service", () => ({
-  getWorkspaceQuota: async () => {
-    state.started.push("quota");
-    await barrier;
-    return { plan: "pro" };
-  },
-}));
-
 vi.mock("@dashboard/page-header", () => ({
   PageHeader: ({ title }: { title: string }) => <h1>{title}</h1>,
 }));
@@ -84,7 +76,10 @@ vi.mock("./_components/workspace-timezone-card", () => ({
   WorkspaceTimezoneCard: () => <div>timezone</div>,
 }));
 vi.mock("@/ee/workspaces/_components/workspace-access-card", () => ({
-  WorkspaceAccessCard: ({ plan }: { plan: string }) => <div>access:{plan}</div>,
+  WorkspaceAccessCard: () => <div>access</div>,
+}));
+vi.mock("@/ee/workspaces/_components/agent-defaults-card", () => ({
+  AgentDefaultsCard: () => <div>agent defaults</div>,
 }));
 vi.mock("./_components/delete-workspace-button", () => ({
   DeleteWorkspaceButton: ({
@@ -122,7 +117,7 @@ describe("WorkspaceSettingsPage", () => {
     const { ui } = await renderPage();
     expect(ui).not.toBeNull();
     expect(screen.getByRole("heading", { name: "Settings" })).toBeTruthy();
-    expect(screen.getByText("access:pro")).toBeTruthy();
+    expect(screen.getByText("access")).toBeTruthy();
     expect(screen.getByText("delete:many")).toBeTruthy();
   });
 
@@ -140,10 +135,10 @@ describe("WorkspaceSettingsPage", () => {
     expect(screen.getByText("delete:last")).toBeTruthy();
   });
 
-  it("starts the three workspace reads together, not one after another", async () => {
+  it("starts the two workspace reads together, not one after another", async () => {
     const { startedBeforeRelease } = await renderPage();
     expect([...startedBeforeRelease].sort()).toEqual(
-      ["canManage", "count", "quota"].sort(),
+      ["canManage", "count"].sort(),
     );
   });
 });

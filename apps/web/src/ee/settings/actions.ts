@@ -1,5 +1,6 @@
 "use server";
 
+import { orgHomePath, workspacePath } from "@/lib/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@onecli/db";
 import { getServerSession } from "@/lib/auth/server";
@@ -106,7 +107,7 @@ export const deleteOrganizationAction = async (): Promise<
     let redirectTo: string;
     if (nextMembership) {
       await setDefaultOrgCookie(nextMembership.organizationId);
-      redirectTo = `/org/${nextMembership.organizationId}/workspaces`;
+      redirectTo = orgHomePath(nextMembership.organizationId);
     } else {
       await clearDefaultOrgCookie();
       redirectTo = "/create-org";
@@ -159,5 +160,5 @@ export const createOrganizationAction = async (
       data: { onboardingCompletedAt: new Date() },
     });
     await setDefaultOrgCookie(organization.id);
-    return { redirectTo: `/w/${workspace.id}/overview` };
+    return { redirectTo: workspacePath(workspace.id, "overview") };
   });
