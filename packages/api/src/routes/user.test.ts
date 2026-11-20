@@ -131,7 +131,10 @@ describe("POST /v1/user/api-key/regenerate", () => {
       headers: { ...AUTH, "X-Workspace-Id": "ws-1" },
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ apiKey: "oc_rotated_value", lastUsedAt: null });
+    expect(await res.json()).toEqual({
+      apiKey: "oc_rotated_value",
+      lastUsedAt: null,
+    });
     expect(services.regenerateApiKey).toHaveBeenCalledWith("user-1", {
       workspaceId: "ws-1",
     });

@@ -468,14 +468,11 @@ describe("GET /v1/org/channels — the role gate", () => {
 
   it("admin-gates the stateless agent install — a member never spends the code", async () => {
     store.role = "member";
-    const res = await app.request(
-      "/v1/org/channels/slack/agent-install",
-      {
-        method: "POST",
-        headers: { ...ORG_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ code: "slack-code" }),
-      },
-    );
+    const res = await app.request("/v1/org/channels/slack/agent-install", {
+      method: "POST",
+      headers: { ...ORG_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ code: "slack-code" }),
+    });
     expect(res.status).toBe(403);
     expect(services.completeAgentInstallFromCode).not.toHaveBeenCalled();
   });
@@ -489,14 +486,11 @@ describe("POST /v1/org/channels/:provider/agent-install", () => {
       presenceId: "pres-1",
       awaitingTransportCredential: false,
     });
-    const res = await app.request(
-      "/v1/org/channels/slack/agent-install",
-      {
-        method: "POST",
-        headers: { ...ORG_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ code: "slack-code" }),
-      },
-    );
+    const res = await app.request("/v1/org/channels/slack/agent-install", {
+      method: "POST",
+      headers: { ...ORG_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ code: "slack-code" }),
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       agent: {
@@ -522,14 +516,11 @@ describe("POST /v1/org/channels/:provider/agent-install", () => {
       presenceId: "pres-1",
       awaitingTransportCredential: true,
     });
-    const res = await app.request(
-      "/v1/org/channels/slack/agent-install",
-      {
-        method: "POST",
-        headers: { ...ORG_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ code: "slack-code" }),
-      },
-    );
+    const res = await app.request("/v1/org/channels/slack/agent-install", {
+      method: "POST",
+      headers: { ...ORG_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ code: "slack-code" }),
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
       agent: { id: "agent-1", awaitingTransportCredential: true },
@@ -545,14 +536,11 @@ describe("POST /v1/org/channels/:provider/agent-install", () => {
 
   it("answers agent: null (no audit) when no waiting app claims the code", async () => {
     services.completeAgentInstallFromCode.mockResolvedValueOnce(null);
-    const res = await app.request(
-      "/v1/org/channels/slack/agent-install",
-      {
-        method: "POST",
-        headers: { ...ORG_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ code: "slack-code" }),
-      },
-    );
+    const res = await app.request("/v1/org/channels/slack/agent-install", {
+      method: "POST",
+      headers: { ...ORG_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ code: "slack-code" }),
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       agent: null,
@@ -562,14 +550,11 @@ describe("POST /v1/org/channels/:provider/agent-install", () => {
   });
 
   it("rejects a missing code with 422", async () => {
-    const res = await app.request(
-      "/v1/org/channels/slack/agent-install",
-      {
-        method: "POST",
-        headers: { ...ORG_HEADERS, "content-type": "application/json" },
-        body: "{}",
-      },
-    );
+    const res = await app.request("/v1/org/channels/slack/agent-install", {
+      method: "POST",
+      headers: { ...ORG_HEADERS, "content-type": "application/json" },
+      body: "{}",
+    });
     expect(res.status).toBe(422);
     expect(services.completeAgentInstallFromCode).not.toHaveBeenCalled();
   });
@@ -879,10 +864,9 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
       mimeType: "video/webm",
       bytes: Buffer.from("webm-bytes"),
     });
-    const res = await app.request(
-      "/v1/channel-adapter/attachments/att-1",
-      { headers: CHA_AUTH },
-    );
+    const res = await app.request("/v1/channel-adapter/attachments/att-1", {
+      headers: CHA_AUTH,
+    });
     expect(res.status).toBe(200);
     // Bytes only. The type is deliberately NOT the stored one: this is a
     // relay, and the adapter already holds the metadata from the work item.
@@ -897,18 +881,15 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
     );
 
     services.getAttachmentBytesForAdapter.mockResolvedValueOnce(null);
-    const miss = await app.request(
-      "/v1/channel-adapter/attachments/att-2",
-      { headers: CHA_AUTH },
-    );
+    const miss = await app.request("/v1/channel-adapter/attachments/att-2", {
+      headers: CHA_AUTH,
+    });
     expect(miss.status).toBe(404);
     expect(await miss.json()).toEqual({ error: "Not found" });
   });
 
   it("the byte pull is adapter-only: no bearer → 401, nothing read", async () => {
-    const res = await app.request(
-      "/v1/channel-adapter/attachments/att-1",
-    );
+    const res = await app.request("/v1/channel-adapter/attachments/att-1");
     expect(res.status).toBe(401);
     expect(services.getAttachmentBytesForAdapter).not.toHaveBeenCalled();
   });
@@ -1061,14 +1042,11 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
         agentId: "someone-else",
       },
     ]) {
-      const res = await app.request(
-        "/v1/channel-adapter/group-decision",
-        {
-          method: "POST",
-          headers: { ...CHA_AUTH, "content-type": "application/json" },
-          body: JSON.stringify(body),
-        },
-      );
+      const res = await app.request("/v1/channel-adapter/group-decision", {
+        method: "POST",
+        headers: { ...CHA_AUTH, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
       expect(res.status).toBe(422);
     }
     expect(services.decideApprovalsFromChannel).not.toHaveBeenCalled();
@@ -1218,10 +1196,10 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
         releaseSync = () => resolve({ synced: 0, deferred: 0 });
       }),
     );
-    const res = await app.request(
-      "/v1/channel-adapter/rotate-integrations",
-      { method: "POST", headers: CHA_AUTH },
-    );
+    const res = await app.request("/v1/channel-adapter/rotate-integrations", {
+      method: "POST",
+      headers: CHA_AUTH,
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ rotated: 2, failed: 1 });
     expect(services.rotateStaleIntegrations).toHaveBeenCalledTimes(1);
@@ -1238,10 +1216,10 @@ describe("the adapter wire (authenticated by a registered cha_ token)", () => {
     });
     services.processChannelCleanups.mockRejectedValue(new Error("db down"));
     services.syncPresenceEvents.mockRejectedValue(new Error("db down"));
-    const res = await app.request(
-      "/v1/channel-adapter/rotate-integrations",
-      { method: "POST", headers: CHA_AUTH },
-    );
+    const res = await app.request("/v1/channel-adapter/rotate-integrations", {
+      method: "POST",
+      headers: CHA_AUTH,
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ rotated: 0, failed: 0 });
   });
@@ -1535,10 +1513,10 @@ describe("/v1/agents/:agentId/channels", () => {
 
   it("syncs the app icon for the caller's workspace, auditing only a copy", async () => {
     services.syncPresenceIcon.mockResolvedValueOnce({ changed: true });
-    const res = await app.request(
-      "/v1/agents/ag-1/channels/slack/icon/sync",
-      { method: "POST", headers: WORKSPACE_HEADERS },
-    );
+    const res = await app.request("/v1/agents/ag-1/channels/slack/icon/sync", {
+      method: "POST",
+      headers: WORKSPACE_HEADERS,
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ changed: true });
     expect(services.syncPresenceIcon).toHaveBeenCalledWith({
@@ -1572,10 +1550,10 @@ describe("/v1/agents/:agentId/channels", () => {
   });
 
   it("404s an icon sync for an unknown provider before any service call", async () => {
-    const res = await app.request(
-      "/v1/agents/ag-1/channels/teams/icon/sync",
-      { method: "POST", headers: WORKSPACE_HEADERS },
-    );
+    const res = await app.request("/v1/agents/ag-1/channels/teams/icon/sync", {
+      method: "POST",
+      headers: WORKSPACE_HEADERS,
+    });
     expect(res.status).toBe(404);
     expect(services.syncPresenceIcon).not.toHaveBeenCalled();
   });
@@ -1598,15 +1576,12 @@ describe("/v1/agents/:agentId/channels", () => {
   });
 
   it("rejects a malformed complete body with 422", async () => {
-    const res = await app.request(
-      "/v1/agents/ag-1/channels/slack/complete",
-      {
-        method: "POST",
-        headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
-        // Unknown keys are refused (the schema is strict).
-        body: JSON.stringify({ appToken: "xapp-x", userToken: "xoxp-x" }),
-      },
-    );
+    const res = await app.request("/v1/agents/ag-1/channels/slack/complete", {
+      method: "POST",
+      headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
+      // Unknown keys are refused (the schema is strict).
+      body: JSON.stringify({ appToken: "xapp-x", userToken: "xoxp-x" }),
+    });
     expect(res.status).toBe(422);
     expect(services.completePresence).not.toHaveBeenCalled();
   });
@@ -1621,14 +1596,11 @@ describe("/v1/agents/:agentId/channels", () => {
       status: "active",
       transport: "socket",
     });
-    const res = await app.request(
-      "/v1/agents/ag-1/channels/slack/complete",
-      {
-        method: "POST",
-        headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ appToken: "xapp-only" }),
-      },
-    );
+    const res = await app.request("/v1/agents/ag-1/channels/slack/complete", {
+      method: "POST",
+      headers: { ...WORKSPACE_HEADERS, "content-type": "application/json" },
+      body: JSON.stringify({ appToken: "xapp-only" }),
+    });
     expect(res.status).toBe(200);
     expect(services.completePresence).toHaveBeenCalledWith(
       expect.anything(),

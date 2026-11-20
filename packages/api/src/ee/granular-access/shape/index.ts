@@ -75,7 +75,10 @@ export const validatePolicyShape = async (
   policy: Record<string, unknown>,
 ): Promise<void> => {
   if (provider === "google-drive" || "driveFolders" in policy) {
-    throw new ServiceError("BAD_REQUEST", "Drive folder scopes are unavailable.");
+    throw new ServiceError(
+      "BAD_REQUEST",
+      "Drive folder scopes are unavailable.",
+    );
   }
 
   switch (provider) {

@@ -200,7 +200,7 @@ what ends that). If your `.env` still sets `NEXTAUTH_SECRET`, rename it to
 | `GATEWAY_ALLOW_PRIVATE_DESTINATIONS`   | Internal destinations agents may reach through the gateway (CIDRs, IPs, hostnames, `*.suffix`). Private, loopback and link-local addresses are refused unless listed; cloud-metadata addresses open only by exact IP | — (all internal refused)      |
 | `GOOGLE_CLIENT_ID`                     | Optional — adds a Google sign-in button                                                                                                                                                                              | —                             |
 | `GOOGLE_CLIENT_SECRET`                 | Optional — Google OAuth client secret                                                                                                                                                                                | —                             |
-| `ONECLI_REGISTRATION`                  | `open` or `invite` — who may create a new account         | `invite`                      |
+| `ONECLI_REGISTRATION`                  | `open` or `invite` — who may create a new account                                                                                                                                                                    | `invite`                      |
 
 Every required value is generated for you — by `pnpm dev` into `.env` for
 development, by `pnpm run setup` into `docker/.env` for a self-host stack,

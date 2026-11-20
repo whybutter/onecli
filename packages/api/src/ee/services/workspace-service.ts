@@ -419,7 +419,9 @@ export const updateOrgWorkspace = async (
       data,
       select: workspaceSelect,
     });
-  const workspace = data.slug ? await withSlugConflict(data.slug, write) : await write();
+  const workspace = data.slug
+    ? await withSlugConflict(data.slug, write)
+    : await write();
   if (timezoneChanged) await requestWorkspaceSandboxRespawn(targetId);
   return workspace;
 };

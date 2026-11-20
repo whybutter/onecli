@@ -174,14 +174,22 @@ describe("edition resolution at the real seams", () => {
   });
 
   it("self-host: the workspace-access checker rides the override arm", async () => {
-    const { providers, authz } = await loadWith({ edition: "onprem", ensure: true });
-    expect(providers.getWorkspaceAccessChecker()).toBe(authz.eeWorkspaceAccessChecker);
+    const { providers, authz } = await loadWith({
+      edition: "onprem",
+      ensure: true,
+    });
+    expect(providers.getWorkspaceAccessChecker()).toBe(
+      authz.eeWorkspaceAccessChecker,
+    );
   });
 
-  it.each(["cloud", "onprem"] as const)("%s: boots with the desktop provider disabled", async (edition) => {
-    const { agentDesktop } = await loadWith({ edition, ensure: true });
-    expect(agentDesktop.getAgentDesktop()).toBeNull();
-  });
+  it.each(["cloud", "onprem"] as const)(
+    "%s: boots with the desktop provider disabled",
+    async (edition) => {
+      const { agentDesktop } = await loadWith({ edition, ensure: true });
+      expect(agentDesktop.getAgentDesktop()).toBeNull();
+    },
+  );
 
   it("tests/hosts can still override, and null-reset returns to the edition default", async () => {
     const { providers, eeGate } = await loadWith({
@@ -200,14 +208,19 @@ describe("edition resolution at the real seams", () => {
 });
 
 describe("attachment blob store selection", () => {
-  it.each(["cloud", "onprem"] as const)("%s: stores attachment bytes in Postgres", async (edition) => {
-    const { attachmentStore, pg } = await loadWith({
-      edition,
-      bucket: "unused-bucket",
-      ensure: true,
-    });
-    expect(attachmentStore.getAttachmentStore()).toBe(pg.pgAttachmentBlobStore);
-  });
+  it.each(["cloud", "onprem"] as const)(
+    "%s: stores attachment bytes in Postgres",
+    async (edition) => {
+      const { attachmentStore, pg } = await loadWith({
+        edition,
+        bucket: "unused-bucket",
+        ensure: true,
+      });
+      expect(attachmentStore.getAttachmentStore()).toBe(
+        pg.pgAttachmentBlobStore,
+      );
+    },
+  );
 });
 
 /**
