@@ -23,6 +23,7 @@ crypto = { path = "../crypto" }
 db = { path = "../db" }
 ee = { path = "../ee/ee" }
 relay = { path = "../relay" }
+proxy = { path = "../proxy" }
 server = { path = "../server" }
 shutdown = { path = "../shutdown" }
 telemetry = { path = "../telemetry" }

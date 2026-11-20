@@ -95,12 +95,23 @@ export const agentDefaultsRoutes = () => {
         parsed.error.issues[0]?.message ?? "Invalid default body",
       );
     }
+    const input = parsed.data;
+    if (
+      input.access === "default" ||
+      (input.access === "custom" &&
+        (input.otherReads !== undefined || input.otherWrites !== undefined))
+    ) {
+      throw new ServiceError(
+        "UNPROCESSABLE",
+        "Workspace defaults accept full access or a custom list of tools.",
+      );
+    }
     await withAudit(
       () =>
         setWorkspaceAgentDefault(
           scopeOf(authCtx, workspaceId),
           connectionId,
-          parsed.data,
+          input,
           authCtx.userId,
         ),
       () => ({

@@ -22,8 +22,8 @@
     {
       "item": "v2.20.0 adoption on the fork v2 branch",
       "review": "reviews/2026-11-19-v2.20.0.md",
-      "status": "Review complete. Adoption and verification pending.",
-      "blocker": "Reconcile gateway, API/schema, web and deployment changes. Keep new transports disabled pending a scope decision."
+      "status": "Integrated on sync/upstream-v2.20.0 for review against v2.",
+      "blocker": "Landing on v2 awaits integration checks and review. Browser tunneling and native PostgreSQL proxying are deferred."
     }
   ],
   "reviews": [

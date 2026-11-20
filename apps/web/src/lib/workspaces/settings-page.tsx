@@ -14,11 +14,10 @@ export const metadata: Metadata = {
 };
 
 interface Props {
-  params: Promise<{ workspaceId: string }>;
+  workspaceId: string;
 }
 
-export default async function WorkspaceSettingsPage({ params }: Props) {
-  const { workspaceId } = await params;
+export default async function WorkspaceSettingsPage({ workspaceId }: Props) {
   const session = await getServerSession();
   if (!session) redirect("/auth/login");
 

@@ -13,7 +13,7 @@
 # ──────────────────────────────────────────────
 # Stage 1: Prepare Node.js base
 # ──────────────────────────────────────────────
-FROM node:22.23.2-alpine3.24 AS base
+FROM node:22.23.4-alpine3.24 AS base
 RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 WORKDIR /app
 
@@ -55,7 +55,7 @@ RUN echo "node-linker=hoisted" >> .npmrc \
 # ──────────────────────────────────────────────
 # Stage 6: Production runner
 # ──────────────────────────────────────────────
-FROM node:22.23.2-alpine3.24 AS runner
+FROM node:22.23.4-alpine3.24 AS runner
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 WORKDIR /app
 

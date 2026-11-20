@@ -64,6 +64,7 @@ const validateDropboxShape = (policy: Record<string, unknown>) => {
  *   (`metadata.repos`).
  * - `dropbox`: `{ folders: string[] }` — absent/empty is accepted; at most
  *   100 entries, each an absolute path of at most 1024 characters.
+ * - Google Drive folder scopes are unavailable in this gateway build.
  * - any other provider: accepted as-is (no granular configuration exists).
  *
  * Deliberately db-free: the caller passes the connection's metadata.
@@ -73,6 +74,10 @@ export const validatePolicyShape = async (
   metadata: Record<string, unknown> | null,
   policy: Record<string, unknown>,
 ): Promise<void> => {
+  if (provider === "google-drive" || "driveFolders" in policy) {
+    throw new ServiceError("BAD_REQUEST", "Drive folder scopes are unavailable.");
+  }
+
   switch (provider) {
     case "github-app":
       validateGithubAppShape(metadata, policy);

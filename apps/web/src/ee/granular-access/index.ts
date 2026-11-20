@@ -4,7 +4,6 @@ import type { GranularAccessConfig } from "@/lib/granular-access/types";
 
 export type {
   GranularAccessConfig,
-  GranularAccessItem,
   PolicyDialogContentProps,
 } from "@/lib/granular-access/types";
 

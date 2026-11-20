@@ -1,19 +1,29 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import * as usageApi from "@/lib/api/usage";
+import { usage } from "@/lib/api";
 import { queryKeys } from "@/lib/api/keys";
+import type { UsageWindowQuery } from "@/lib/api/usage";
 
-/**
- * Recorded gateway request volume for the org (`GET /v1/org/usage`) —
- * member-visible with per-workspace fencing server-side. A member with no
- * workspace bindings gets a zeroed summary, not a 403, so `retry: false`
- * exists only to avoid retrying a real refusal (a workspace-scoped
- * credential, which the web app's cookie session never presents).
- */
-export const useUsage = () =>
+/** How often a running agent's awake time is refreshed while shown. */
+const RUNNING_POLL_MS = 60_000;
+
+/** One agent's awake time over a window (default: all time). Polls once a
+ * minute while the agent is up, since the number is still growing. */
+export const useAgentRuntimeUsage = (
+  agentId: string,
+  window: UsageWindowQuery = {},
+) =>
   useQuery({
-    queryKey: queryKeys.usage.summary(),
-    queryFn: usageApi.get,
-    retry: false,
+    queryKey: queryKeys.usage.agent(agentId, window),
+    queryFn: () => usage.agent(agentId, window),
+    refetchInterval: (query) =>
+      query.state.data?.running ? RUNNING_POLL_MS : false,
+  });
+
+/** The org's awake time per agent over a window (default: all time). */
+export const useOrgRuntimeUsage = (window: UsageWindowQuery = {}) =>
+  useQuery({
+    queryKey: queryKeys.usage.org(window),
+    queryFn: () => usage.org(window),
   });

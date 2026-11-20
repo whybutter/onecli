@@ -11,6 +11,7 @@ import {
   AUDIT_SERVICES,
   AUDIT_SOURCE,
 } from "../services/audit-service";
+import { userIsOrgAdmin } from "../services/workspace-access-check";
 
 // The current organization, resolved from the membership-fenced auth context —
 // never from input, so cross-org reads are impossible by construction.
@@ -29,8 +30,8 @@ export const orgRoutes = () => {
   const app = new Hono<ApiEnv>();
 
   // GET /v1/org — the org object plus its creation-world posture. `byoLegacy`
-  // is the manually-operated per-org switch (sandbox-platform §3.10 as
-  // re-decided 2026-08-23): on cloud, false = hosted-first creation, true =
+  // is the manually-operated per-org switch: on cloud, false = hosted-first
+  // creation, true =
   // BYO-only creation. `byoEnabled` (mixed world, 2026-08-29) is only read
   // when `byoLegacy` is false: it additionally allows BYO creation beside the
   // hosted default. Both inert on self-host — the web ignores them there.
@@ -109,6 +110,15 @@ export const orgRoutes = () => {
       return c.json(organization);
     },
   );
+  // GET /v1/org/membership: the caller's standing in the current org, for
+  // UI that only org admins can act on (sharing a connection with the org).
+  // Display only: every admin action re-checks on its own route.
+  app.get("/membership", member, async (c) => {
+    const authCtx = c.get("auth");
+    return c.json({
+      isAdmin: await userIsOrgAdmin(authCtx.userId, authCtx.organizationId),
+    });
+  });
 
   return app;
 };

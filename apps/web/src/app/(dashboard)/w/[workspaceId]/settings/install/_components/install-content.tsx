@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { withWorkspacePrefix } from "@/lib/navigation";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PageHeader } from "@dashboard/page-header";
 import { TryDemoCommand } from "@/app/(dashboard)/_components/try-demo-command";
@@ -149,6 +151,15 @@ export const InstallContent = () => {
                 {keyRevealed ? "Hide API key" : "Reveal API key"}
               </button>
             )}
+            <p className="text-muted-foreground mt-2 text-xs">
+              The command signs in with your personal API key.{" "}
+              <Link
+                href={withWorkspacePrefix(pathname, "/settings/api-key")}
+                className="text-foreground underline underline-offset-2"
+              >
+                Manage key
+              </Link>
+            </p>
             {installCommand && pinIdentifier && (
               <p className="text-muted-foreground mt-2 text-xs">
                 Already have the CLI?{" "}

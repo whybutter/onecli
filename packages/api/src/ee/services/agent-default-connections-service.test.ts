@@ -271,7 +271,14 @@ describe("setWorkspaceAgentDefault — the config surface", () => {
     await setWorkspaceAgentDefault(
       SCOPE,
       "conn-workspace",
-      { access: "custom", allow: ["t-read"], ask: [], resources: null },
+      {
+        access: "custom",
+        allow: ["t-read"],
+        ask: [],
+        otherReads: "never",
+        otherWrites: "never",
+        resources: null,
+      },
       "u1",
     );
     expect(store.defaults).toHaveLength(1);
@@ -335,7 +342,14 @@ describe("applyWorkspaceAgentDefaults — the create-time apply step", () => {
       SCOPE,
       "new-agent",
       "conn-org",
-      { access: "custom", allow: ["t-read"], ask: [], resources: null },
+      {
+        access: "custom",
+        allow: ["t-read"],
+        ask: [],
+        otherReads: "never",
+        otherWrites: "never",
+        resources: null,
+      },
       null,
     );
   });

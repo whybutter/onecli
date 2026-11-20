@@ -12,7 +12,11 @@ import {
   findUserDefaultWorkspace,
   slugify,
 } from "../../services/organization-service";
-import { teardownWorkspacePresences } from "../../services/channels/agent-channel-service";
+import {
+  enqueueWorkspaceCleanup,
+  processChannelCleanups,
+} from "../../services/channels/channel-cleanup-service";
+import { requestWorkspaceSandboxRespawn } from "../../services/sandbox-service";
 import {
   DISPLAY_NAME_MIN_LEN,
   validateDisplayName,
@@ -54,6 +58,7 @@ const workspaceSelect = {
   name: true,
   slug: true,
   createdAt: true,
+  timezone: true,
 } satisfies Prisma.WorkspaceSelect;
 
 const NOT_FOUND = () => new ServiceError("NOT_FOUND", "Workspace not found");
@@ -378,34 +383,45 @@ export const createOrgWorkspace = async (
   return { ...workspace, apiKey: apiKeys[0]?.key ?? null };
 };
 
-/** `PATCH /workspaces/:id`: rename; the slug follows the name. */
+/** Update workspace name and timezone, and respawn live sandboxes when the timezone changes. */
 export const updateOrgWorkspace = async (
   organizationId: string,
   targetId: string,
-  input: { name?: string },
+  input: { name?: string; timezone?: string | null },
 ) => {
   const current = await db.workspace.findFirst({
     where: { id: targetId, organizationId },
     select: workspaceSelect,
   });
   if (!current) throw NOT_FOUND();
-  if (input.name === undefined) return current;
 
-  const name = input.name.trim();
-  const slug = slugify(name) || "workspace";
-  const conflict = await db.workspace.findFirst({
-    where: { organizationId, slug, NOT: { id: targetId } },
-    select: { id: true },
-  });
-  if (conflict) throw slugConflict(slug);
+  const timezoneChanged =
+    input.timezone !== undefined && input.timezone !== current.timezone;
+  if (input.name === undefined && !timezoneChanged) return current;
 
-  return withSlugConflict(slug, () =>
+  const data: { name?: string; slug?: string; timezone?: string | null } = {};
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    const slug = slugify(name) || "workspace";
+    const conflict = await db.workspace.findFirst({
+      where: { organizationId, slug, NOT: { id: targetId } },
+      select: { id: true },
+    });
+    if (conflict) throw slugConflict(slug);
+    data.name = name;
+    data.slug = slug;
+  }
+  if (timezoneChanged) data.timezone = input.timezone;
+
+  const write = () =>
     db.workspace.update({
       where: { id: targetId },
-      data: { name, slug },
+      data,
       select: workspaceSelect,
-    }),
-  );
+    });
+  const workspace = data.slug ? await withSlugConflict(data.slug, write) : await write();
+  if (timezoneChanged) await requestWorkspaceSandboxRespawn(targetId);
+  return workspace;
 };
 
 /**
@@ -437,7 +453,7 @@ export const deleteOrgWorkspace = async (
 /**
  * The hand-written workspace cascade, inside the caller's transaction.
  * Children whose foreign keys are Restrict (agents, vault connections,
- * onboarding surveys, workspace-tier skills) are deleted explicitly, in
+ * onboarding surveys) are deleted explicitly, in
  * dependency order; agent-tier rows cascade from their agent, policy rules
  * and access bindings cascade from the workspace row. Request logs carry no
  * foreign key and are swept by workspace id.
@@ -445,9 +461,9 @@ export const deleteOrgWorkspace = async (
 export const deleteWorkspaceContent = async (
   workspaceId: string,
   tx: Prisma.TransactionClient,
-): Promise<void> => {
+): Promise<{ cleanupIds: string[] }> => {
+  const cleanupIds = await enqueueWorkspaceCleanup(tx, workspaceId);
   await tx.requestLog.deleteMany({ where: { workspaceId } });
-  await tx.skill.deleteMany({ where: { workspaceId } });
   await tx.agent.deleteMany({ where: { workspaceId } });
   await tx.appConnection.deleteMany({ where: { workspaceId } });
   await tx.secret.deleteMany({ where: { workspaceId } });
@@ -457,35 +473,22 @@ export const deleteWorkspaceContent = async (
   await tx.auditLog.deleteMany({ where: { workspaceId } });
   await tx.apiKey.deleteMany({ where: { workspaceId } });
   await tx.workspace.delete({ where: { id: workspaceId } });
+  return { cleanupIds };
 };
 
-/**
- * Delete a workspace and everything in it.
- *
- * 1. Best-effort provider-side teardown of channel presences, OUTSIDE the
- *    transaction (network calls never belong inside one).
- * 2. One transaction: capture the workspace's API keys, then the cascade.
- * 3. After the commit, flush the gateway cache for exactly those keys — an
- *    org-wide flush could no longer find them.
- */
+/** Remove workspace rows and enqueue durable provider cleanup in the same transaction. */
 export const deleteWorkspace = async (workspaceId: string): Promise<void> => {
-  try {
-    await teardownWorkspacePresences(workspaceId);
-  } catch (err) {
-    log.warn(
-      { err, workspaceId },
-      "channel presence teardown failed during workspace deletion; continuing",
-    );
-  }
-
-  const keys = await db.$transaction(async (tx) => {
+  const { keys, cleanupIds } = await db.$transaction(async (tx) => {
     const apiKeys = await tx.apiKey.findMany({
       where: { workspaceId },
       select: { key: true },
     });
-    await deleteWorkspaceContent(workspaceId, tx);
-    return apiKeys.map((row) => row.key);
+    const { cleanupIds } = await deleteWorkspaceContent(workspaceId, tx);
+    return { keys: apiKeys.map((row) => row.key), cleanupIds };
   });
 
   invalidateGatewayCacheForKeys(keys);
+  await processChannelCleanups({ ids: cleanupIds }).catch((err: unknown) => {
+    log.warn({ err, workspaceId }, "workspace channel cleanup will be retried");
+  });
 };

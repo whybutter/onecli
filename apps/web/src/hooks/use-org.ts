@@ -58,3 +58,16 @@ export const useUpdateOrg = () => {
     onError: (err) => toast.error(err.message),
   });
 };
+
+/**
+ * Whether the caller is an org admin (`GET /v1/org/membership`), for UI only
+ * admins can act on. Every edition: without roles every member is an admin.
+ * A missing `data` means "not known yet": hide admin UI until it resolves.
+ */
+export const useOrgMembership = (enabled = true) =>
+  useQuery({
+    queryKey: queryKeys.org.membership(),
+    queryFn: org.membership,
+    enabled,
+    staleTime: 5 * 60_000,
+  });
