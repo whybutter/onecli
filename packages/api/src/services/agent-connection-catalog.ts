@@ -123,7 +123,7 @@ export const catalogFactsFor = (
   "apiHosts" | "endpoints" | "docsUrl" | "specUrl"
 > => {
   const app = getApp(provider);
-  const http = !app?.database;
+  const http = app !== undefined && !app.database;
   return {
     apiHosts: http ? fixedApiHosts(provider) : [],
     endpoints: http ? endpointSamples(provider) : [],

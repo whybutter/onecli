@@ -274,8 +274,9 @@ vi.mock("@onecli/db", () => {
               m.userId === where.userId,
           ) ?? null,
       },
-      $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
-        fn({ groupMember: groupMemberModel }),
+      async $transaction(fn: (tx: unknown) => Promise<unknown>) {
+        return fn(this);
+      },
     },
   };
 });
