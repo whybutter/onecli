@@ -149,7 +149,7 @@ with the `/gw` path written as `/gw(/|$)(.*)`, which the chart emits when
 
 ### 5. Hosted agents
 
-With `runner.enabled` (the default) the runner registers itself with the
+With `runner.enabled=true` the runner registers itself with the
 api on boot. Each agent gets a Job, a PVC home (`sandboxes.home.size`,
 20Gi by default) and a Secret in the `onecli-sandboxes` namespace. The
 fence:
@@ -359,27 +359,27 @@ sure.
 Every value is documented in place in [`values.yaml`](values.yaml). The ones
 most installs touch:
 
-| Value                              | Default            | What it does                                        |
-| ---------------------------------- | ------------------ | --------------------------------------------------- |
-| `externalUrl`                      | (required)         | The URL people open OneCLI at                       |
-| `secrets.existingSecret`           | `""`               | Your Secret with the application secrets            |
-| `secrets.generate.enabled`         | `false`            | Mint them with a Job instead (evaluation)           |
-| `database.enabled`                 | `true`             | Bundled PostgreSQL (evaluation only)                |
-| `database.external.existingSecret` | `""`               | Your Secret with `DATABASE_URL` (production)        |
-| `image.tag`                        | chart `appVersion` | Pin a OneCLI version                                |
-| `httpRoute.enabled` / `parentRefs` | `false` / `[]`     | Gateway API route for `externalUrl`                 |
-| `ingress.enabled` / `className`    | `false` / `""`     | Ingress for `externalUrl`                           |
-| `runner.enabled`                   | `true`             | Hosted agents                                       |
-| `runner.maxSandboxes`              | `10`               | Concurrent sandboxes                                |
-| `sandboxes.home.size`              | `20Gi`             | Per-agent persistent home                           |
-| `sandboxes.memoryMb` / `cpus`      | `2048` / `2`       | Per-sandbox ceiling                                 |
-| `sandboxes.nodeSelector`           | `{}`               | Dedicated sandbox nodes                             |
-| `gateway.allowPrivateDestinations` | `""`               | Internal hosts agents may reach through the gateway |
-| `channelAdapter.enabled`           | `false`            | Slack: agents answer in Slack                       |
-| `slackSharedApp.existingSecret`    | `""`               | Your own shared Slack app (team onboarding)         |
-| `registration` | `invite` | Set to `open` to allow public registration |
-| `image.repository` | `ghcr.io/whybutter/onecli` | Fork-built service images |
-| `image.upstreamRepository` | `ghcr.io/onecli/onecli` | Upstream runtime images |
+| Value                              | Default                    | What it does                                        |
+| ---------------------------------- | -------------------------- | --------------------------------------------------- |
+| `externalUrl`                      | (required)                 | The URL people open OneCLI at                       |
+| `secrets.existingSecret`           | `""`                       | Your Secret with the application secrets            |
+| `secrets.generate.enabled`         | `false`                    | Mint them with a Job instead (evaluation)           |
+| `database.enabled`                 | `true`                     | Bundled PostgreSQL (evaluation only)                |
+| `database.external.existingSecret` | `""`                       | Your Secret with `DATABASE_URL` (production)        |
+| `image.tag`                        | chart `appVersion`         | Pin a OneCLI version                                |
+| `httpRoute.enabled` / `parentRefs` | `false` / `[]`             | Gateway API route for `externalUrl`                 |
+| `ingress.enabled` / `className`    | `false` / `""`             | Ingress for `externalUrl`                           |
+| `runner.enabled`                   | `false`                    | Hosted agents                                       |
+| `runner.maxSandboxes`              | `10`                       | Concurrent sandboxes                                |
+| `sandboxes.home.size`              | `20Gi`                     | Per-agent persistent home                           |
+| `sandboxes.memoryMb` / `cpus`      | `2048` / `2`               | Per-sandbox ceiling                                 |
+| `sandboxes.nodeSelector`           | `{}`                       | Dedicated sandbox nodes                             |
+| `gateway.allowPrivateDestinations` | `""`                       | Internal hosts agents may reach through the gateway |
+| `channelAdapter.enabled`           | `false`                    | Slack: agents answer in Slack                       |
+| `slackSharedApp.existingSecret`    | `""`                       | Your own shared Slack app (team onboarding)         |
+| `registration`                     | `invite`                   | Set to `open` to allow public registration          |
+| `image.repository`                 | `ghcr.io/whybutter/onecli` | Fork-built service images                           |
+| `image.upstreamRepository`         | `ghcr.io/onecli/onecli`    | Upstream runtime images                             |
 
 ## What the chart does not do
 

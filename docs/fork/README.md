@@ -4,16 +4,7 @@ This is the index of everything this fork adds or changes on top of upstream One
 a maintainer who knows OneCLI, but has not read the migration plans, can scan two minutes of tables
 and then drill into exactly the code, config, tests and history for any change.
 
-This fork is an independent, Apache-2.0-licensed fork of OneCLI v2, rebased onto upstream v2.6.0.
-The three directories upstream ships as enterprise-licensed code — `apps/gateway/crates/ee/ee/`,
-`packages/api/src/ee/`, `apps/web/src/ee/` — are clean-room rewrites owned entirely by this fork,
-at the same paths and export names so the free code around them needed no changes. There is no
-license flag anywhere in the tree: `entitled()` (gateway,
-[`apps/gateway/crates/common/src/edition.rs`](../../apps/gateway/crates/common/src/edition.rs)) and
-`isEntitled()` (API, [`packages/api/src/lib/entitlements.ts`](../../packages/api/src/lib/entitlements.ts))
-both always return `true`, so every feature upstream gates behind a license is simply on, always.
-`EDITION`/`NEXT_PUBLIC_EDITION` (`cloud` vs `onprem`) is a separate, still-live axis — entitlement
-and edition are independent.
+This branch integrates OneCLI v2.20.0. The fork supplies its own gateway, API and web enterprise implementations. The sandbox supervisor uses its free desktop startup path. The fork's supported access controls are active in the on-prem edition. The integration review records deferred transports and follow-up work for features introduced upstream. [v2.20.0 integration review](../upstream-sync/reviews/2026-11-19-v2.20.0.md)
 
 Nanoclaw is this fork's agent runtime: BYO agents are the primary create-agent door in the
 dashboard regardless of whether upstream's hosted-agent runner is registered, and that runner stays

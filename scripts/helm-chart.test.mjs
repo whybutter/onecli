@@ -728,6 +728,8 @@ test(
       "secrets.existingSecret=s",
       "--set",
       "channelAdapter.enabled=true",
+      "--set",
+      "runner.enabled=true",
     ]);
     assert.match(
       doc(byo, "Deployment", "onecli-runner"),
@@ -738,6 +740,8 @@ test(
       "secrets.generate.enabled=true",
       "--set",
       "channelAdapter.enabled=true",
+      "--set",
+      "runner.enabled=true",
     ]);
     for (const [deploy, key] of [
       ["onecli-runner", "RUNNER_SESSION_KEY"],

@@ -153,9 +153,8 @@ gateway:
   extraEnv: []
 
 runner:
-  # -- The hosted-agents runner. `false` leaves the stack without hosted
-  # agents (bring-your-own agents still work through the gateway).
-  enabled: true
+  # -- Enable the upstream runtime to host agents alongside BYO agents.
+  enabled: false
   # -- Name the runner registers under. Shown in the dashboard.
   name: kubernetes
   # -- How many sandboxes may run at once on this runner.
