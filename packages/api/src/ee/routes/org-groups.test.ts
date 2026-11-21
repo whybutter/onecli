@@ -37,6 +37,11 @@ const store = vi.hoisted(() => ({
 const memberCount = (groupId: string) =>
   store.groupMembers.filter((m) => m.groupId === groupId).length;
 
+vi.mock("../../services/policy-service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/policy-service")>()),
+  dropPrincipalFromPolicyInTx: async () => [],
+}));
+
 vi.mock("@onecli/db", () => {
   const db = {
     apiKey: {

@@ -147,6 +147,7 @@ mod tests {
         insert_budget(&pool, &org_id, &secret_id, 500, "monthly").await;
 
         let secrets = vec![db::SecretRow {
+            name: "Test credential".to_owned(),
             id: secret_id.clone(),
             scope: "organization".to_string(),
             type_: "anthropic".to_string(),
@@ -184,6 +185,7 @@ mod tests {
         insert_budget(&pool, &org_id, &secret_id, 1_000, "total").await;
 
         let secrets = vec![db::SecretRow {
+            name: "Test credential".to_owned(),
             id: secret_id.clone(),
             scope: "workspace".to_string(),
             type_: "anthropic".to_string(),
@@ -233,6 +235,7 @@ mod tests {
         insert_budget(&pool, &org_id, &workspace_secret_id, 1_000, "monthly").await;
 
         let secret_row = |id: &str, scope: &str| db::SecretRow {
+            name: "Test credential".to_owned(),
             id: id.to_string(),
             scope: scope.to_string(),
             type_: "anthropic".to_string(),
@@ -274,6 +277,7 @@ mod tests {
         insert_budget(&pool, &org_id, &secret_id, 0, "monthly").await;
 
         let secrets = vec![db::SecretRow {
+            name: "Test credential".to_owned(),
             id: secret_id.clone(),
             scope: "organization".to_string(),
             type_: "anthropic".to_string(),

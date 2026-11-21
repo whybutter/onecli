@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@onecli/ui/components/table";
-import type { UsageAgentRow } from "@/lib/api/usage";
+import type { UsageAgentRow } from "@/lib/api/gateway-usage";
 import { formatCount, shareOfTotal } from "./format";
 
 export interface UsageTableProps {

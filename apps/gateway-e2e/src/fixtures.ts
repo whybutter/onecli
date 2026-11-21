@@ -1,4 +1,6 @@
 import { cryptoService } from "@onecli/api/lib/crypto";
+import { compileConnectionStack } from "@onecli/api/services/grants-compile";
+import type { ConnectionGrantInput } from "@onecli/api/validations/grants";
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import type { TestIds } from "./ids.js";
@@ -8,8 +10,8 @@ import type { TestIds } from "./ids.js";
  *
  * Typed on purpose — every row goes through the generated client, so a renamed
  * or retyped schema column breaks `check-types` rather than surfacing as a
- * mystifying gateway failure at runtime. This mirrors
- * `packages/api/src/ee/testing/gateway-enforce-seed.ts`.
+ * mystifying gateway failure at runtime. The Rust loader test uses
+ * the same fixtures through `seed-enforce.ts`.
  *
  * Note what is deliberately absent: nothing here accepts an org, workspace, agent
  * or token id. Those come from the per-test nonce and are the suite's Redis
@@ -60,6 +62,9 @@ export interface SecretSpec extends InjectionSpec {
    * only shape `find_secrets_by_org` returns. Defaults to `workspace`.
    */
   readonly scope?: "workspace" | "organization";
+  /** Display name. Defaults to the row id. Shown to the agent when two
+   * custom secrets collide on one injection slot. */
+  readonly name?: string;
 }
 
 /**
@@ -106,7 +111,7 @@ export interface ConditionSpec {
  *
  * The asymmetry worth knowing: an empty identity set means "any principal" for
  * a DECISION, but never matches for INJECTION selection
- * (`ee/policy_engine/inject_select.rs`).
+ * (`apps/gateway/crates/policy-engine/src/inject_select.rs`).
  */
 export type IdentitySpec =
   | "agent"
@@ -171,6 +176,23 @@ export interface AppConnectionSpec {
    * in the pool). Defaults to `workspace`.
    */
   readonly scope?: "workspace" | "organization";
+  /**
+   * The plaintext credential payload to encrypt and store. Defaults to a
+   * bare OAuth shape; a host-gated provider (Salesforce, Snowflake, JFrog)
+   * sets it to carry the bound host its `credential_host_field` names.
+   */
+  readonly credentials?: Readonly<Record<string, unknown>>;
+  /**
+   * Non-secret connection metadata, stored as-is — e.g. the `bound_host` the
+   * API records for a host-gated provider, which the gateway echoes to an
+   * agent that called one of the provider's generic hosts.
+   */
+  readonly metadata?: Prisma.InputJsonObject;
+  /**
+   * The provider refused the stored refresh token: the account is waiting on
+   * a reconnect (`reauth_required_at` set), as the gateway marks it.
+   */
+  readonly reauthRequired?: boolean;
 }
 
 export interface WorldSpec {
@@ -266,8 +288,10 @@ const targetRow = (
     return { id, kind, ...narrowing, secret: { connect: { id: secretId } } };
   }
   if (kind === "connection") {
-    // The CHECK rejects path/method narrowing columns on a connection row;
-    // narrowing is the `appTools` axis (`tools` - the grant stacks' shape).
+    // Narrowing is the `appTools` axis (`tools` - the grant stacks' shape);
+    // `method` narrows only a whole-app row (a split catch-all's
+    // `GET,HEAD` / `!GET,HEAD`). The CHECK rejects host columns on a
+    // connection row.
     const connectionId = connectionIds[target.connectionIndex ?? -1];
     if (connectionId === undefined) {
       throw new Error(
@@ -281,6 +305,7 @@ const targetRow = (
       ...(target.tools !== undefined && target.tools.length > 0
         ? { appTools: [...target.tools] }
         : {}),
+      ...(target.method !== undefined ? { method: target.method } : {}),
     };
   }
   if (kind === "app") {
@@ -416,6 +441,50 @@ export const grantSecret = async (
 };
 
 /**
+ * The stack the REAL grant compiler emits for "custom access" (`allow`, plus
+ * the tools that need approval in `ask`, and the "Not listed above" choices
+ * `otherReads` / `otherWrites`) on the selected app connection (the first by default), as spec
+ * rules bound to the main agent and named `Grant: e2e · <provider>…`.
+ * Production-shaped by construction, so a suite asserting on a grant row (its
+ * action, approval modifier, or name) can never drift from what a customized
+ * grant actually writes.
+ */
+export const compiledGrantStack = (
+  provider: string,
+  allow: string[],
+  {
+    ask = [],
+    ...other
+  }: Partial<
+    Pick<
+      Extract<ConnectionGrantInput, { access: "custom" }>,
+      "ask" | "otherReads" | "otherWrites"
+    >
+  > = {},
+  connectionIndex = 0,
+): RuleSpec[] =>
+  compileConnectionStack(`Grant: e2e · ${provider}`, provider, {
+    access: "custom",
+    allow,
+    ask,
+    ...other,
+  }).map((rule) => ({
+    name: rule.name,
+    action: rule.action,
+    requireApproval: rule.requireApproval,
+    source: "grant",
+    identities: ["agent"],
+    targets: [
+      {
+        kind: "connection",
+        connectionIndex,
+        tools: rule.tools,
+        ...(rule.method ? { method: rule.method } : {}),
+      },
+    ],
+  }));
+
+/**
  * Write one secret row.
  *
  * Separate from `seedWorld` so a test can add a credential *after* the gateway
@@ -443,7 +512,7 @@ export const addSecret = async (
   await prisma.secret.create({
     data: {
       id,
-      name: id,
+      name: secret.name ?? id,
       type: secret.type ?? "generic",
       scope,
       // An org-scoped row must have a NULL workspace: `find_secrets_by_workspace`
@@ -531,8 +600,16 @@ export const seedWorld = async (
         provider: connection.provider,
         label: connection.label ?? `${connection.provider}-${String(i)}`,
         status: "connected",
+        ...(connection.metadata ? { metadata: connection.metadata } : {}),
+        ...(connection.reauthRequired === true
+          ? { reauthRequiredAt: new Date() }
+          : {}),
         credentials: await cryptoService.encrypt(
-          JSON.stringify({ access_token: `e2e-oauth-${String(i)}` }),
+          JSON.stringify(
+            connection.credentials ?? {
+              access_token: `e2e-oauth-${String(i)}`,
+            },
+          ),
         ),
       },
     });

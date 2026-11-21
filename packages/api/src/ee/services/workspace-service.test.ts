@@ -210,8 +210,9 @@ vi.mock("../../lib/gateway-invalidate", () => ({
   },
 }));
 
-vi.mock("../../services/channels/agent-channel-service", () => ({
-  teardownWorkspacePresences: async () => {},
+vi.mock("../../services/channels/channel-cleanup-service", () => ({
+  enqueueWorkspaceCleanup: async () => [],
+  processChannelCleanups: async () => ({ completed: 0, retained: 0 }),
 }));
 
 vi.mock("../../lib/logger", () => {

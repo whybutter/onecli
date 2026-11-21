@@ -165,25 +165,21 @@ describe.skipIf(!PROOF_URL)(
       ],
     ] as const)(
       "%s is onDelete: RESTRICT — a bare organization.delete() fails while a row survives",
-      async (_table, seedChild) => {
+      async (table, seedChild) => {
         const orgId = freshOrgId();
         await seedOrgWithOwner(orgId);
         await seedChild(orgId);
         // The child row alone should block the org delete — no cascade helper
         // involved, proving the FK itself (not application code) enforces it.
-        // Postgres reports a RESTRICT violation as SQLSTATE 23001, which
-        // Prisma surfaces as an unwrapped `PrismaClientUnknownRequestError`
-        // (not its usual P2003 for a plain 23503 foreign-key violation) — so
-        // this asserts on the underlying Postgres message, the actual proof.
+        // PostgreSQL and Prisma versions format this failure differently. Both
+        // identify the exact child foreign key that prevented the deletion.
         await db.workspace.deleteMany({ where: { organizationId: orgId } });
         await db.organizationMember.deleteMany({
           where: { organizationId: orgId },
         });
         await expect(
           db.organization.delete({ where: { id: orgId } }),
-        ).rejects.toThrow(
-          /violates RESTRICT setting of foreign key constraint/,
-        );
+        ).rejects.toThrow(`${table}_organization_id_fkey`);
       },
     );
 

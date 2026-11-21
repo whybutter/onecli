@@ -22,7 +22,7 @@ const state = vi.hoisted(() => ({
   isError: false,
 }));
 
-vi.mock("@/hooks/use-usage", () => ({
+vi.mock("@/hooks/use-gateway-usage", () => ({
   useUsage: () => state,
 }));
 

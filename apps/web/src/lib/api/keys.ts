@@ -17,6 +17,9 @@ export const queryKeys = {
       [...queryKeys.agents.all(), "detail", agentId] as const,
     models: (agentId: string) =>
       [...queryKeys.agents.all(), "models", agentId] as const,
+    // The machine's lifecycle status (the onboarding boot screen's poll).
+    sandbox: (agentId: string) =>
+      [...queryKeys.agents.all(), "sandbox", agentId] as const,
     // Explicitly-targeted workspace (the org-level picker, the sidebar) —
     // keyed by that workspace, deliberately outside the URL-derived scope()
     // prefix. Under root(), so the namespace sweep still reaches it.
@@ -61,6 +64,14 @@ export const queryKeys = {
         conversationId,
         attachmentId,
       ] as const,
+    // The row's metadata for the download page — immutable once bound.
+    meta: (conversationId: string, attachmentId: string) =>
+      [
+        ...queryKeys.attachments.all(),
+        "meta",
+        conversationId,
+        attachmentId,
+      ] as const,
   },
   secrets: {
     all: () => ["secrets", ...scope()] as const,
@@ -72,8 +83,6 @@ export const queryKeys = {
       [...queryKeys.policy.all(), "rules", pageScope] as const,
     default: (pageScope: PageScope = "workspace") =>
       [...queryKeys.policy.all(), "default", pageScope] as const,
-    lastPublish: (pageScope: PageScope = "workspace") =>
-      [...queryKeys.policy.all(), "last-publish", pageScope] as const,
   },
   domains: {
     all: () => ["domains", ...scope()] as const,
@@ -102,12 +111,10 @@ export const queryKeys = {
     // a route matching NEITHER regex would key to ["org","default","default"]
     // and must not trust that entry across org switches.
     all: () => ["org", ...scope()] as const,
-    // The org switcher's own read (`getUserOrganizations` +
-    // `getActiveOrganizationId`, server actions in `lib/workspaces/actions.ts`,
-    // not the `GET /v1/org` fetch `all()` backs) — its own key under the
-    // `org` namespace so a rename/switch invalidation reaches the switcher
-    // without also invalidating (or being invalidated by) the `all()` read.
     list: () => [...queryKeys.org.all(), "list"] as const,
+    membership: () => [...queryKeys.org.all(), "membership"] as const,
+    connectionTestOrganization: () =>
+      [...queryKeys.org.all(), "connection-test-organization"] as const,
   },
   orgMembers: {
     all: () => ["org-members", ...scope()] as const,
@@ -131,45 +138,40 @@ export const queryKeys = {
       [...queryKeys.grants.all(), "agent", agentId] as const,
     connection: (connectionId: string) =>
       [...queryKeys.grants.all(), "connection", connectionId] as const,
+    /** Every secret's agent view (`secret(id)` below): agent CRUD
+     * changes their rows. */
+    secrets: () => [...queryKeys.grants.all(), "secret"] as const,
+    secret: (secretId: string) =>
+      [...queryKeys.grants.secrets(), secretId] as const,
   },
   connections: {
-    all: () => ["connections", ...scope()] as const,
+    root: () => ["connections"] as const,
+    all: () => [...queryKeys.connections.root(), ...scope()] as const,
     list: (pageScope: PageScope = "workspace") =>
       [...queryKeys.connections.all(), "list", pageScope] as const,
     byProvider: (provider: string) =>
       [...queryKeys.connections.all(), "provider", provider] as const,
+    githubInstallations: (pageScope: PageScope = "workspace") =>
+      [
+        ...queryKeys.connections.all(),
+        "github-installations",
+        pageScope,
+      ] as const,
+    githubConnectionRepos: (
+      connectionId: string,
+      pageScope: PageScope = "workspace",
+    ) =>
+      [
+        ...queryKeys.connections.all(),
+        "github-connection-repos",
+        pageScope,
+        connectionId,
+      ] as const,
   },
   workspaceAccess: {
     all: () => ["workspace-access", ...scope()] as const,
     list: (workspaceId: string) =>
       [...queryKeys.workspaceAccess.all(), workspaceId] as const,
-  },
-  // Org-scoped spend caps (`/v1/org/budgets`) — admin-only, org-scoped
-  // credential (§ org-budgets.ts). scope()'s org slot is the real
-  // discriminator here; the workspace slot is always "default" since this
-  // is only ever read from an org-scoped route.
-  budgets: {
-    all: () => ["budgets", ...scope()] as const,
-    list: () => [...queryKeys.budgets.all(), "list"] as const,
-  },
-  // Org-scoped recorded-gateway-requests summary (`/v1/org/usage`) —
-  // member-visible, org-scoped credential.
-  usage: {
-    all: () => ["usage", ...scope()] as const,
-    summary: () => [...queryKeys.usage.all(), "summary"] as const,
-  },
-  // The workspace's default-connections template for brand-new agents
-  // (`/v1/workspaces/:id/agent-defaults`) — workspace-scoped, deliberately
-  // NOT org-scoped like the two above (risk 2: don't "fix" this to match).
-  agentDefaults: {
-    all: () => ["agent-defaults", ...scope()] as const,
-    // Keyed by the explicit workspaceId argument, like workspaceAccess.list
-    // — not derived from the URL alone, so a caller passing a workspaceId
-    // that doesn't match the URL-scoped `all()` prefix (or a background
-    // refetch racing a workspace switch) can't read/invalidate the wrong
-    // workspace's template.
-    list: (workspaceId: string) =>
-      [...queryKeys.agentDefaults.all(), workspaceId] as const,
   },
   workspaces: {
     all: () => ["workspaces", ...scope()] as const,
@@ -223,8 +225,20 @@ export const queryKeys = {
     all: () => ["ssh-keys"] as const,
     list: () => [...queryKeys.sshKeys.all(), "list"] as const,
   },
+  // The account is PER-USER too (same reasoning as sshKeys): what deleting
+  // it does to the user's organizations does not depend on which one the
+  // URL happens to name.
+  user: {
+    all: () => ["user"] as const,
+    deletionImpact: () => [...queryKeys.user.all(), "deletion-impact"] as const,
+  },
   installInfo: {
     all: () => ["install-info", ...scope()] as const,
+  },
+  // The caller's personal workspace API key (Workspace Settings → API Key).
+  // Install embeds the same key, so a regenerate invalidates installInfo too.
+  workspaceApiKey: {
+    all: () => ["workspace-api-key", ...scope()] as const,
   },
   userPlan: {
     all: () => ["user-plan", ...scope()] as const,
@@ -235,19 +249,40 @@ export const queryKeys = {
   },
   activity: {
     all: () => ["activity", ...scope()] as const,
-    list: (filter?: string) =>
-      [...queryKeys.activity.all(), "list", filter] as const,
+    list: (params: object) =>
+      [...queryKeys.activity.all(), "list", params] as const,
   },
   approvals: {
     all: () => ["approvals", ...scope()] as const,
     list: () => [...queryKeys.approvals.all(), "list"] as const,
     channel: (workspaceId: string) =>
       [...queryKeys.approvals.all(), "channel", workspaceId] as const,
+    alerts: (workspaceId: string) =>
+      [...queryKeys.approvals.all(), "alerts", workspaceId] as const,
+    outcomes: (agentId: string, ids: readonly string[]) =>
+      [...queryKeys.approvals.all(), "outcomes", agentId, ...ids] as const,
   },
   crons: {
     all: () => ["crons", ...scope()] as const,
     agent: (agentId: string) =>
       [...queryKeys.crons.all(), "agent", agentId] as const,
+    parse: (agentId: string, text: string, timezone: string) =>
+      [...queryKeys.crons.all(), "parse", agentId, timezone, text] as const,
+  },
+  webhooks: {
+    all: () => ["webhooks", ...scope()] as const,
+    agent: (agentId: string) =>
+      [...queryKeys.webhooks.all(), "agent", agentId] as const,
+  },
+  ports: {
+    all: () => ["ports", ...scope()] as const,
+    agent: (agentId: string) =>
+      [...queryKeys.ports.all(), "agent", agentId] as const,
+  },
+  desktop: {
+    all: () => ["desktop", ...scope()] as const,
+    agent: (agentId: string) =>
+      [...queryKeys.desktop.all(), "agent", agentId] as const,
   },
   skills: {
     all: () => ["skills", ...scope()] as const,
@@ -257,6 +292,16 @@ export const queryKeys = {
     org: () => [...queryKeys.skills.all(), "org"] as const,
     orgDetail: (skillId: string) =>
       [...queryKeys.skills.all(), "org", "detail", skillId] as const,
+    library: () => [...queryKeys.skills.all(), "library"] as const,
+    orgRepo: () => [...queryKeys.skills.all(), "library", "repo"] as const,
+    githubAccounts: () =>
+      [...queryKeys.skills.all(), "library", "github-accounts"] as const,
+    accessRepos: (access: string) =>
+      [...queryKeys.skills.all(), "library", "access-repos", access] as const,
+    agentLibrary: (agentId: string) =>
+      [...queryKeys.skills.all(), "library", "agent", agentId] as const,
+    agentAvailable: (agentId: string) =>
+      [...queryKeys.skills.all(), "library", "available", agentId] as const,
   },
   memories: {
     all: () => ["memories", ...scope()] as const,
@@ -275,6 +320,49 @@ export const queryKeys = {
         revisionId,
       ] as const,
   },
+  runs: {
+    all: () => ["runs", ...scope()] as const,
+    list: (filter: object) =>
+      [...queryKeys.runs.all(), "list", filter] as const,
+    newest: (agentId: string, cronId: string) =>
+      [...queryKeys.runs.all(), "newest", agentId, cronId] as const,
+    detail: (agentId: string, turnId: string) =>
+      [...queryKeys.runs.all(), "detail", agentId, turnId] as const,
+  },
+  budgets: {
+    all: () => ["budgets", ...scope()] as const,
+    list: () => [...queryKeys.budgets.all(), "list"] as const,
+  },
+  // The workspace's default-connections template for brand-new agents
+  // (`/v1/workspaces/:id/agent-defaults`) — workspace-scoped, deliberately
+  // NOT org-scoped like the two above (risk 2: don't "fix" this to match).
+  agentDefaults: {
+    all: () => ["agent-defaults", ...scope()] as const,
+    // Keyed by the explicit workspaceId argument, like workspaceAccess.list
+    // — not derived from the URL alone, so a caller passing a workspaceId
+    // that doesn't match the URL-scoped `all()` prefix (or a background
+    // refetch racing a workspace switch) can't read/invalidate the wrong
+    // workspace's template.
+    list: (workspaceId: string) =>
+      [...queryKeys.agentDefaults.all(), workspaceId] as const,
+  },
+  usage: {
+    all: () => ["usage", ...scope()] as const,
+    gatewaySummary: () =>
+      [...queryKeys.usage.all(), "gateway-summary"] as const,
+    agent: (agentId: string, window: object) =>
+      [...queryKeys.usage.all(), "agent", agentId, window] as const,
+    org: (window: object) => [...queryKeys.usage.all(), "org", window] as const,
+  },
+  evals: {
+    all: () => ["evals", ...scope()] as const,
+    agent: (agentId: string) =>
+      [...queryKeys.evals.all(), "agent", agentId] as const,
+    run: (agentId: string, runId: string) =>
+      [...queryKeys.evals.all(), "run", agentId, runId] as const,
+    reportChannels: (agentId: string) =>
+      [...queryKeys.evals.all(), "report-channels", agentId] as const,
+  },
   channels: {
     all: () => ["channels", ...scope()] as const,
     agent: (agentId: string) =>
@@ -290,9 +378,20 @@ export const queryKeys = {
         transport ?? "default",
       ] as const,
     org: () => [...queryKeys.channels.all(), "org"] as const,
-    // The agent's one-shot action approvals (the channels page section).
-    contacts: (agentId: string) =>
-      [...queryKeys.channels.all(), "contacts", agentId] as const,
+    orgAgents: (provider: string) =>
+      [...queryKeys.channels.all(), "org-agents", provider] as const,
+    // The agent's peers (PR 5b): other agents and both sides' standing.
+    peers: (agentId: string) =>
+      [...queryKeys.channels.all(), "peers", agentId] as const,
+    // The caller's remembered senders per recipient (send-as choice).
+    sendAs: (agentId: string) =>
+      [...queryKeys.channels.all(), "send-as", agentId] as const,
+    // "Connect your Slack" read grants (licensed).
+    slackRead: (agentId: string) =>
+      [...queryKeys.channels.all(), "slack-read", agentId] as const,
+    // The workspace finder: which agents can read the caller's Slack.
+    slackReadAgents: () =>
+      [...queryKeys.channels.all(), "slack-read-agents"] as const,
   },
   appBlocklist: {
     all: () => ["appBlocklist", ...scope()] as const,
@@ -301,9 +400,14 @@ export const queryKeys = {
   },
   billing: {
     all: () => ["billing", ...scope()] as const,
-    planUsage: () => [...queryKeys.billing.all(), "planUsage"] as const,
+    // Plan usage is cached per org scope by `usePlanUsage` (a route key, not
+    // `scope()`), so this is the prefix that reaches every scope's copy:
+    // writes that change a quota count (agent create / delete) invalidate it,
+    // and the create gates read their quota off it.
+    planUsage: () => ["billing", "planUsage"] as const,
     subscriptionStatus: () =>
       [...queryKeys.billing.all(), "subscriptionStatus"] as const,
+    paymentIssue: () => [...queryKeys.billing.all(), "paymentIssue"] as const,
     prorationPreview: (plan: string, interval: string) =>
       [...queryKeys.billing.all(), "prorationPreview", plan, interval] as const,
   },
@@ -311,6 +415,18 @@ export const queryKeys = {
     all: () => ["dropbox", ...scope()] as const,
     folders: (connectionId: string, path: string) =>
       [...queryKeys.dropbox.all(), "folders", connectionId, path] as const,
+  },
+  googleDrive: {
+    all: () => ["googleDrive", ...scope()] as const,
+    folders: (connectionId: string, parentId: string) =>
+      [
+        ...queryKeys.googleDrive.all(),
+        "folders",
+        connectionId,
+        parentId,
+      ] as const,
+    folderNames: (connectionId: string, ids: string) =>
+      [...queryKeys.googleDrive.all(), "names", connectionId, ids] as const,
   },
   onepassword: {
     all: () => ["onepassword", ...scope()] as const,

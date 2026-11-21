@@ -1,5 +1,6 @@
-import { IS_CLOUD } from "./lib/env";
+import { IS_CLOUD, SECRET_ENCRYPTION_KEY } from "./lib/env";
 import { cryptoService as kmsCrypto } from "./ee/kms-crypto";
+import { cryptoService as localCrypto } from "./lib/crypto";
 import { getRedis, hasRedisConfigured } from "./ee/clients/redis-client";
 import { createRedisEventBus } from "./ee/event-bus/redis-event-bus";
 import { createInProcessEventBus } from "./services/event-bus";
@@ -51,6 +52,12 @@ import {
 } from "./providers/hooks/team-hooks";
 import { setDefaultRuleActionGate } from "./providers/hooks/rule-action-gate";
 import { setDefaultPolicyValidator } from "./providers/hooks/policy-validator";
+import {
+  setDefaultConversationReader,
+  setDefaultConversationSender,
+  setDefaultUserReadConnectCompleter,
+} from "./providers/hooks/conversation-reader";
+import { setDefaultAgentDesktop } from "./providers/hooks/agent-desktop";
 import { setDefaultNewOrgPolicySeeder } from "./providers/hooks/new-org-policy-seeder";
 import { markEditionDefaultsApplied } from "./providers/edition-state";
 
@@ -71,7 +78,7 @@ let applied = false;
  * - `createApiApp` — every HTTP host (web /v1 catch-all, api-server, SCIM).
  * - the web app's eager server init (`lib/init/server.ts`) — server actions
  *   call the shared services directly without ever running `createApiApp`.
- * - standalone server scripts (`cloud-scripts/*`) that touch providers.
+ * - standalone server scripts that touch providers.
  *
  * A cloud read of an uninjected default FAILS LOUDLY (see
  * `providers/edition-state.ts`) — silently falling through to the onprem
@@ -82,13 +89,6 @@ export const ensureEditionDefaults = (): void => {
   if (applied) return;
   applied = true;
 
-  // Attachment BYTES (free feature — deliberately outside the ee/ block
-  // below): the inline-Postgres store serves both editions today. Like the
-  // policy seeder, both arms ride the DB client, so the impl is injected
-  // here rather than resolved as a static onprem default. Cloud's future
-  // scalable arm (S3) replaces this line behind config presence (bucket env
-  // set), never an edition branch — rows dispatch per `storageRef`, so mixed
-  // backends coexist.
   setDefaultAttachmentStore(pgAttachmentBlobStore);
 
   // Org-scoped OAuth interception and the org app-config tier are shared
@@ -108,7 +108,12 @@ export const ensureEditionDefaults = (): void => {
   }
 
   if (IS_CLOUD) {
-    setDefaultCrypto(kmsCrypto);
+    // Secret crypto follows config presence, by the same rule as the gateway's
+    // `wiring::create_crypto_service`: an explicit SECRET_ENCRYPTION_KEY
+    // selects local AES, otherwise KMS envelope. The two MUST agree — the
+    // gateway decrypts only the format its own backend writes, so a row this
+    // side encrypts with the other backend is unreadable at injection time.
+    setDefaultCrypto(SECRET_ENCRYPTION_KEY ? localCrypto : kmsCrypto);
     // The SSH CA is nullable by design: null (no SSH_CA_KMS_KEY_ARN) keeps
     // the front-door surface dark rather than failing the boot — the same
     // config-presence posture as RUNNER_TOKEN.
@@ -136,15 +141,20 @@ export const ensureEditionDefaults = (): void => {
     setDefaultTeamHooks(eeTeamHooks);
     setDefaultRuleActionGate(eeRuleActionGate);
     setDefaultPolicyValidator(eePolicyValidator);
+    // These optional providers have no implementation in this build.
+    setDefaultConversationReader(null);
+    setDefaultConversationSender(null);
+    setDefaultUserReadConnectCompleter(null);
     setDefaultNewOrgPolicySeeder(eeNewOrgPolicySeeder);
+    setDefaultAgentDesktop(null);
     // Platform trial credit: dark by config (no PLATFORM_ANTHROPIC_API_KEY →
     // the provider answers false), like the SSH CA above — injection never
     // fails the boot.
     setDefaultPlatformLlm(eePlatformLlm);
 
-    // Cross-pod live transcript fan-out: api runs multiple pods, so the
+    // Cross-instance live transcript fan-out: with multiple api instances, the
     // in-process emitter delivers a publish to no one when the runner's event
-    // POST and a browser's SSE stream land on different pods. Redis pub/sub
+    // POST and a browser's SSE stream land on different instances. Redis pub/sub
     // carries every publish between them. The subscriber MUST be its own
     // connection: ioredis forbids commands on a connection in subscriber mode.
     //
@@ -152,7 +162,7 @@ export const ensureEditionDefaults = (): void => {
     // — unlike rate-limit/quota, which degrade at their call site — the cloud
     // arm MUST inject SOMETHING or the first getEventBus() throws. When Redis
     // is absent (dev/staging/a misconfigured cloud), inject the in-process
-    // emitter explicitly: it keeps a single-pod cloud correct and multi-pod
+    // emitter explicitly: it keeps a single instance correct and multiple
     // no worse than the pre-fix behavior, rather than 500ing every event.
     setDefaultEventBus(
       hasRedisConfigured()

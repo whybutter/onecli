@@ -83,6 +83,14 @@ export const createDoor = ({
   return hostedPossible ? "byo-with-hosted" : "byo";
 };
 
+/** Whether the door's primary action is hosted creation (else BYO). */
+export const isHostedPrimary = (door: CreateDoor): boolean =>
+  door === "hosted" || door === "hosted-with-byo";
+
+/** Whether the door offers a second path behind a chevron. */
+export const isSplitDoor = (door: CreateDoor): boolean =>
+  door === "byo-with-hosted" || door === "hosted-with-byo";
+
 /**
  * The 15-minute onboarding call (cal.com). A legacy user's move to hosted
  * agents is a migration, not a form submission: their BYO setup, their keys

@@ -207,6 +207,8 @@ export const applyWorkspaceAgentDefaults = async (
             access: "custom",
             allow: d.allow,
             ask: d.ask,
+            otherReads: "never",
+            otherWrites: "never",
             resources: toResources(d.resources),
           }
         : { access: "full", resources: toResources(d.resources) };

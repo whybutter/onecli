@@ -26,6 +26,7 @@ percent-encoding = { workspace = true }
 reqwest = { workspace = true }
 ring = { workspace = true }
 sqlx = { workspace = true }
+tokio = { workspace = true }
 tokio-rustls = { workspace = true }
 tracing = { workspace = true }
 

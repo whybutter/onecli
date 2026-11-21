@@ -1,4 +1,6 @@
 import { db, type Prisma } from "@onecli/db";
+import { invalidateGatewayCacheForOrg } from "../../lib/gateway-invalidate";
+import { dropPrincipalFromPolicyInTx } from "../../services/policy-service";
 import { ServiceError } from "../../services/errors";
 import {
   clampDirectoryLimit,
@@ -244,19 +246,26 @@ export interface DeletedGroup {
 }
 
 /**
- * Delete a group. The DB cascades take everything down with the row —
- * `GroupMember`, its `WorkspaceAccess` bindings, its `GroupRoleMapping`,
- * `PolicyRuleIdentity` and `AppAvailabilityRuleIdentity` rows.
+ * Retire rules scoped solely to this group before deleting the group. Other
+ * rules lose only the deleted identity through the database cascade.
  */
 export const deleteOrgGroup = async (
   organizationId: string,
   groupId: string,
 ): Promise<DeletedGroup> => {
   const group = await requireManualGroup(organizationId, groupId);
-  const { count } = await db.group.deleteMany({
-    where: { id: groupId, organizationId },
+  await db.$transaction(async (tx) => {
+    await dropPrincipalFromPolicyInTx(tx, {
+      kind: "group",
+      id: groupId,
+      organizationId,
+    });
+    const { count } = await tx.group.deleteMany({
+      where: { id: groupId, organizationId },
+    });
+    if (count === 0) throw new ServiceError("NOT_FOUND", "Group not found");
   });
-  if (count === 0) throw new ServiceError("NOT_FOUND", "Group not found");
+  invalidateGatewayCacheForOrg(organizationId);
   return { id: group.id, name: group.name };
 };
 

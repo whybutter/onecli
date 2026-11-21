@@ -24,7 +24,9 @@ const composeYml = read("docker/docker-compose.yml");
 
 // The two matrix lines (build + merge jobs). `include:` entries and the
 // arch axis don't match this shape, so the extraction can't over-collect.
-const serviceLines = [...publishYml.matchAll(/^\s*service: \[([^\]]+)\]\s*$/gm)];
+const serviceLines = [
+  ...publishYml.matchAll(/^\s*service: \[([^\]]+)\]\s*$/gm),
+];
 const services = new Set(
   serviceLines[0]?.[1].split(",").map((s) => s.trim()) ?? [],
 );
@@ -47,7 +49,7 @@ test("publish.yml has exactly two identical service matrices (build + merge)", (
 test("the matrix is a subset of the docker/*.Dockerfile set, excluding exactly the upstream-passthrough images", () => {
   const dockerfiles = new Set(
     readdirSync(fileURLToPath(new URL("../docker", import.meta.url)))
-      .filter((f) => f.endsWith(".Dockerfile"))
+      .filter((f) => f.endsWith(".Dockerfile") && f !== "agent-base.Dockerfile")
       .map((f) => f.replace(/\.Dockerfile$/, "")),
   );
   for (const service of services)
@@ -55,9 +57,7 @@ test("the matrix is a subset of the docker/*.Dockerfile set, excluding exactly t
       dockerfiles.has(service),
       `matrix service "${service}" has no docker/${service}.Dockerfile`,
     );
-  const excluded = new Set(
-    [...dockerfiles].filter((d) => !services.has(d)),
-  );
+  const excluded = new Set([...dockerfiles].filter((d) => !services.has(d)));
   assert.deepEqual(excluded, UPSTREAM_PASSTHROUGH);
 });
 

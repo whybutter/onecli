@@ -1,10 +1,30 @@
+import { db } from "@onecli/db";
 import type { AppAvailabilityProvider } from "../../providers/types";
+import { resolvePrincipalSet } from "../../services/policy-simulate/principal-set";
 
-/**
- * App availability (the org allowlist) is deferred (v2 migration decision 3).
- * `null` means "unrestricted": every app is connectable in every workspace,
- * which is what the free onprem default already answered.
- */
 export const appAvailability: AppAvailabilityProvider = {
-  getAvailableProviders: async () => null,
+  async getAvailableProviders(workspaceId, organizationId) {
+    const workspace = await db.workspace.findFirst({
+      where: { id: workspaceId, organizationId },
+      select: { organization: { select: { appAvailabilityMode: true } } },
+    });
+    if (!workspace) return [];
+    if (workspace.organization.appAvailabilityMode === "open") return null;
+    const { userIds, groupIds } = await resolvePrincipalSet(
+      workspaceId,
+      organizationId,
+    );
+    const rules = await db.appAvailabilityRule.findMany({
+      where: {
+        organizationId,
+        identities: {
+          some: {
+            OR: [{ userId: { in: userIds } }, { groupId: { in: groupIds } }],
+          },
+        },
+      },
+      select: { providers: true },
+    });
+    return [...new Set(rules.flatMap((rule) => rule.providers))];
+  },
 };

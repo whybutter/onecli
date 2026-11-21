@@ -125,7 +125,7 @@ let app: Hono<ApiEnv>;
 beforeAll(async () => {
   const { createApiApp } = await import("../app");
   app = createApiApp({ getSession: async () => null });
-});
+}, 30_000);
 
 beforeEach(() => {
   state.membershipActive = true;
@@ -290,5 +290,19 @@ describe("PATCH /v1/org", () => {
 
     expect(res.status).toBe(400);
     expect(state.orgName).toBe("Acme");
+  });
+});
+
+describe("GET /v1/org/membership", () => {
+  it("answers exactly { isAdmin }, true for the owner", async () => {
+    const res = await app.request("/v1/org/membership", authed);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ isAdmin: true });
+  });
+
+  it("401s an anonymous caller and 401s a departed org-key holder", async () => {
+    expect((await app.request("/v1/org/membership")).status).toBe(401);
+    state.membershipActive = false;
+    expect((await app.request("/v1/org/membership", authed)).status).toBe(401);
   });
 });

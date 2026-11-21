@@ -96,7 +96,6 @@ impl Drop for MeteringStream {
 /// metering usage and firing the one `telemetry::on_request` emission
 /// `track_and_wrap` skips when it hands back a metered stream (the free path
 /// fires it itself only when NOT wrapping). See `MeteringStream`.
-#[must_use]
 pub fn wrap_metered(
     binding: &BudgetBinding,
     meta: RequestMeta,

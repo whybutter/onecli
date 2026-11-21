@@ -24,3 +24,18 @@ export type PlanUsage = UsageOverview & {
  * unchanged.
  */
 export const usePlanUsage = (): PlanUsage | null => null;
+
+export const useResourceQuota = (resourceName: string) => {
+  const usage = usePlanUsage();
+  if (!usage) return null;
+  const resource = usage.resources.find((r) => r.name === resourceName);
+  return {
+    current: resource?.current ?? 0,
+    limit: resource?.limit ?? Infinity,
+    plan: usage.plan,
+    atLimit: resource
+      ? resource.limit !== Infinity && resource.current >= resource.limit
+      : false,
+    organizationId: usage.organizationId,
+  };
+};

@@ -5,7 +5,7 @@ export interface QuotaLimitDialogProps {
   current: number;
   limit: number;
   plan: string;
-  organizationId: string;
+  organizationId?: string;
 }
 
 /**

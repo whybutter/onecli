@@ -101,6 +101,16 @@ const matchesWithCursor = (g: GroupRecord, where: GroupWhere): boolean => {
   );
 };
 
+vi.mock("../../lib/gateway-invalidate", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/gateway-invalidate")>()),
+  invalidateGatewayCacheForOrg: () => {},
+}));
+
+vi.mock("../../services/policy-service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/policy-service")>()),
+  dropPrincipalFromPolicyInTx: async () => [],
+}));
+
 vi.mock("@onecli/db", () => {
   const groupMemberModel = {
     findMany: async ({ where }: { where: { groupId: string } }) =>
@@ -264,8 +274,9 @@ vi.mock("@onecli/db", () => {
               m.userId === where.userId,
           ) ?? null,
       },
-      $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
-        fn({ groupMember: groupMemberModel }),
+      async $transaction(fn: (tx: unknown) => Promise<unknown>) {
+        return fn(this);
+      },
     },
   };
 });

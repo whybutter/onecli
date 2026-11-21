@@ -1,6 +1,6 @@
 //! EE enforce sanity suite over a REAL Postgres, driving the production loaders
 //! (`find_secret_hosts` et al.) → real `assemble_v2` → real `evaluate_new` against
-//! fixtures seeded by `packages/api/src/ee/testing/gateway-enforce-seed.ts`.
+//! fixtures seeded by `apps/gateway-e2e/src/seed-enforce.ts`.
 //!
 //! This is the permanent, CI-run guard for the credential-injection host-bypass class:
 //! a rule's enforcement must cover EVERY host the credential injects on (the reported
@@ -12,7 +12,7 @@
 //! otherwise). The CI `rust` job seeds the fixtures right after `prisma migrate
 //! deploy`; run locally with:
 //!   pnpm --filter @onecli/api-server exec tsx \
-//!     ../../packages/api/src/ee/testing/gateway-enforce-seed.ts   # DATABASE_URL set
+//!     ../gateway-e2e/src/seed-enforce.ts   # DATABASE_URL set
 //!   GATEWAY_TEST_DATABASE_URL=… cargo test -p policy-engine enforce_pg
 use super::assemble::assemble_v2;
 use super::enforce::needs_body_buffer;
@@ -27,26 +27,26 @@ use inject::secret_inject::find_secret_hosts;
 use policy::ConditionBody;
 use sqlx::PgPool;
 
-// Fixture ids — must match `FIXTURE` in gateway-enforce-seed.ts.
+// Fixture ids — derived from the seedWorld fixture in seed-enforce.ts.
 const ORG: &str = "gwenf-org";
 const WORKSPACE: &str = "gwenf-ws";
 const WORKSPACE_FENCE: &str = "gwenf-ws-b";
-const SECRET_OPENAI: &str = "gwenf-sec-openai";
-const SECRET_OPENAI_KEY: &str = "gwenf-sec-openai-key";
+const SECRET_OPENAI: &str = "gwenf-ws-sec-0";
+const SECRET_OPENAI_KEY: &str = "gwenf-ws-sec-1";
 /// The connection `rule-github-conn` names, and its same-provider sibling —
 /// the pair that makes the per-connection differential falsifiable.
-const CONN_GITHUB: &str = "gwenf-conn-github";
-const CONN_GITHUB2: &str = "gwenf-conn-github2";
+const CONN_GITHUB: &str = "gwenf-ws-conn-0";
+const CONN_GITHUB2: &str = "gwenf-ws-conn-1";
 /// The calendar connection whose grant stack the seed authors via the REAL
 /// grants compiler (allow list_events, ask create_event) — these assertions
 /// prove the gateway enforces genuine service output.
-const CONN_GCAL: &str = "gwenf-conn-gcal";
+const CONN_GCAL: &str = "gwenf-ws-conn-2";
 /// The github connection carrying the GraphQL-discrimination grant stack
 /// (allow graphql_query + list_pulls; mutations/create_pull in the blocked
 /// complement) - also authored via the REAL grants service.
-const CONN_GH_GRAPHQL: &str = "gwenf-conn-gh-graphql";
-/// Row id of the seed's DISABLED block rule (`${P}rule-disabled`).
-const RULE_DISABLED: &str = "gwenf-rule-disabled";
+const CONN_GH_GRAPHQL: &str = "gwenf-ws-conn-3";
+/// The sixth rule in the workspace fixture is the disabled block rule.
+const RULE_DISABLED: &str = "gwenf-ws-rule-5";
 
 async fn test_pool() -> Option<PgPool> {
     let Ok(url) = std::env::var("GATEWAY_TEST_DATABASE_URL") else {
@@ -110,7 +110,7 @@ async fn enforce_over_seeded_fixtures_closes_the_injection_host_bypass() {
             std::env::var("CI").is_err(),
             "gwenf fixtures missing in CI: the 'Seed gateway enforce fixtures' step must run before the gateway tests"
         );
-        eprintln!("skipping: gwenf fixtures not seeded (run gateway-enforce-seed.ts first)");
+        eprintln!("skipping: gwenf fixtures not seeded (run seed-enforce.ts first)");
         return;
     }
 
@@ -356,7 +356,7 @@ async fn enforce_over_seeded_fixtures_closes_the_injection_host_bypass() {
     );
 
     // The GraphQL-discrimination stack (seeded through the REAL grants
-    // service on its own github connection: allow graphql_query + list_pulls,
+    // compiler on its own github connection: allow graphql_query + list_pulls,
     // everything else in the blocked complement). Decided with REAL request
     // bodies through the same evaluate path the proxy calls - the end-to-end
     // proof that a Never'd mutation cannot ride the query allow, and that the

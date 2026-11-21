@@ -174,9 +174,7 @@ fn collect_boundaries(
                     // Several org rules may each constrain the same connection;
                     // every one of them applies, so they compose.
                     let composed = match boundaries.get(id) {
-                        Some(existing) => {
-                            granular_access::intersect_policies(Some(existing), Some(policy))
-                        }
+                        Some(existing) => compose_resource_policies(Some(existing), Some(policy)),
                         None => Some(policy.clone()),
                     };
                     if let Some(composed) = composed {
@@ -193,6 +191,28 @@ fn collect_boundaries(
 /// behavioral rule stores an array — neither restricts a credential's reach.
 fn as_resource_policy(conditions: &Option<serde_json::Value>) -> Option<&serde_json::Value> {
     conditions.as_ref().filter(|v| v.is_object())
+}
+
+/// The fork has no request guard for Google Drive folder scope.
+#[must_use]
+pub fn is_unsupported_resource_scope(scope: Option<&serde_json::Value>) -> bool {
+    scope.is_some_and(|value| value.get("driveFolders").is_some())
+}
+
+/// Keep unsupported scopes visible to the request guard even when they are
+/// composed with an organization or workspace scope on a supported axis.
+#[must_use]
+pub fn compose_resource_policies(
+    a: Option<&serde_json::Value>,
+    b: Option<&serde_json::Value>,
+) -> Option<serde_json::Value> {
+    if is_unsupported_resource_scope(a) {
+        return a.cloned();
+    }
+    if is_unsupported_resource_scope(b) {
+        return b.cloned();
+    }
+    granular_access::intersect_policies(a, b)
 }
 
 /// Derive the agent's inject-selection from the connect's published v2 rules.
@@ -234,7 +254,7 @@ pub fn derive_inject_selection(rules: &PolicyV2Rules, agent_id: &str) -> InjectS
     for (id, org_policy) in org_connections {
         match connections.entry(id) {
             Entry::Occupied(mut workspace) => {
-                let composed = granular_access::intersect_policies(
+                let composed = compose_resource_policies(
                     as_resource_policy(&org_policy),
                     as_resource_policy(workspace.get()),
                 );
@@ -252,8 +272,7 @@ pub fn derive_inject_selection(rules: &PolicyV2Rules, agent_id: &str) -> InjectS
         // Update-only: a boundary never adds a connection, so look the key up
         // rather than cloning it into an entry that would only ever be taken.
         if let Some(selected) = connections.get_mut(id) {
-            *selected =
-                granular_access::intersect_policies(Some(boundary), as_resource_policy(selected));
+            *selected = compose_resource_policies(Some(boundary), as_resource_policy(selected));
         }
     }
 
@@ -271,6 +290,16 @@ pub fn derive_inject_selection(rules: &PolicyV2Rules, agent_id: &str) -> InjectS
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn composed_drive_scope_remains_visible_to_the_request_guard() {
+        let drive = serde_json::json!({ "driveFolders": ["f1"] });
+        let dropbox = serde_json::json!({ "folders": ["/team"] });
+        for (a, b) in [(&drive, &dropbox), (&dropbox, &drive)] {
+            let combined = super::compose_resource_policies(Some(a), Some(b));
+            assert!(super::is_unsupported_resource_scope(combined.as_ref()));
+        }
+    }
+
     use super::*;
     use db::PolicyTargetRow;
     use serde_json::json;

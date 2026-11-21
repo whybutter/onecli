@@ -80,7 +80,7 @@ let app: Hono<ApiEnv>;
 beforeAll(async () => {
   const { createApiApp } = await import("../../app");
   app = createApiApp({ getSession: async () => null });
-});
+}, 30_000);
 
 beforeEach(() => {
   getOrganizationUsage.mockClear();

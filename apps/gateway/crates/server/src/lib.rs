@@ -37,7 +37,10 @@ use tower::ServiceExt;
 use tower_http::cors::CorsLayer;
 use tracing::{debug, info, info_span, warn, Instrument};
 
-use approval::{ApprovalDecision, ApprovalStore, PendingApproval, APPROVAL_TIMEOUT_SECS};
+use approval::{
+    ApprovalDecision, ApprovalStore, DecisionOutcome, DenyReason, PendingApproval,
+    APPROVAL_TIMEOUT_SECS,
+};
 use ca::CertificateAuthority;
 use cache::CacheStore;
 use context::auth::AuthUser;
@@ -54,9 +57,8 @@ pub use context::{GatewayState, ProxyContext};
 
 // ── GatewayServer ───────────────────────────────────────────────────────
 
-/// The combined HTTP listener: absolute-form proxying, CONNECT interception,
-/// and the axum control-plane router on one port. Constructed by `main` and
-/// run through the [`Entrypoint`] machinery.
+/// The combined HTTP listener for absolute-form proxying, CONNECT interception,
+/// and the Axum control-plane router.
 pub struct GatewayServer {
     state: GatewayState,
     port: u16,
@@ -70,86 +72,16 @@ pub struct GatewayServer {
 ///
 /// - Redirects are disabled so 3xx responses are forwarded to the client as-is.
 /// - `accept_invalid_certs` skips TLS certificate validation for upstream connections.
+/// - DNS goes through the destination guard (`proxy::egress`): a name that
+///   resolves only to non-public addresses fails with a refusal the forward
+///   path turns into a 403, and hyper dials only the addresses it checked.
 fn build_http_client(accept_invalid_certs: bool) -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .danger_accept_invalid_certs(accept_invalid_certs)
+        .dns_resolver(proxy::egress::resolver())
         .build()
         .expect("build HTTP client")
-}
-
-/// Accepts any server certificate, for the hosts an operator has explicitly
-/// exempted from verification.
-///
-/// This is deliberately the same posture `reqwest`'s `danger_accept_invalid_certs`
-/// gives the HTTP path: chain, hostname *and* handshake signature all go
-/// unchecked. Parity is the point — an operator who exempts an internal host
-/// expects it to work over both protocols, and the appliances that need the
-/// exemption at all are exactly the ones with certificates and signature
-/// algorithms nothing modern will accept.
-#[derive(Debug)]
-struct AcceptAnyServerCert;
-
-impl rustls::client::danger::ServerCertVerifier for AcceptAnyServerCert {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    // Both signature paths must be stubbed: rustls calls exactly one depending
-    // on the negotiated version, and TLS 1.2 is still reachable here.
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    /// This list is load-bearing, not decoration: it becomes the ClientHello's
-    /// `signature_algorithms`. Return nothing and the server finds no acceptable
-    /// scheme and aborts *before sending a certificate* — the verifier above
-    /// never runs, and skipping verification manifests as an unexplained
-    /// handshake failure.
-    ///
-    /// Copied from reqwest so the two paths advertise the same thing. It
-    /// deliberately includes schemes our own provider cannot verify (SHA-1,
-    /// Ed448) — harmless, because nothing here verifies anything, and it is
-    /// what lets a legacy appliance find something it can sign with.
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        use rustls::SignatureScheme;
-        vec![
-            SignatureScheme::RSA_PKCS1_SHA1,
-            SignatureScheme::ECDSA_SHA1_Legacy,
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::ECDSA_NISTP521_SHA512,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::ED25519,
-            SignatureScheme::ED448,
-        ]
-    }
 }
 
 /// Build the TLS config used to dial upstream WebSocket servers.
@@ -168,7 +100,7 @@ fn build_ws_tls_config(accept_invalid_certs: bool) -> Arc<rustls::ClientConfig> 
     let mut config = if accept_invalid_certs {
         rustls::ClientConfig::builder()
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(AcceptAnyServerCert))
+            .with_custom_certificate_verifier(Arc::new(ca::AcceptAnyServerCert))
             .with_no_client_auth()
     } else {
         let mut roots = rustls::RootCertStore::empty();
@@ -315,6 +247,10 @@ impl GatewayServer {
                 .as_deref(),
         );
         let skip_verify_hosts = Arc::new(parse_skip_verify_hosts());
+        // Load the destination guard's allowlist now, so a malformed
+        // GATEWAY_ALLOW_PRIVATE_DESTINATIONS is reported at boot rather than
+        // on the first proxied request.
+        let _ = proxy::egress::policy();
 
         if global_skip {
             warn!("GATEWAY_DANGER_ACCEPT_INVALID_CERTS is enabled: TLS verification disabled for ALL upstream hosts");
@@ -468,6 +404,7 @@ pub(crate) fn build_router(state: &GatewayState) -> Router {
             // workspace via this header; it must be allow-listed or the CORS
             // preflight blocks the request. (OSS never sends it.)
             hyper::header::HeaderName::from_static("x-workspace-id"),
+            hyper::header::HeaderName::from_static("x-organization-id"),
             // Rename compat (temporary): old browser callers still send
             // the pre-rename header.
             common::compat::LEGACY_WORKSPACE_HEADER,
@@ -619,30 +556,7 @@ async fn invalidate_cache(
         auth_method = %auth.auth_method,
     );
     async move {
-        let org_id = match db::find_organization_id_by_workspace(
-            &state.policy_engine.pool,
-            &auth.workspace_id,
-        )
-        .await
-        {
-            Ok(Some(oid)) => oid,
-            other => {
-                warn!(
-                    error = ?other.err(),
-                    "cache invalidation: failed to resolve org_id; using broad prefix"
-                );
-                String::new()
-            }
-        };
-
-        state
-            .cache
-            .del_by_prefix(&format!("app_injection:{org_id}:{}:", auth.workspace_id))
-            .await;
-        state
-            .cache
-            .del_by_prefix(&format!("connect:{org_id}:{}:", auth.workspace_id))
-            .await;
+        flush_workspace_cache(&state, &auth.workspace_id).await;
         info!("cache invalidated");
         (
             StatusCode::OK,
@@ -651,6 +565,42 @@ async fn invalidate_cache(
     }
     .instrument(span)
     .await
+}
+
+/// Drop every cached CONNECT resolution (and app injection) for a workspace.
+///
+/// The cached responses carry resolved credential VALUES, so anything that
+/// revokes or replaces a credential must flush them, or a stale value keeps
+/// injecting for up to the cache TTL. The cache is the shared Redis store
+/// when one is configured, so the flush reaches every gateway instance.
+pub(crate) async fn flush_workspace_cache(state: &GatewayState, workspace_id: &str) {
+    let org_id = match db::find_organization_id_by_workspace(
+        &state.policy_engine.pool,
+        workspace_id,
+    )
+    .await
+    {
+        Ok(Some(oid)) => oid,
+        other => {
+            warn!(
+                error = ?other.err(),
+                "cache invalidation: failed to resolve org_id; using broad prefix"
+            );
+            String::new()
+        }
+    };
+
+    state
+        .cache
+        .del_by_prefix(&proxy::connect::injection_cache_prefix(
+            &org_id,
+            workspace_id,
+        ))
+        .await;
+    state
+        .cache
+        .del_by_prefix(&proxy::connect::connect_cache_prefix(&org_id, workspace_id))
+        .await;
 }
 
 // `PendingParams` lives in `crate::approval` (wire shapes shared with the
@@ -686,34 +636,42 @@ async fn get_pending_approvals(
 
         info!(exclude_count = exclude.len(), "approval poll started");
 
-        let mut pending = state
-            .approval_store
-            .list_pending(&org_id, &auth.workspace_id)
-            .await;
-        pending.retain(|a| !exclude.contains(a.id.as_str()));
+        let store = &state.approval_store;
+        let (org, workspace, exclude) = (org_id.as_str(), auth.workspace_id.as_str(), &exclude);
+        let list = move || async move {
+            let mut pending = store.list_pending(org, workspace).await;
+            pending.retain(|a| !exclude.contains(a.id.as_str()));
+            pending
+        };
+
+        let mut pending = list().await;
 
         let mut long_polled = false;
-        if pending.is_empty() {
-            long_polled = true;
-            let mut shutdown_signal = shutdown::subscribe();
-            // A poller holding a connection open for 30 seconds would pin the
-            // drain for its whole window. Answer "nothing pending" at once and
-            // let the SDK re-poll against the replacement instance.
-            let got_new = tokio::select! {
-                got_new = state.approval_store.wait_for_new(
-                    &org_id,
-                    &auth.workspace_id,
-                    std::time::Duration::from_secs(30),
-                ) => got_new,
-                _ = shutdown_signal.wait() => false,
-            };
-            if got_new {
-                let mut fresh = state
-                    .approval_store
-                    .list_pending(&org_id, &auth.workspace_id)
-                    .await;
-                fresh.retain(|a| !exclude.contains(a.id.as_str()));
-                pending = fresh;
+        if pending.is_empty() && params.long_poll() {
+            // Subscribe BEFORE the list that decides to wait: an approval
+            // stored between an empty list and a later subscribe notifies
+            // nobody and would hold this poll for its whole window. Listing
+            // again after subscribing catches one stored before the
+            // subscription; the subscription catches one stored after it.
+            let new_approval = store.subscribe_new(org, workspace).await;
+            pending = list().await;
+            if pending.is_empty() {
+                long_polled = true;
+                let mut shutdown_signal = shutdown::subscribe();
+                // A poller holding a connection open for 30 seconds would pin the
+                // drain for its whole window. Answer "nothing pending" at once and
+                // let the SDK re-poll against the replacement instance.
+                let got_new = tokio::select! {
+                    got_new = new_approval.wait(std::time::Duration::from_secs(30)) => got_new,
+                    _ = shutdown_signal.wait() => false,
+                };
+                if got_new {
+                    // Parallel requests land a beat apart. Answer with the whole
+                    // burst, not its first request, so every surface sees one
+                    // task at once instead of a card that grows after it shows.
+                    tokio::time::sleep(approval::BURST_COALESCE).await;
+                    pending = list().await;
+                }
             }
         }
 
@@ -802,6 +760,22 @@ async fn submit_approval_decision(
             ApprovalDecision::Approve => "approve",
             ApprovalDecision::Deny => "deny",
         };
+        // A reason qualifies a deny only: an approve carrying one is a
+        // malformed request, never silently accepted.
+        if body.reason.is_some() && body.decision != ApprovalDecision::Deny {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                axum::Json(serde_json::json!({ "error": "reason_requires_deny" })),
+            );
+        }
+        // "Approve similar" qualifies an approve only.
+        let approve_similar = body.scope == Some(DecisionScope::Similar);
+        if approve_similar && body.decision != ApprovalDecision::Approve {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                axum::Json(serde_json::json!({ "error": "scope_requires_approve" })),
+            );
+        }
 
         // The org id is part of the Redis key. A lookup failure here would
         // otherwise degrade silently into an empty org and a guaranteed
@@ -865,24 +839,70 @@ async fn submit_approval_decision(
             }
         }
 
+        // The scope the CARD offered, read from the held request the gateway
+        // built: a client can ask for "similar", never say what it covers.
+        let similar_scope = match found {
+            Some(a) if approve_similar => match a.similar {
+                Some(scope) => Some(scope),
+                None => {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        axum::Json(serde_json::json!({ "error": "similar_not_offered" })),
+                    );
+                }
+            },
+            _ => None,
+        };
+
         info!(
             approval_id = %approval_id,
             decision = decision_str,
+            reason = ?body.reason,
+            approve_similar,
             "approval decision submitted"
         );
+        let approver = auth.user_id.clone();
 
         let delivered = state
             .approval_store
-            .submit_decision(
+            .submit_outcome(
                 &org_id,
                 &auth.workspace_id,
                 &approval_id,
-                body.decision,
-                Some(auth.user_id),
+                DecisionOutcome {
+                    decision: body.decision,
+                    approved_by: Some(auth.user_id),
+                    reason: body.reason,
+                },
             )
             .await;
 
         if delivered {
+            // Opened only once the decision landed: a lost race opens nothing.
+            if let Some(scope) = similar_scope {
+                let until = approval::similar::open(
+                    state.cache.as_ref(),
+                    &scope,
+                    &approval_id,
+                    Some(approver),
+                )
+                .await;
+                info!(
+                    approval_id = %approval_id,
+                    until,
+                    "approve similar: window opened"
+                );
+                return (
+                    StatusCode::OK,
+                    axum::Json(serde_json::json!({
+                        "success": true,
+                        "similar": {
+                            "label": scope.label,
+                            "until": approval::format_unix_ts(until),
+                        },
+                    })),
+                );
+            }
             (
                 StatusCode::OK,
                 axum::Json(serde_json::json!({ "success": true })),
@@ -911,6 +931,21 @@ async fn submit_approval_decision(
 #[derive(serde::Deserialize)]
 struct DecisionBody {
     decision: ApprovalDecision,
+    /// Why a deny happened (`superseded`), when it was not a reviewer's
+    /// plain no. Optional: every existing client omits it.
+    #[serde(default)]
+    reason: Option<DenyReason>,
+    /// `similar`: approve this AND open the window the card offered (see
+    /// `approval::similar`). Optional: every existing client omits it.
+    #[serde(default)]
+    scope: Option<DecisionScope>,
+}
+
+/// What an approve covers beyond the one request.
+#[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum DecisionScope {
+    Similar,
 }
 
 /// Reject non-proxy, non-CONNECT requests to unknown routes with 400 Bad Request.
@@ -928,10 +963,10 @@ fn is_http_proxy_request<T>(req: &Request<T>) -> bool {
 
 // ── Connection handling ─────────────────────────────────────────────────
 
-/// Handle a single client connection.
+/// Handle a single HTTP client connection.
 ///
 /// Generic over the stream type so both listeners can share this function:
-/// the plaintext listener passes a raw [`TcpStream`], the mTLS listener
+/// the plaintext listener passes a raw `TcpStream`, the mTLS listener
 /// (`crate::mtls::MtlsEntrypoint`) passes a completed `TlsStream<TcpStream>`.
 ///
 /// Uses a `service_fn` wrapper that intercepts CONNECT requests before they reach
@@ -1018,12 +1053,13 @@ async fn handle_connect(
 
     let hostname = strip_port(&host).to_string();
 
-    // Extract agent token from Proxy-Authorization header. A CONNECT with no
-    // token is refused outright: serving it would mean a raw tunnel — bytes
-    // copied to any host the client names, with no policy, no injection, and
-    // no audit — an open relay wherever this gateway is the only route out of
-    // a sandbox network.
-    let Some(agent_token) = inject::extract_agent_token(&req).filter(|t| !t.is_empty()) else {
+    // Extract the agent credential from Proxy-Authorization. A CONNECT with
+    // no token is refused outright, on either lane: serving it would mean a
+    // raw tunnel — bytes copied to any host the client names, with no
+    // policy, no injection, and no audit — an open relay wherever this
+    // gateway is the only route out of a sandbox network.
+    let Some(credential) = inject::extract_proxy_credential(&req).filter(|c| !c.token.is_empty())
+    else {
         warn!(
             peer = %peer_addr,
             host = %host,
@@ -1031,6 +1067,8 @@ async fn handle_connect(
         );
         return Ok(proxy::response::proxy_auth_required());
     };
+    let lane = credential.lane();
+    let agent_token = credential.token;
 
     // Resolve at CONNECT time for the agent identity and the injection posture.
     // DB injection/policy rules are NOT frozen here — they're re-resolved
@@ -1067,6 +1105,14 @@ async fn handle_connect(
         return Ok(denial);
     }
 
+    // The open tunnel cannot enforce the fork's per-request resource, budget,
+    // or behavioral rules. Reject it explicitly even for authenticated agents.
+    if lane == inject::ProxyLane::Open {
+        return Ok(Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(axum::body::Body::from("Open tunnels are disabled"))?);
+    }
+
     // Vault fallback: resolved at CONNECT time and passed to mitm as a frozen
     // fallback, but only when DB resolution found no injection for this host.
     // Vault queries are expensive (network calls to Bitwarden), so they're not
@@ -1089,9 +1135,6 @@ async fn handle_connect(
         }
     }
 
-    // Every session is MITM'd — even one with no injection rules — so the
-    // gateway can intercept auth errors (401/403/400) and provide actionable
-    // guidance (credential_not_found, app_not_connected, access_restricted).
     let connect::ConnectResponse {
         workspace_id,
         organization_id,
@@ -1104,6 +1147,7 @@ async fn handle_connect(
     let session_span = info_span!("session",
         peer = %peer_addr,
         host = %host,
+        lane = ?lane,
         workspace_id = workspace_id.as_deref().unwrap_or("-"),
         org_id = organization_id.as_deref().unwrap_or("-"),
         agent = agent_name.as_deref().unwrap_or("-"),
@@ -1111,6 +1155,15 @@ async fn handle_connect(
     );
 
     info!(parent: &session_span, "CONNECT");
+
+    let proxy_ctx = Arc::new(ProxyContext {
+        workspace_id,
+        organization_id,
+        agent_id,
+        agent_name,
+        agent_identifier,
+        agent_token,
+    });
 
     let ca = Arc::clone(&state.ca);
     let skip_verify = host_matches_skip_verify(&hostname, &state.skip_verify_hosts);
@@ -1129,14 +1182,6 @@ async fn handle_connect(
     };
     let cache = Arc::clone(&state.cache);
     let approval_store = Arc::clone(&state.approval_store);
-    let proxy_ctx = Arc::new(ProxyContext {
-        workspace_id,
-        organization_id,
-        agent_id,
-        agent_name,
-        agent_identifier,
-        agent_token,
-    });
 
     // Taken here, before the spawn, so the session is tracked from the moment
     // it is promised rather than from whenever the new task first runs — the
@@ -1147,8 +1192,6 @@ async fn handle_connect(
         async move {
             match hyper::upgrade::on(req).await {
                 Ok(upgraded) => {
-                    // A MITM session is HTTP: the drain waits for it, and
-                    // its inner connection gets its own graceful shutdown.
                     let _guard = session_guard;
                     let result = proxy::mitm::mitm(
                         upgraded,
@@ -1214,8 +1257,12 @@ async fn handle_http_proxy(
     // reaches an arbitrary host through this proxy — a plain
     // `GET http://host/…` the gateway forwards over the original scheme — so
     // an untokened one is exactly as ungoverned as an untokened tunnel.
-    // Refuse it wherever a tunnel would be refused.
-    let Some(agent_token) = inject::extract_agent_token(&req).filter(|t| !t.is_empty()) else {
+    // Refuse it wherever a tunnel would be refused. There is no lane here:
+    // the gateway reads this request itself, so the username is ignored.
+    let Some(agent_token) = inject::extract_proxy_credential(&req)
+        .map(|c| c.token)
+        .filter(|t| !t.is_empty())
+    else {
         warn!(
             peer = %peer_addr,
             host = %authority,
@@ -1225,6 +1272,11 @@ async fn handle_http_proxy(
     };
 
     let connection_id = connect::extract_connection_id(req.headers());
+    // Owned: `req` is moved into forwarding below, and the transport-failure
+    // answer still needs the path and method (and the start, for its row).
+    let req_path = req.uri().path_and_query().map(|pq| pq.to_string());
+    let req_method = req.method().clone();
+    let start = std::time::Instant::now();
 
     let mut resolved = match connect::resolve(
         &agent_token,
@@ -1262,6 +1314,45 @@ async fn handle_http_proxy(
     {
         return Ok(denial);
     }
+    // Who is asking, for every answer from here on (the request log, the
+    // agent-facing links). Taken out of `resolved` once.
+    let proxy_ctx = ProxyContext {
+        workspace_id: resolved.workspace_id.take(),
+        organization_id: resolved.organization_id.take(),
+        agent_id: resolved.agent_id.take(),
+        agent_name: resolved.agent_name.take(),
+        agent_identifier: resolved.agent_identifier.take(),
+        agent_token,
+    };
+
+    // Custom secrets filling the same slot are disambiguated first (same law
+    // as the MITM path, `mitm::resolve_rules`).
+    let (connection_id, secret_choices) = match connect::select_secret_rules(
+        std::mem::take(&mut resolved.injection_rules),
+        &resolved.app_connections,
+        &hostname,
+        req_path.as_deref(),
+        connection_id.as_deref(),
+    ) {
+        connect::SecretSelection::Rules {
+            rules,
+            app_pin,
+            advertised,
+        } => {
+            resolved.injection_rules = rules;
+            (app_pin, advertised)
+        }
+        connect::SecretSelection::Ambiguous(connections) => {
+            return Ok(proxy::response::multiple_connections_axum(&connections));
+        }
+        connect::SecretSelection::NotFound(connections) => {
+            let cid = connection_id.as_deref().unwrap_or("");
+            return Ok(proxy::response::connection_not_found_axum(
+                cid,
+                &connections,
+            ));
+        }
+    };
 
     // Per-request app connection disambiguation — app rules MERGE with the
     // secret rules (see inject::merge_injection_rules; #428). When the secret
@@ -1276,12 +1367,17 @@ async fn handle_http_proxy(
     // `resolved_session_policy`; unlike `connection_label` below, it MUST be
     // threaded (policy decisions bind to it).
     let mut resolved_connection_id: Option<String> = None;
+    // Its provider, for request-log attribution (see `ResolvedRules`).
+    let mut resolved_provider: Option<String> = None;
     // Connections whose credential is minted only after the request is allowed.
     let mut pending_injections: Vec<proxy::connect::PendingInjection> = Vec::new();
+    // Host-gated connections that refused this request (wrong host) — see
+    // `ResolvedRules::host_mismatch`.
+    let mut host_mismatch: Option<Vec<proxy::connect::ConnectionChoice>> = None;
     if !resolved.app_connections.is_empty() {
-        let oid = resolved.organization_id.as_deref().unwrap_or("");
-        let pid = resolved.workspace_id.as_deref().unwrap_or("");
-        let request_path = req.uri().path_and_query().map(|pq| pq.as_str());
+        let oid = proxy_ctx.organization_id.as_deref().unwrap_or("");
+        let pid = proxy_ctx.workspace_id.as_deref().unwrap_or("");
+        let request_path = req_path.as_deref();
         let secret_rules = std::mem::take(&mut resolved.injection_rules);
         let secrets_serve = inject::rules_serve_path(&secret_rules, request_path);
         let mut app_rules: Vec<inject::InjectionRule> = Vec::new();
@@ -1304,6 +1400,7 @@ async fn handle_http_proxy(
                 body_transform,
                 session_policy,
                 connection_id: winning_connection_id,
+                provider,
                 pending,
                 ..
             }) => {
@@ -1312,6 +1409,7 @@ async fn handle_http_proxy(
                 resolved_finalizer = finalizer;
                 resolved_body_transform = body_transform;
                 resolved_session_policy = session_policy;
+                resolved_provider = winning_connection_id.is_some().then_some(provider);
                 resolved_connection_id = winning_connection_id;
             }
             Ok(AppConnectionResult::Ambiguous { connections }) => {
@@ -1336,7 +1434,29 @@ async fn handle_http_proxy(
                 }
                 debug!(host = %authority, "requested connection not found; secret rules serve this path");
             }
+            Ok(AppConnectionResult::NeedsReconnect { connection }) => {
+                if !secrets_serve {
+                    info!(peer = %peer_addr, host = %authority, connection_id = %connection.id, "HTTP proxy: connection needs reconnect; request not forwarded");
+                    proxy::hooks::record_needs_reconnect(
+                        &proxy_ctx,
+                        &hostname,
+                        req_method.as_str(),
+                        req_path.as_deref().unwrap_or("/"),
+                        start,
+                    );
+                    return Ok(proxy::response::connection_needs_reconnect_axum(
+                        &connection,
+                        proxy_ctx.workspace_id.as_deref(),
+                    ));
+                }
+                debug!(host = %authority, "connection needs reconnect; secret rules serve this path");
+            }
             Ok(AppConnectionResult::NoConnections) => {}
+            // Nothing injects, exactly as `NoConnections`; the choices ride
+            // along so a downstream failure can be explained (#1137).
+            Ok(AppConnectionResult::HostMismatch { connections }) => {
+                host_mismatch = Some(connections);
+            }
             Err(e) => {
                 if !secrets_serve {
                     warn!(peer = %peer_addr, host = %authority, error = ?e, "HTTP proxy: app connection resolution failed");
@@ -1352,7 +1472,7 @@ async fn handle_http_proxy(
     // it will inject once allowed, and a vault credential adopted here would
     // land on the same host alongside it.
     if resolved.injection_rules.is_empty() && pending_injections.is_empty() {
-        if let Some(ref aid) = resolved.workspace_id {
+        if let Some(ref aid) = proxy_ctx.workspace_id {
             if let Some(cred) = state.vault_service.request_credential(aid, &hostname).await {
                 let vault_rules = inject::vault_credential_to_rules(&hostname, &cred);
                 if !vault_rules.is_empty() {
@@ -1366,10 +1486,10 @@ async fn handle_http_proxy(
     let session_span = info_span!("session",
         peer = %peer_addr,
         host = %authority,
-        workspace_id = resolved.workspace_id.as_deref().unwrap_or("-"),
-        org_id = resolved.organization_id.as_deref().unwrap_or("-"),
-        agent = resolved.agent_name.as_deref().unwrap_or("-"),
-        agent_id = resolved.agent_id.as_deref().unwrap_or("-"),
+        workspace_id = proxy_ctx.workspace_id.as_deref().unwrap_or("-"),
+        org_id = proxy_ctx.organization_id.as_deref().unwrap_or("-"),
+        agent = proxy_ctx.agent_name.as_deref().unwrap_or("-"),
+        agent_id = proxy_ctx.agent_id.as_deref().unwrap_or("-"),
     );
 
     info!(
@@ -1379,14 +1499,9 @@ async fn handle_http_proxy(
         "HTTP_PROXY"
     );
 
-    let proxy_ctx = ProxyContext {
-        workspace_id: resolved.workspace_id,
-        organization_id: resolved.organization_id,
-        agent_id: resolved.agent_id,
-        agent_name: resolved.agent_name,
-        agent_identifier: resolved.agent_identifier,
-        agent_token,
-    };
+    // Non-injecting alias host: report the bound host (see mitm::resolve_rules).
+    let host_mismatch =
+        host_mismatch.or_else(|| proxy::connect::alias_host_choices(&resolved.alias_connections));
 
     let rules = proxy::mitm::ResolvedRules {
         injection_rules: resolved.injection_rules,
@@ -1394,6 +1509,7 @@ async fn handle_http_proxy(
         policy_rules_v2: resolved.policy_rules_v2,
         available_apps: resolved.available_apps,
         access_restricted: resolved.access_restricted,
+        credential_unavailable: resolved.credential_unavailable,
         intercept_token: None,
         plan: resolved.plan,
         rewrite_host: None,
@@ -1401,8 +1517,14 @@ async fn handle_http_proxy(
         finalizer: resolved_finalizer,
         body_transform: resolved_body_transform,
         session_policy: resolved_session_policy,
+        github_org_access: proxy::github_org_access::record_for(
+            &resolved.app_connections,
+            resolved_connection_id.as_deref(),
+        ),
         winning_connection_id: resolved_connection_id,
+        winning_provider: resolved_provider,
         budget_bindings: resolved.budget_bindings,
+        host_mismatch,
     };
 
     let http_client =
@@ -1412,7 +1534,7 @@ async fn handle_http_proxy(
             state.http_client.clone()
         };
 
-    let mut resp = async {
+    let forwarded = async {
         proxy::forward::forward_request(
             req,
             &authority, // forward target (the HTTP-proxy path never host-rewrites)
@@ -1428,9 +1550,36 @@ async fn handle_http_proxy(
         .await
     }
     .instrument(session_span)
-    .await?;
+    .await;
 
-    connect::inject_connections_header(&mut resp, &resolved.app_connections);
+    let mut resp = match forwarded {
+        Ok(resp) => resp,
+        // Same law as the MITM path (`mitm::transport_failure_response`): a
+        // request that could not be delivered because it went to a host none
+        // of the agent's host-gated connections is bound to is answered with
+        // the bound host, not an opaque failure (#1137).
+        Err(e) => {
+            if let Some(connections) = rules.host_mismatch.as_deref() {
+                warn!(peer = %peer_addr, host = %authority, error = ?e, "HTTP proxy: forwarding failed on a mismatched connection host");
+                let path = req_path.as_deref().unwrap_or("/");
+                proxy::hooks::record_host_mismatch_failure(
+                    &proxy_ctx,
+                    &hostname,
+                    req_method.as_str(),
+                    path,
+                    start,
+                );
+                return Ok(proxy::response::connection_host_mismatch_axum(
+                    &hostname,
+                    path,
+                    connections,
+                ));
+            }
+            return Err(e);
+        }
+    };
+
+    connect::inject_connections_header(&mut resp, &resolved.app_connections, &secret_choices);
 
     Ok(resp.map(axum::body::Body::new))
 }
@@ -1593,17 +1742,6 @@ mod tests {
         assert_eq!(config.alpn_protocols, vec![b"http/1.1".to_vec()]);
     }
 
-    /// The scheme list is what the ClientHello advertises. An empty one makes
-    /// the server abort before it ever sends a certificate, so "skip
-    /// verification" would surface as an unexplained handshake failure.
-    #[test]
-    fn accept_any_server_cert_advertises_signature_schemes() {
-        use rustls::client::danger::ServerCertVerifier;
-
-        let schemes = AcceptAnyServerCert.supported_verify_schemes();
-        assert!(schemes.contains(&rustls::SignatureScheme::RSA_PKCS1_SHA256));
-    }
-
     #[tokio::test]
     async fn healthz_reports_status_and_version() {
         let axum::Json(body) = healthz().await;
@@ -1749,6 +1887,10 @@ mod tests {
             headers: Default::default(),
             body_preview: None,
             summary: None,
+            raw_body: None,
+            app: None,
+            batch: None,
+            similar: None,
             created_at: 0,
             expires_at: u64::MAX,
         }

@@ -4,7 +4,7 @@ import { BarChart3, TriangleAlert } from "lucide-react";
 import { Card } from "@onecli/ui/components/card";
 import { Skeleton } from "@onecli/ui/components/skeleton";
 import { PageHeader } from "@dashboard/page-header";
-import { useUsage } from "@/hooks/use-usage";
+import { useUsage } from "@/hooks/use-gateway-usage";
 import { formatPeriod } from "./_components/format";
 import { RecordedRequestsInfo } from "./_components/recorded-requests-info";
 import { UsageStatCard } from "./_components/usage-stat-card";

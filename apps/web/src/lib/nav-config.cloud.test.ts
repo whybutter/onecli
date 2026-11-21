@@ -38,3 +38,16 @@ describe("Groups nav visibility (cloud)", () => {
     }
   });
 });
+
+// The gateway usage page is separate from billing and hosted runtime usage.
+describe("Billing nav (cloud)", () => {
+  it("premise: this lane bills", () => {
+    expect(CAPS.billing).toBe(true);
+  });
+
+  it("offers separate billing and gateway usage rows", () => {
+    const shown = titles();
+    expect(shown.filter((t) => t === "Billing")).toHaveLength(1);
+    expect(shown.filter((t) => t === "Usage")).toHaveLength(1);
+  });
+});

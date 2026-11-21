@@ -152,6 +152,7 @@ const {
   applyWorkspaceAgentDefaults,
 } = await import("./agent-default-connections-service");
 const { ServiceError } = await import("../../services/errors");
+const providers = await import("../../providers");
 
 const SCOPE = { workspaceId: "ws-1", organizationId: "org-1" };
 
@@ -243,7 +244,11 @@ describe("setWorkspaceAgentDefault — the config surface", () => {
     expect(store.defaults[0]!.connectionId).toBe("conn-org");
   });
 
-  it("validates tool ids against the connection's catalog for custom access", async () => {
+  it("validates custom tool IDs and requests approval entitlement for ask tools", async () => {
+    const assertAllowed = vi.fn(async () => {});
+    vi.spyOn(providers, "getRuleActionGate").mockReturnValueOnce({
+      assertAllowed,
+    });
     await setWorkspaceAgentDefault(
       SCOPE,
       "conn-workspace",
@@ -259,6 +264,10 @@ describe("setWorkspaceAgentDefault — the config surface", () => {
       "t-read",
       "t-write",
     ]);
+    expect(assertAllowed).toHaveBeenCalledWith(
+      { scope: "workspace", workspaceId: SCOPE.workspaceId },
+      ["manual_approval"],
+    );
   });
 
   it("upsert: a second call on the same connection replaces, not duplicates", async () => {
@@ -271,7 +280,14 @@ describe("setWorkspaceAgentDefault — the config surface", () => {
     await setWorkspaceAgentDefault(
       SCOPE,
       "conn-workspace",
-      { access: "custom", allow: ["t-read"], ask: [], resources: null },
+      {
+        access: "custom",
+        allow: ["t-read"],
+        ask: [],
+        otherReads: "never",
+        otherWrites: "never",
+        resources: null,
+      },
       "u1",
     );
     expect(store.defaults).toHaveLength(1);
@@ -335,7 +351,14 @@ describe("applyWorkspaceAgentDefaults — the create-time apply step", () => {
       SCOPE,
       "new-agent",
       "conn-org",
-      { access: "custom", allow: ["t-read"], ask: [], resources: null },
+      {
+        access: "custom",
+        allow: ["t-read"],
+        ask: [],
+        otherReads: "never",
+        otherWrites: "never",
+        resources: null,
+      },
       null,
     );
   });

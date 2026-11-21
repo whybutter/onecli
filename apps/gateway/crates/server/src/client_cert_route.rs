@@ -197,12 +197,10 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use base64::Engine;
     use ca::CertificateAuthority;
     use client_ca::authority::ClientCa;
     use tokio_rustls::TlsConnector;
     use vault::bitwarden::{BitwardenConfig, BitwardenVaultProvider};
-    use vault::onepassword::OnePasswordVaultProvider;
     use vault::{VaultProvider, VaultService};
 
     /// `ClientConfig::builder()`/CSR signing panics when no process-default
@@ -227,21 +225,12 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://test:test@127.0.0.1/test")
             .expect("lazy pool");
-        let crypto = Arc::new(
-            crypto::CryptoService::from_base64_key(
-                &base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
-            )
-            .expect("crypto"),
-        );
-        let onepassword = Arc::new(OnePasswordVaultProvider::new(
+        let policy_engine = Arc::new(context::PolicyEngine::test_with_pool(
             pool.clone(),
-            Arc::clone(&crypto),
+            context::refresh_gate::REFRESH_LOCK_WAIT,
         ));
-        let policy_engine = Arc::new(context::PolicyEngine {
-            pool: pool.clone(),
-            crypto: Arc::clone(&crypto),
-            onepassword: Arc::clone(&onepassword),
-        });
+        let crypto = Arc::clone(&policy_engine.crypto);
+        let onepassword = Arc::clone(&policy_engine.onepassword);
         let bitwarden = BitwardenVaultProvider::new(
             BitwardenConfig {
                 proxy_url: "wss://example.invalid".to_string(),
