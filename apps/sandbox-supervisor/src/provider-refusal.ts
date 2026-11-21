@@ -97,6 +97,7 @@ const GATEWAY_CODE_CLASS: ReadonlyMap<string, TurnFailureCode> = new Map<
   ["manual_approval_denied", TURN_FAILURE_CODES.blockedByPolicy],
   ["destination_not_allowed", TURN_FAILURE_CODES.blockedByPolicy],
   ["method_override_refused", TURN_FAILURE_CODES.blockedByPolicy],
+  ["identity_not_permitted", TURN_FAILURE_CODES.blockedByPolicy],
   ["resource_access_denied", TURN_FAILURE_CODES.blockedByPolicy],
   ["app_unavailable", TURN_FAILURE_CODES.blockedByPolicy],
   ["github_org_access_required", TURN_FAILURE_CODES.blockedByPolicy],

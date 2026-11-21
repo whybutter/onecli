@@ -123,9 +123,6 @@ describe(
   },
 );
 
-// The hosted platform's agent desktop is licensed code the entrypoint loads
-// only when the hosted runner turns it on (and carries port streams): a
-// self-hosted sandbox never loads it.
 describe("the hosted desktop", { timeout: EXIT_BUDGET_MS + 5_000 }, () => {
   it("stays off without the hosted runner's switch", async () => {
     const outcome = await runToEnd(undefined, { RUNNER_PORT_STREAMS: "1" });
@@ -139,12 +136,13 @@ describe("the hosted desktop", { timeout: EXIT_BUDGET_MS + 5_000 }, () => {
     expect(outcome.stderr).not.toContain("hosted desktop on");
   });
 
-  it("is loaded on the hosted runner's switch", async () => {
+  it("uses the fork desktop when the runner requests hosted desktop support", async () => {
     const outcome = await runToEnd(undefined, {
       RUNNER_HOSTED_DESKTOP: "1",
       RUNNER_PORT_STREAMS: "1",
     });
     expect(outcome.code).toBe(0);
-    expect(outcome.stderr).toContain("hosted desktop on");
+    expect(outcome.stderr).toContain("supervisor exited cleanly");
+    expect(outcome.stderr).not.toContain("hosted desktop on");
   });
 });
