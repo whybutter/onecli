@@ -271,6 +271,45 @@ describe("manual approval", () => {
   });
 
   scenario(
+    "an invalid decision leaves the request held for an explicit decision",
+    async (cx) => {
+      const upstream = await cx.upstream();
+      await cx.seed(APPROVAL_WORLD);
+      const gw = await cx.startGateway();
+      const held = await startHeldRequest(
+        gw.origin,
+        {
+          method: "POST",
+          url: upstream.url("/v1/send"),
+          token: cx.ids.agentToken,
+          body: "{}",
+        },
+        HOLD_MS,
+      );
+      const approval = await waitForApproval(gw, cx.ids.apiKey);
+      const invalid = await fetch(
+        `${gw.origin}/v1/approvals/${approval.id}/decision`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${cx.ids.apiKey}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ decision: "invalid" }),
+        },
+      );
+      expect(invalid.status).toBe(422);
+      expect(upstream.requests()).toHaveLength(0);
+      expect(
+        (await decideApproval(gw, cx.ids.apiKey, approval.id, "deny")).status,
+      ).toBe(200);
+      expect((await held.response).status).toBe(403);
+      expect(upstream.requests()).toHaveLength(0);
+    },
+  );
+
+  // Redis HA is outside this fork's supported stores.
+  scenario.skip(
     "fails closed on a malformed Redis decision and allows a fresh approval",
     async (cx) => {
       const upstream = await cx.upstream();

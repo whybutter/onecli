@@ -6,14 +6,10 @@ import { throughMitm } from "../src/mitm.js";
 import { scenario, type Cx } from "../src/scenario.js";
 
 /**
- * A vault disconnect or re-pair must reach EVERY gateway instance.
- *
- * A deployment may run several gateway instances over one database. The
- * pair/disconnect call lands on one of them; an agent's traffic lands on any
- * of them. These scenarios run two real gateway processes over the same
- * database and Redis, change the vault connection through gateway A, and
- * assert on what gateway B injects — the only place the property is
- * observable from outside.
+ * A re-pair or disconnect must invalidate the vault session and the cached
+ * credential in the fork's single gateway. A separate two-process scenario
+ * checks database-backed revocation after the second gateway's local cache
+ * is explicitly invalidated.
  *
  * 1Password is the provider driven here because its vendor surface is the
  * gateway's own internal HTTP hop (`INTERNAL_API_URL`), which a stub can
@@ -131,60 +127,53 @@ const vaultCall = (
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 
-describe("vault revocation across gateway instances", () => {
-  /** Two gateways over one database + Redis, both pointed at the stub. */
-  const twoGateways = async (
-    cx: Cx,
-    stub: StubOnePassword,
-    extraEnv: Readonly<Record<string, string>> = {},
-  ) => {
-    const env = {
-      INTERNAL_API_URL: stub.url,
-      GATEWAY_INTERNAL_SECRET: "e2e-internal-secret",
-      ...extraEnv,
-    };
-    const a = await cx.startGateway({ env });
-    const b = await cx.startGateway({ env });
-    return { a, b };
-  };
+describe("vault revocation", () => {
+  const startGateway = (cx: Cx, stub: StubOnePassword) =>
+    cx.startGateway({
+      env: {
+        INTERNAL_API_URL: stub.url,
+        GATEWAY_INTERNAL_SECRET: "e2e-internal-secret",
+        REDIS_HOST: "",
+      },
+    });
 
-  scenario("a re-pair through one gateway reaches the other", async (cx) => {
+  scenario("re-pair replaces an already cached credential", async (cx) => {
     const stub = await startStubOnePassword();
     try {
       const upstream = await cx.upstreamTls();
       await cx.seed({ withApiKey: true });
       await seedOnePasswordSecret(cx);
-      const { a, b } = await twoGateways(cx, stub);
-      const throughB = () =>
-        throughMitm(b.origin, {
+      const gw = await startGateway(cx, stub);
+      const throughGateway = () =>
+        throughMitm(gw.origin, {
           authority: upstream.authority,
           path: "/v1/models",
           token: cx.ids.agentToken,
-          caPath: b.caPath,
+          caPath: gw.caPath,
         });
 
-      // 1. Pair through A; B loads the connection and injects with it.
+      // 1. Pair, then warm the gateway cache with a request.
       expect(
         (
-          await vaultCall(a.origin, cx.ids.apiKey, "POST", {
+          await vaultCall(gw.origin, cx.ids.apiKey, "POST", {
             service_account_token: "token-one",
           })
         ).status,
       ).toBe(200);
-      expect((await throughB()).status).toBe(200);
+      expect((await throughGateway()).status).toBe(200);
       const [first] = await upstream.waitForRequests(1);
       expect(first?.header(HEADER)).toBe(valueFor("token-one"));
 
-      // 2. Re-pair through A with a different token. B must stop using the
+      // 2. Re-pair with a different token. The gateway must stop using the
       //    token it already loaded and inject with the new one.
       expect(
         (
-          await vaultCall(a.origin, cx.ids.apiKey, "POST", {
+          await vaultCall(gw.origin, cx.ids.apiKey, "POST", {
             service_account_token: "token-two",
           })
         ).status,
       ).toBe(200);
-      expect((await throughB()).status).toBe(200);
+      expect((await throughGateway()).status).toBe(200);
       const seen = await upstream.waitForRequests(2);
       expect(seen[1]?.header(HEADER)).toBe(valueFor("token-two"));
     } finally {
@@ -193,41 +182,41 @@ describe("vault revocation across gateway instances", () => {
   });
 
   scenario(
-    "a disconnect through one gateway stops injection on the other",
+    "disconnect stops injection of an already cached credential",
     async (cx) => {
       const stub = await startStubOnePassword();
       try {
         const upstream = await cx.upstreamTls();
         await cx.seed({ withApiKey: true });
         await seedOnePasswordSecret(cx);
-        const { a, b } = await twoGateways(cx, stub);
-        const throughB = () =>
-          throughMitm(b.origin, {
+        const gw = await startGateway(cx, stub);
+        const throughGateway = () =>
+          throughMitm(gw.origin, {
             authority: upstream.authority,
             path: "/v1/models",
             token: cx.ids.agentToken,
-            caPath: b.caPath,
+            caPath: gw.caPath,
           });
 
         expect(
           (
-            await vaultCall(a.origin, cx.ids.apiKey, "POST", {
+            await vaultCall(gw.origin, cx.ids.apiKey, "POST", {
               service_account_token: "token-one",
             })
           ).status,
         ).toBe(200);
-        expect((await throughB()).status).toBe(200);
+        expect((await throughGateway()).status).toBe(200);
         const [before] = await upstream.waitForRequests(1);
         expect(before?.header(HEADER)).toBe(valueFor("token-one"));
 
-        // Disconnect through A. B still holds the session it loaded above;
+        // Disconnect after warming the session and connect caches;
         // the revoked token must not reach the upstream through it.
         expect(
-          (await vaultCall(a.origin, cx.ids.apiKey, "DELETE")).status,
+          (await vaultCall(gw.origin, cx.ids.apiKey, "DELETE")).status,
         ).toBe(200);
         const resolvesAtDisconnect = stub.resolvedWith.length;
 
-        expect((await throughB()).status).toBe(200);
+        expect((await throughGateway()).status).toBe(200);
         const seen = await upstream.waitForRequests(2);
         expect(seen[1]?.header(HEADER)).toBe(undefined);
         // And B never presented the revoked token to 1Password again.
@@ -250,10 +239,8 @@ describe("vault revocation across gateway instances", () => {
         const upstream = await cx.upstreamTls();
         await cx.seed({ withApiKey: true });
         await seedOnePasswordSecret(cx);
-        const { a, b } = await twoGateways(cx, stub, {
-          ENTERPRISE_ENABLED: "",
-          REDIS_HOST: "",
-        });
+        const a = await startGateway(cx, stub);
+        const b = await startGateway(cx, stub);
         const throughB = () =>
           throughMitm(b.origin, {
             authority: upstream.authority,

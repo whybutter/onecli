@@ -556,13 +556,21 @@ describe("liveness", () => {
   it("closes every socket when all of them went quiet together, but reports none unresponsive", async () => {
     // A fault of this copy or its network looks exactly like this: each
     // supervisor redials, and the ordinary reconnect grace decides.
-    const { closed, silenced } = await restart();
-    await firstConnect("sb-1", "ctr-1", { autoPong: false });
-    await firstConnect("sb-2", "ctr-2", { autoPong: false });
-    expect(
-      await waitFor(() => closed.includes("sb-1") && closed.includes("sb-2")),
-    ).toBe(true);
-    expect(silenced).toEqual([]);
+    // Both connections must enter the same silence window, regardless of
+    // how long the two real WebSocket handshakes take on a busy machine.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      const { closed, silenced } = await restart();
+      await firstConnect("sb-1", "ctr-1", { autoPong: false });
+      await firstConnect("sb-2", "ctr-2", { autoPong: false });
+      vi.advanceTimersByTime(LIVENESS.timeoutMs + LIVENESS.intervalMs);
+      expect(
+        await waitFor(() => closed.includes("sb-1") && closed.includes("sb-2")),
+      ).toBe(true);
+      expect(silenced).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("restarts every clock when the check itself ran late, instead of closing anyone", async () => {
