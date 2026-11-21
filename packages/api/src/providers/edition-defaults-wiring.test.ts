@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PublishedEvent } from "../services/event-bus";
 
 /**
@@ -100,6 +100,11 @@ const KEY = Buffer.alloc(32, 7).toString("base64");
 // entitlement flag slots into exactly this resolution: the onprem arm swaps
 // from "allow all" to "ask the feature flags", and no call site changes.
 describe("edition resolution at the real seams", () => {
+  // Transform the real API boot graph once before timing individual cases.
+  beforeAll(async () => {
+    await loadWith({ edition: "onprem" });
+  }, 30_000);
+
   it("onprem: permissive defaults with zero setup — the gate allows, SSO never enforces", async () => {
     const { providers } = await loadWith({ edition: "onprem" });
     // No init, no ensureEditionDefaults — the self-hosted process shape.
@@ -173,7 +178,7 @@ describe("edition resolution at the real seams", () => {
     subscription.release();
   });
 
-  it("self-host: the workspace-access checker rides the override arm", async () => {
+  it("self-host: boots with the workspace-access checker and role resolver", async () => {
     const { providers, authz } = await loadWith({
       edition: "onprem",
       ensure: true,
@@ -181,6 +186,7 @@ describe("edition resolution at the real seams", () => {
     expect(providers.getWorkspaceAccessChecker()).toBe(
       authz.eeWorkspaceAccessChecker,
     );
+    expect(providers.getRoleResolver()?.getUserRole).toBe(authz.getUserRole);
   });
 
   it.each(["cloud", "onprem"] as const)(

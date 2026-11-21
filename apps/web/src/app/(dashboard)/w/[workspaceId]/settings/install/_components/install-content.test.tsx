@@ -4,6 +4,12 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { InstallContent } from "./install-content";
 
+// The manual install command is the self-host fallback. Cloud uses its own
+// install endpoint and does not render the manual command.
+vi.hoisted(() => {
+  process.env.NEXT_PUBLIC_EDITION = "onprem";
+});
+
 vi.mock("next/navigation", () => ({
   usePathname: () => "/w/w1/settings/install",
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),

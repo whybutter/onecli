@@ -1,14 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { onpremPolicyValidator } from "./policy-onprem-validator";
 import { validatePolicyShape } from "../ee/granular-access/shape";
 import { eePolicyValidator } from "../ee/granular-access";
 import { getPolicyValidator } from "../providers";
 
-// The onprem edition's default policy validator is SHAPE-ONLY: the same
-// provider-shape validation as cloud's `eePolicyValidator`, minus the plan
-// gate. Granular scoping is stored and the one enforcing gateway executes it —
-// the former hard-422 "locks" (and the cloud-only `validateTargets` fence) are
-// gone. Deliberately db-free: shape validation must never need an org lookup.
+// The provider slot resolves its uninjected default from the edition at import.
+vi.hoisted(() => {
+  process.env.NEXT_PUBLIC_EDITION = "onprem";
+});
+
+// Both editions validate policy shape without looking up the organization's
+// plan. The gateway enforces the granular scopes saved by the validator.
 
 describe("onpremPolicyValidator.validate (shape-only, no plan gate)", () => {
   it("accepts a provider without a granular config (no lock)", async () => {
@@ -82,9 +84,6 @@ describe("onpremPolicyValidator.validate (shape-only, no plan gate)", () => {
   });
 
   it("is exactly the shared shape half (parity with the cloud validator)", async () => {
-    // `eePolicyValidator` = plan gate + `validatePolicyShape`; onprem =
-    // `validatePolicyShape` alone. Same input through both paths must reach
-    // the same verdict, so the editions can never drift apart silently.
     const metadata = { repos: ["acme/api"] };
     const policy = { repositories: ["acme/ghost"] };
     const viaOnprem = await onpremPolicyValidator
@@ -105,7 +104,7 @@ describe("the edition validators", () => {
     expect(eePolicyValidator).toBe(onpremPolicyValidator);
   });
 
-  it("the uninjected edition default is the shape check with no entitlement in front", async () => {
+  it("the uninjected onprem default is the shape check with no entitlement in front", async () => {
     // Before the v2 migration the onprem default asserted the granular_access
     // entitlement first; this build is always entitled, so the default is the
     // bare validator and an unrestricted shape passes with zero setup.
