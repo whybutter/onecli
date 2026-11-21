@@ -182,7 +182,9 @@ jobs:
               - 'packages/db/prisma/**'
               # The gateway enforce tests read fixtures written by this seeder;
               # a change to it must re-run them.
-              - 'packages/api/src/ee/testing/**'
+              - 'apps/gateway-e2e/src/seed-enforce.ts'
+              - 'apps/gateway-e2e/src/fixtures.ts'
+              - 'packages/api/src/services/grants-compile.ts'
               # The Rust half of the TS↔Rust KMS envelope contract include_str!s
               # this fixture; a change to it must re-run the contract tests.
               - 'packages/api/src/ee/kms-envelope.fixture.json'
@@ -263,7 +265,7 @@ jobs:
       # generated @onecli/db client; runs against the same gw-test-db as the tests.
       - name: Seed gateway enforce fixtures
         if: steps.changes.outputs.rust == 'true'
-        run: pnpm --filter @onecli/api-server exec tsx ../../packages/api/src/ee/testing/gateway-enforce-seed.ts
+        run: pnpm --filter @onecli/api-server exec tsx ../gateway-e2e/src/seed-enforce.ts
         env:
           DATABASE_URL: postgresql://ci:ci@localhost:5434/onecli
 

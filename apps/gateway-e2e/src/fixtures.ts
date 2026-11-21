@@ -10,8 +10,8 @@ import type { TestIds } from "./ids.js";
  *
  * Typed on purpose — every row goes through the generated client, so a renamed
  * or retyped schema column breaks `check-types` rather than surfacing as a
- * mystifying gateway failure at runtime. This mirrors
- * `packages/api/src/ee/testing/gateway-enforce-seed.ts`.
+ * mystifying gateway failure at runtime. The Rust loader test uses
+ * the same fixtures through `seed-enforce.ts`.
  *
  * Note what is deliberately absent: nothing here accepts an org, workspace, agent
  * or token id. Those come from the per-test nonce and are the suite's Redis
@@ -443,7 +443,7 @@ export const grantSecret = async (
 /**
  * The stack the REAL grant compiler emits for "custom access" (`allow`, plus
  * the tools that need approval in `ask`, and the "Not listed above" choices
- * `otherReads` / `otherWrites`) on the world's first app connection, as spec
+ * `otherReads` / `otherWrites`) on the selected app connection (the first by default), as spec
  * rules bound to the main agent and named `Grant: e2e · <provider>…`.
  * Production-shaped by construction, so a suite asserting on a grant row (its
  * action, approval modifier, or name) can never drift from what a customized
@@ -461,6 +461,7 @@ export const compiledGrantStack = (
       "ask" | "otherReads" | "otherWrites"
     >
   > = {},
+  connectionIndex = 0,
 ): RuleSpec[] =>
   compileConnectionStack(`Grant: e2e · ${provider}`, provider, {
     access: "custom",
@@ -476,7 +477,7 @@ export const compiledGrantStack = (
     targets: [
       {
         kind: "connection",
-        connectionIndex: 0,
+        connectionIndex,
         tools: rule.tools,
         ...(rule.method ? { method: rule.method } : {}),
       },
